@@ -17,6 +17,7 @@ from maquetador.ingest.docx_comments import _clasificar, _VARIANTE_PANEL, \
 from maquetador.build.componentes_asesor import (construir_panels,
                                                  pares_de_secciones,
                                                  extraer_pares)
+from maquetador.build.snippets import maquetar_actividad
 
 
 class TestVariantesDePanel:
@@ -121,3 +122,42 @@ class TestNoRompeLoQueYaAndaba:
                              "<p>Su contenido.</p></div>", "html.parser")
         pares, _ = pares_de_secciones(soup.find("p"))
         assert pares == []
+
+
+class TestMaquetadoDeActividad:
+    """El "Modelo de actividad": título propio y rótulos de sección.
+
+    En la AFI del curso de prueba el título salía como <h3> arrastrando el
+    prefijo "Actividad final integradora: ", que repite el nombre que Canvas
+    ya muestra en el módulo, y "Objetivo:" quedaba como párrafo.
+    """
+
+    CUERPO = ('<h3>Actividad final integradora: Analizá situaciones reales</h3>'
+              '<p>Objetivo: </p>'
+              '<p>Interpretar la situación planteada e integrar los conceptos.</p>'
+              '<p>Consigna: Elaborá un informe técnico.</p>')
+
+    def test_el_titulo_va_en_el_h2_de_titulo(self):
+        out = maquetar_actividad(self.CUERPO)
+        assert 'class="dp-ignore-theme"' in out
+        assert "color: #003087" in out
+        assert "text-align: center" in out
+
+    def test_le_saca_el_prefijo_que_duplica_el_nombre_del_item(self):
+        out = maquetar_actividad(self.CUERPO)
+        assert "<strong>Analizá situaciones reales</strong>" in out
+        assert "Actividad final integradora:" not in out
+
+    def test_los_rotulos_de_seccion_son_encabezados(self):
+        out = maquetar_actividad(self.CUERPO)
+        assert "<h3>Objetivo</h3>" in out
+        assert "<h3>Consigna</h3>" in out
+        assert "<p>Objetivo: </p>" not in out
+
+    def test_el_cuerpo_pegado_al_rotulo_queda_debajo(self):
+        out = maquetar_actividad(self.CUERPO)
+        assert "<h3>Consigna</h3><p>Elaborá un informe técnico.</p>" in out
+
+    def test_no_toca_un_parrafo_que_no_es_rotulo(self):
+        out = maquetar_actividad("<p>Nutri Pet S.A.: una empresa del rubro.</p>")
+        assert "<h3>" not in out

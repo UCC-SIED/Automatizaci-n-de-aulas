@@ -685,6 +685,62 @@ def limpiar_anclas_vacias(html: str) -> str:
     return str(soup)
 
 
+# Rótulos de sección del "Modelo de actividad": el asesor los escribe como
+# "Objetivo:" al principio de un párrafo y son encabezados, no texto corrido.
+_SECCIONES_ACTIVIDAD = ("objetivo", "objetivos", "consigna", "consignas",
+                        "pautas de presentacion", "criterios de evaluacion",
+                        "criterio de evaluacion", "anexo")
+
+# "Actividad final integradora: Analizá situaciones reales" → el prefijo repite
+# el nombre del ítem que Canvas ya muestra en el módulo.
+_PAT_PREFIJO_ACTIVIDAD = re.compile(
+    r"^\s*actividad\s*(?:final\s*integradora|obligatoria|sugerida|optativa)?"
+    r"\s*(?:m\s*\d+)?\s*[:\-–—]\s*", re.I)
+
+_H2_TITULO_ACTIVIDAD = ('<h2 class="dp-ignore-theme" '
+                        'style="color: #003087; text-align: center;">'
+                        "<strong>{}</strong></h2>")
+
+
+def maquetar_actividad(html: str) -> str:
+    """Da forma al cuerpo de una actividad según el "Modelo de actividad".
+
+    - El primer encabezado es el título de la actividad: va como H2 de título
+      (dp-ignore-theme, centrado), no como subtítulo, y sin el prefijo
+      "Actividad …:" que duplica el nombre del ítem en Canvas.
+    - Los rótulos de sección (Objetivo, Consigna, Pautas de presentación,
+      Criterios de evaluación, Anexo) pasan a <h3> y se les saca los dos
+      puntos; si el párrafo traía el cuerpo pegado, queda debajo.
+    """
+    if not html:
+        return html
+    soup = BeautifulSoup(html, "html.parser")
+
+    primero = soup.find(["h1", "h2", "h3", "h4"])
+    if primero is not None and not primero.get("class"):
+        texto = primero.get_text(" ", strip=True)
+        limpio = _PAT_PREFIJO_ACTIVIDAD.sub("", texto).strip()
+        if limpio:
+            primero.replace_with(BeautifulSoup(
+                _H2_TITULO_ACTIVIDAD.format(limpio), "html.parser"))
+
+    for p in list(soup.find_all("p")):
+        texto = p.get_text(" ", strip=True)
+        m = re.match(r"^([^:]{3,40}):\s*(.*)$", texto, re.S)
+        if not m or _norm(m.group(1)) not in _SECCIONES_ACTIVIDAD:
+            continue
+        h3 = soup.new_tag("h3")
+        h3.string = m.group(1).strip()
+        resto = m.group(2).strip()
+        p.replace_with(h3)
+        if resto:
+            nuevo = soup.new_tag("p")
+            nuevo.string = resto
+            h3.insert_after(nuevo)
+
+    return str(soup)
+
+
 def sanear_lista_objetivos(html: str) -> str:
     """Devuelve todos los ítems de una lista a <li>.
 

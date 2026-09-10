@@ -61,16 +61,23 @@ de v2 y **dónde tocar el generador**.
   [maquetador/build/imscc_builder.py:97](../maquetador/build/imscc_builder.py#L97) hoy solo
   copia el `src` del base — que sepa distinguir "placeholder" de "real".
 
-### 1.3 H2 de página vacío — **10/13 páginas** (todas las de contenido + biblio)
+### 1.3 ~~H2 de página vacío~~ — **FALSO POSITIVO** (revisado 2026-09-10)
 
-- **v1:** `<h2 class="dp-has-icon"><i class="fa-book fas" aria-hidden="true"><span class="dp-icon-content" style="display:none;">&nbsp;</span></i></h2>` — icono, **sin texto de título**. El nombre de la página solo vive en `<title>` y en el `alt` del banner.
-- **v2:** igual (v2 tampoco le pone texto al H2 en 2.2) — **pero** la política de
-  la referencia (`Pautas…`) dice H2 = título de la página. Queda a confirmar con
-  vos si el H2 va vacío a propósito (porque el banner ya dice el título) o si
-  falta. En el resto de aulas de referencia el primer `h2.dp-has-icon` **sí**
-  lleva texto.
-- **Acción:** confirmar criterio. Si el H2 debe llevar el título → el generador
-  tiene que inyectarlo.
+El `<h2 class="dp-has-icon">` con solo el icono y sin texto **es correcto**: es
+el **divisor de sección**, y las clases `dp-hdg-i-*` del wrapper son las que lo
+estilan (píldora, borde, fondo primary). v1 y v2 lo emiten idéntico.
+
+En el sistema hay tres usos distintos y no hay que confundirlos:
+
+| Rol | Markup | Dónde |
+|---|---|---|
+| Divisor de sección | `<h2 class="dp-has-icon"><i …></i></h2>` sin texto | páginas de contenido, arranque de actividad |
+| Divisor con rótulo | el mismo, con texto después del `</i>` | secciones tipo "Videos conceptuales", "Presentación" |
+| **Título** | `<h2 class="dp-ignore-theme" style="color: #003087;">` **separado** | título de la actividad |
+
+En las páginas de contenido el título lo lleva el banner, por eso el divisor va
+sin texto. **No hay nada que arreglar ahí.** El hueco real está en las
+actividades → ver §4.bis.
 
 ---
 
@@ -259,6 +266,36 @@ de v2 y **dónde tocar el generador**.
   `pages.py:pagina_intro()` lo inserta sin sanear.
 - **Fix generador:** sanear la lista de objetivos — **forzar todos los hijos
   directos a `<li>`**; si hay `<h3>/<h4>` sueltos entre `<li>`, degradarlos a `<li>`.
+
+---
+
+## 4.bis Actividades: título y subtítulos de sección
+
+Comparando `actividad-final-integradora.html`:
+
+```html
+<!-- v1 (automatización) -->
+<h2 class="dp-has-icon" style="text-align: center;"><i class="dp-icon fas fa-tasks" …></i></h2>
+<h3>Actividad final integradora: Analizá situaciones reales</h3>
+<p>Objetivo: </p>
+<p>Interpretar la situación planteada; integrar y aplicar los conceptos…</p>
+
+<!-- v2 (corregido a mano) -->
+<h2 class="dp-has-icon" style="text-align: center;"><i class="dp-icon fas fa-tasks" …></i></h2>
+<h2 class="dp-ignore-theme" style="color: #003087; text-align: center;"><strong>Analizá situaciones reales</strong></h2>
+<h3>Objetivo</h3>
+<p>Interpretar la situación planteada; integrar y aplicar los conceptos…</p>
+```
+
+Tres diferencias:
+
+1. **El título va como `<h2 class="dp-ignore-theme">` centrado**, no como `<h3>`.
+2. **Se le saca el prefijo** "Actividad final integradora: " — repite el nombre
+   que Canvas ya muestra en el ítem del módulo.
+3. **Los rótulos de sección del "Modelo de actividad"** (Objetivo, Consigna,
+   Pautas de presentación, Criterios de evaluación, Anexo) van como encabezado,
+   no como `<p>Objetivo: </p>` con dos puntos y el cuerpo en el párrafo
+   siguiente.
 
 ---
 

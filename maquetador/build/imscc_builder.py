@@ -41,7 +41,8 @@ from maquetador.build.pages import (slugify, pagina_intro, pagina_contenido,
                                     pagina_bibliografia)
 from maquetador.build.snippets import (separar_consignas, procesar_contenido,
                                        indexar_figuras_diseno,
-                                       reemplazar_figuras_diseno)
+                                       reemplazar_figuras_diseno,
+                                       maquetar_actividad)
 from maquetador.build.bibliography import construir_bibliografia
 from maquetador.extract.segmenter import ImagenInline
 from maquetador.ingest.folder_scanner import normalizar
@@ -841,7 +842,8 @@ class GeneradorAula:
                 "esperado.", ctx))
             return False
         html = pat.sub(
-            lambda m: m.group(1) + m.group(2) + "\n" + body_html + "\n" + m.group(3),
+            lambda m: (m.group(1) + m.group(2) + "\n"
+                       + maquetar_actividad(body_html) + "\n" + m.group(3)),
             html, count=1)
         _escribir(archivos[0], html)
         self.assignments_escritos.add(rid)
