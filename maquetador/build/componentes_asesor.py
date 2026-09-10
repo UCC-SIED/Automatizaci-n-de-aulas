@@ -68,7 +68,76 @@ def pares_de_texto(parrafos: list) -> list:
     return pares
 
 
-def extraer_pares(el):
+# Etiquetas que forman el flujo de contenido de una sección. Se corta en
+# cualquier otra cosa (un <div> ya es un componente armado: recuadro, panel…).
+_TAGS_FLUJO = ("p", "ul", "ol", "table", "blockquote", "h3", "h4", "h5", "h6")
+
+
+def _plano(texto: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", texto.lower())
+
+
+def _es_encabezado_de_seccion(el, solo_subrayado: bool = False) -> bool:
+    """¿El elemento es un subtítulo que abre una sección?
+
+    El asesor marca los cortes subrayando el subtítulo (o poniéndolo en
+    negrita). Se exige que TODO el texto del párrafo esté subrayado/en negrita:
+    un párrafo normal con una palabra resaltada no es un título.
+    """
+    nombre = getattr(el, "name", None)
+    if nombre in ("h1", "h2", "h3", "h4", "h5", "h6"):
+        return not solo_subrayado
+    if nombre != "p":
+        return False
+    texto = el.get_text(" ", strip=True)
+    if not texto or len(texto) > 90 or el.find("img"):
+        return False
+
+    def _cubre(tags):
+        if not tags:
+            return False
+        return _plano(" ".join(t.get_text(" ", strip=True) for t in tags)) == _plano(texto)
+
+    if _cubre(el.find_all("u")):
+        return True
+    if solo_subrayado:
+        return False
+    return _cubre(el.find_all(["strong", "b"]))
+
+
+def pares_de_secciones(el, solo_subrayado: bool = False) -> tuple:
+    """Tramo de párrafos con subtítulos intercalados → (pares, consumidos).
+
+    Es el caso de "expander (títulos subrayados)": el asesor no arma una tabla,
+    escribe el contenido corrido y marca los cortes subrayando los subtítulos.
+    Cada subtítulo abre un panel y se lleva los párrafos que lo siguen.
+    """
+    elementos, actual = [], el
+    while actual is not None and getattr(actual, "name", None) in _TAGS_FLUJO:
+        elementos.append(actual)
+        actual = actual.find_next_sibling()
+
+    # Lo anterior al primer subtítulo es introducción: queda fuera del panel.
+    idx = next((i for i, e in enumerate(elementos)
+                if _es_encabezado_de_seccion(e, solo_subrayado)), None)
+    if idx is None:
+        return [], []
+
+    pares, consumidos, titulo, cuerpo = [], [], None, []
+    for e in elementos[idx:]:
+        if _es_encabezado_de_seccion(e, solo_subrayado):
+            if titulo is not None:
+                pares.append((titulo, "".join(cuerpo) or "&nbsp;"))
+            titulo, cuerpo = e.get_text(" ", strip=True), []
+        else:
+            cuerpo.append(str(e))
+        consumidos.append(e)
+    if titulo is not None:
+        pares.append((titulo, "".join(cuerpo) or "&nbsp;"))
+    return (pares, consumidos) if len(pares) >= 2 else ([], [])
+
+
+def extraer_pares(el, instruccion: str = ""):
     """Desde el elemento anclado → (pares, consumidos). ([], []) si <2 pares.
 
     `consumidos` son los elementos del soup que el componente reemplaza: el
@@ -106,6 +175,16 @@ def extraer_pares(el):
             consumidos = [lista] if el in (lista, *lista.contents) else [el, lista]
             return pares, consumidos
 
+    # 2.5) Tramo de párrafos con subtítulos intercalados. Va ANTES del extractor
+    #      "Nombre: contenido" a propósito: un subtítulo como "El diagrama de
+    #      Ishikawa: explorar posibles causas" también encaja en ese patrón, y
+    #      salía un panel con el título cortado a la mitad y sin los párrafos
+    #      que le seguían.
+    solo_subrayado = "subrayad" in _plano(instruccion)
+    pares, consumidos = pares_de_secciones(el, solo_subrayado=solo_subrayado)
+    if len(pares) >= 2:
+        return pares, consumidos
+
     # 3) Texto
     parrafos, actual = [], el
     while actual is not None and getattr(actual, "name", None) in ("p", "li"):
@@ -120,16 +199,22 @@ def extraer_pares(el):
 
 
 def construir_panels(pares: list, variante: str = "dp-expander-default") -> str:
-    """Acordeón (dp-expander-default) / tabs (dp-tabs) / expander. Misma
-    estructura; cambia la clase del wrapper."""
+    """Panel colapsable CidiLabs. Misma estructura para acordeón
+    (dp-accordion-default), expander (dp-expander-default) y tabs
+    (dp-tabs-buttons / dp-tabs-buttons-vertical); cambia la variante.
+
+    Los colores son los del catálogo de snippets UCC y los de las aulas
+    maquetadas a mano: base primary, activo y hover secondary.
+    """
     grupos = "\n".join(
         '<div class="dp-panel-group">\n'
         f'<h3 class="dp-panel-heading">{t}</h3>\n'
         f'<div class="dp-panel-content">{c}</div>\n</div>'
         for t, c in pares)
     return (f'<div class="dp-panels-wrapper {variante} '
-            'dp-panel-color-dp-secondary dp-panel-active-color-dp-primary" '
-            f'title="contenido insertado">\n{grupos}\n</div>')
+            'dp-panel-color-dp-primary dp-panel-active-color-dp-secondary '
+            'dp-panel-hover-color-dp-secondary">\n'
+            f'{grupos}\n</div>')
 
 
 def construir_flipcards(pares: list) -> str:

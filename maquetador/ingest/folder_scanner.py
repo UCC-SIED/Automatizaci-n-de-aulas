@@ -32,6 +32,19 @@ _DESCARTAR = re.compile(
     r"(borrador|copia de|elimina(r|da)|despues se borra|devoluci|"
     r"versi[óo]n anterior|^no_|^~\$)", re.I)
 
+# Imágenes que comparten carpeta con la foto del docente pero NO son un
+# retrato: fotogramas y miniaturas de la grabación, capturas de pantalla,
+# logos y placeholders de banner.
+_NO_ES_RETRATO = re.compile(
+    r"(^|[-_\s])(video|videos|frame|fotograma|thumb|thumbnail|miniatura|"
+    r"captura|screenshot|pantalla|logo|isologo|banner|portada|caratula|"
+    r"slide|placeholder|plantilla)([-_\s]|\d|$)", re.I)
+
+
+def _PARECE_RETRATO(nombre_normalizado: str) -> bool:
+    """¿El nombre del archivo es compatible con una foto de docente?"""
+    return not _NO_ES_RETRATO.search(nombre_normalizado)
+
 # Carpeta(s) en la ruta que marcan material no usable
 _CARPETAS_DESCARTAR = ("borrador", "borradores", "devoluciones",
                        "version anterior", "versiones anterior")
@@ -237,8 +250,14 @@ def escanear(carpeta: Path) -> InventarioCurso:
                     or ("foto" in carpeta_padre and "docente" in carpeta_padre):
                 # La foto del docente viene con el material de grabación, en
                 # la etapa de maquetación, o en una carpeta dedicada "Foto (y
-                # CV) docente".
-                inv.fotos_docente.append(path)
+                # CV) docente". En esas carpetas conviven con capturas y
+                # miniaturas de video: si el nombre delata que no es un
+                # retrato, no puede terminar de foto del docente (ya pasó:
+                # "video-01.jpg" salió publicado como la foto del profesor).
+                if _PARECE_RETRATO(nombre):
+                    inv.fotos_docente.append(path)
+                else:
+                    inv.otros.append(path)
             else:
                 inv.otros.append(path)
             continue

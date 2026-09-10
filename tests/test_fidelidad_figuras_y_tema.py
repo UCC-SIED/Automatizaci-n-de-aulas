@@ -1,0 +1,130 @@
+# -*- coding: utf-8 -*-
+"""Tests de fidelidad del maquetado, salidos de la auditoría del 2026-09-10.
+
+Cada caso reproduce markup REAL que hoy sale de la segmentación del DOCX y
+verifica que el generador lo deja como el aula maquetada a mano
+(`pruebas/gestion-de-la-calidad-2026-export (2).imscc`).
+
+Ver docs/auditoria-fidelidad-gestion-calidad-2026-09-10.md
+"""
+
+import re
+
+from processors.cidilabs_builder import DP_WRAPPER_CLASSES
+from maquetador.build.pages import pagina_intro, pagina_contenido
+from maquetador.build.snippets import procesar_contenido, sanear_lista_objetivos
+
+
+class TestTemaDelWrapper:
+    """El #dp-wrapper tiene que traer el tema de encabezados vigente."""
+
+    def test_trae_los_tokens_del_tema_nuevo(self):
+        for token in ("custom-paragraph-padding", "dp-hdg-txt-h6-dp-primary",
+                      "dp-hdg-bg-h5-dp-gray", "dp-hdg-txt-h5-dp-primary",
+                      "dp-hdg-bg-h6-dp-white", "dp-hdg-d-h4-table-l",
+                      "dp-hdg-b-h5-pill-r"):
+            assert token in DP_WRAPPER_CLASSES, f"falta {token}"
+
+    def test_no_arrastra_tokens_del_tema_viejo(self):
+        for token in ("dp-hdg-txt-h5-dp-white", "dp-hdg-bg-h6-dp-gray",
+                      "dp-hdg-txt-h6-dp-gray", "dp-hdg-b-h6-bold",
+                      "dp-hdg-b-h5-bold", "dp-hdg-b-h5-brdr-b"):
+            assert token not in DP_WRAPPER_CLASSES, f"sobra {token}"
+
+    def test_sin_artefactos_del_editor(self):
+        """El editor DesignPLUS deja '&nbsp;' pegado a una clase y duplica
+        custom-paragraph-padding; el generador no debe copiar eso."""
+        assert "&nbsp;" not in DP_WRAPPER_CLASSES
+        tokens = DP_WRAPPER_CLASSES.split()
+        assert len(tokens) == len(set(tokens)), "hay clases repetidas"
+
+    def test_llega_a_la_pagina_generada(self):
+        html = pagina_contenido("1.1. Título", "<p>x</p>", "b.png", "id")
+        assert 'id="dp-wrapper"' in html
+        assert "custom-paragraph-padding" in html
+
+
+class TestFiguras:
+    """Figura embebida en el DOCX: epígrafe + imagen + 'Texto alternativo:'."""
+
+    # Markup tal cual sale hoy de la página 2.2 del curso de prueba.
+    FIGURA = (
+        '<p class="dp-heading-ignore" style="text-align: center;">'
+        '<span style="font-size: 10pt;"><strong>Figura 2. Ejemplo simplificado'
+        ' de diagrama de Ishikawa</strong></span></p>'
+        '<p><strong><img src="__MEDIA__/M_2 fig 2.jpg"></strong></p>'
+        '<p>Texto alternativo: Diagrama de Ishikawa para identificar las '
+        'posibles causas de un problema.</p>'
+    )
+
+    def test_el_texto_alternativo_va_al_atributo_alt(self):
+        out = procesar_contenido(self.FIGURA)
+        assert 'alt="Diagrama de Ishikawa para identificar las posibles ' \
+               'causas de un problema"' in out
+
+    def test_el_texto_alternativo_deja_de_verse_en_la_pagina(self):
+        out = procesar_contenido(self.FIGURA)
+        assert "Texto alternativo:" not in out
+
+    def test_la_figura_queda_centrada_aunque_word_la_envuelva_en_strong(self):
+        """El <p> contenedor se centra: hay que subir hasta él, porque el
+        padre directo de la imagen es el <strong> que mete Word."""
+        out = procesar_contenido(self.FIGURA)
+        assert '<p style="text-align: center;"><strong><img' in out
+
+    def test_borde_estatico_por_defecto(self):
+        out = procesar_contenido(self.FIGURA)
+        assert "dp-image-rounded-10" in out and "dp-image-bordered" in out
+        assert "dp-popup-image" not in out
+        assert "dp-image-shadow" not in out
+
+    def test_borde_expandible_si_el_asesor_lo_pide(self):
+        html = self.FIGURA + "<p>Figura expandible</p>"
+        out = procesar_contenido(html)
+        assert "dp-popup-image" in out
+        assert "dp-image-shadow" in out
+
+    def test_no_toca_los_iconos_de_los_recuadros(self):
+        html = ('<div class="dp-callout"><div class="card-body">'
+                '<img src="$IMS-CC-FILEBASE$/Iconos/icono%20lectura.svg" alt="">'
+                '</div></div>')
+        out = procesar_contenido(html)
+        assert "dp-image-rounded-10" not in out
+
+    def test_alt_explicito_pisa_al_epigrafe(self):
+        """reemplazar_figuras_diseno deja el epígrafe como alt de arranque;
+        si el asesor escribió un texto alternativo, ese manda."""
+        html = ('<p><img src="__DISENO__/f.jpg" alt="Figura 2. Ejemplo"></p>'
+                '<p>Texto alternativo: Descripción accesible real.</p>')
+        out = procesar_contenido(html)
+        assert 'alt="Descripción accesible real"' in out
+        assert "Figura 2. Ejemplo" not in out
+
+
+class TestListaDeObjetivos:
+    """Un objetivo con estilo de título no puede romper la lista."""
+
+    LISTA = ('<ul><li>Comprender…</li><li>Analizar…</li>'
+             '<h3>Distinguir los procesos de planificación…</h3>'
+             '<li>Interpretar…</li></ul>')
+
+    def test_el_encabezado_suelto_vuelve_a_ser_item(self):
+        out = sanear_lista_objetivos(self.LISTA)
+        assert "<h3>" not in out
+        assert out.count("<li>") == 4
+
+    def test_conserva_el_texto_del_objetivo(self):
+        out = sanear_lista_objetivos(self.LISTA)
+        assert "Distinguir los procesos de planificación…" in out
+
+    def test_no_toca_los_encabezados_fuera_de_la_lista(self):
+        html = "<h3>Objetivos</h3><ul><li>uno</li></ul>"
+        out = sanear_lista_objetivos(html)
+        assert "<h3>Objetivos</h3>" in out
+
+    def test_se_aplica_al_construir_la_pagina_de_intro(self):
+        html = pagina_intro("Introducción M1", "<p>i</p>", self.LISTA,
+                            "b.png", "id")
+        bloque = re.search(r"<ul>.*?</ul>", html, re.S).group(0)
+        assert "<h3>" not in bloque
+        assert bloque.count("<li>") == 4

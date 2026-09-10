@@ -8,17 +8,29 @@ import re
 from bs4 import BeautifulSoup, Tag
 
 
-# Clases CSS del wrapper CidiLabs (extraídas del aula base posgrado)
+# Clases CSS del wrapper CidiLabs: tema de encabezados vigente de la UCC.
+#
+# Se extrajo de las páginas de referencia del curso Canvas 399 (los HTML de
+# "Pautas de Estructura…", "Estilos para Llamados a la Acción…", "Estándares
+# para Recursos Visuales…" y "Modelo de actividad"): las cuatro traen este
+# mismo string, en este mismo orden.
+#
+# Ojo si se vuelve a copiar de una página exportada: el editor DesignPLUS deja
+# dos artefactos que acá se omiten a propósito —un `&nbsp;` pegado a
+# `dp-hdg-b-h6-pill-r` (rompe ese token, porque el navegador solo separa clases
+# por espacios ASCII) y `custom-paragraph-padding` repetido.
 DP_WRAPPER_CLASSES = (
     "dp-wrapper dp-hdg-i-bg-h2-dp-primary dp-hdg-i-align-h2-tc "
     "dp-hdg-i-cp-brdr-h2-dp-white dp-hdg-b-h3-brdr-b dp-hdg-d-h2-c "
-    "dp-hdg-b-h4-brdr-b dp-hdg-b-h5-brdr-b dp-hdg-brdr-h4-2 dp-hdg-brdr-h5-1 "
+    "dp-hdg-b-h4-brdr-b dp-hdg-brdr-h4-2 dp-hdg-brdr-h5-1 "
     "dp-hdg-i-sz-h2-out dp-hdg-i-brdr-h2-2 dp-hdg-brdr-h2-1 dp-hdg-brdr-h3-2 "
-    "dp-hdg-txt-h4-dp-gray dp-hdg-txt-h5-dp-white dp-hdg-d-h5-table-l "
+    "dp-hdg-txt-h4-dp-gray dp-hdg-d-h5-table-l "
     "dp-hdg-brdr-h6-1 dp-hdg-d-h6-table-l dp-hdg-cp-brdr-h6-dp-gray "
-    "dp-hdg-bg-h6-dp-gray dp-hdg-txt-h6-dp-gray dp-hdg-i-styl-h2-pill "
-    "dp-hdg-txt-h2-dp-primary dp-hdg-b-h2-brdr-t dp-hdg-b-h6-pill-r "
-    "dp-hdg-b-h6-bold dp-hdg-b-h5-bold dp-hdg-b-h4-bold dp-hdg-b-h3-bold"
+    "dp-hdg-i-styl-h2-pill dp-hdg-txt-h2-dp-primary dp-hdg-b-h2-brdr-t "
+    "dp-hdg-b-h4-bold dp-hdg-b-h3-bold dp-hdg-d-h4-table-l "
+    "dp-hdg-b-h5-pill-r custom-paragraph-padding dp-hdg-txt-h6-dp-primary "
+    "dp-hdg-bg-h5-dp-gray dp-hdg-txt-h5-dp-primary dp-hdg-bg-h6-dp-white "
+    "dp-hdg-b-h6-pill-r"
 )
 
 DP_WRAPPER_ATTRS = {

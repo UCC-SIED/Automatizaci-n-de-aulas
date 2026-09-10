@@ -37,10 +37,16 @@ _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _AUTO = {"subtitulo", "recuadro_simple", "lectura", "video", "podcast",
          "sin_recuadro"}
 
-_COMPONENTES = {"acordeon", "tabs", "expander", "flip_card", "tooltip", "cita"}
-_VARIANTE_PANEL = {"acordeon": "dp-expander-default",
-                   "tabs": "dp-tabs",
-                   "expander": "dp-expander-default"}
+_COMPONENTES = {"acordeon", "tabs", "tabs_vertical", "expander", "flip_card",
+                "tooltip", "cita"}
+# Clase de variante de DesignPLUS por tipo de panel. Los nombres salen del
+# catálogo de snippets UCC: acordeón y expander NO son la misma variante, y
+# las tabs son "dp-tabs-buttons" (había quedado "dp-tabs", que no existe y
+# dejaba el componente sin estilo).
+_VARIANTE_PANEL = {"acordeon": "dp-accordion-default",
+                   "expander": "dp-expander-default",
+                   "tabs": "dp-tabs-buttons",
+                   "tabs_vertical": "dp-tabs-buttons-vertical"}
 
 
 def _clasificar(instruccion: str, anclado: str = "") -> str:
@@ -74,7 +80,9 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     # no confundir con "tabla" ni con "texto alternativo".
     if re.search(r"\btabs?\b", n) or "solapa" in n or "pestaña" in n \
             or "pestana" in n:
-        return "tabs"
+        # El asesor pide la orientación en el mismo comentario
+        # ("Para maquetación: TABS vertical").
+        return "tabs_vertical" if "vertical" in n else "tabs"
     if any(k in n for k in ("expander", "expandible", "expandir")):
         return "expander"
     if any(k in n for k in ("flip card", "flipcard", "flip-card", "tarjeta",
@@ -254,7 +262,7 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
 
         # --- Componentes de pedido del asesor ---
         if accion in _VARIANTE_PANEL:                 # acordeon / tabs / expander
-            pares, consumidos = extraer_pares(el)
+            pares, consumidos = extraer_pares(el, c["instruccion"])
             if len(pares) >= 2:
                 html = construir_panels(pares, _VARIANTE_PANEL[accion])
                 consumidos[0].replace_with(BeautifulSoup(html, "html.parser"))

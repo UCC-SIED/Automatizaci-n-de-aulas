@@ -81,6 +81,25 @@ def _genero_texto(texto: str) -> str:
     return None
 
 
+def _elegir_foto_docente(candidatas: list, nombre: str):
+    """De las fotos candidatas, la que más se parece al retrato del docente.
+
+    En la carpeta de grabación conviven la foto del profesor con fotogramas y
+    capturas; el escáner ya descarta los nombres que se delatan, pero cuando
+    quedan varias hay que elegir bien: gana la que menciona el nombre o el
+    apellido del docente. Si ninguna lo menciona, la primera (orden estable).
+    """
+    if not candidatas:
+        return None
+    partes = [normalizar(p) for p in (nombre or "").split() if len(p) >= 4]
+    if partes:
+        for path in candidatas:
+            stem = normalizar(path.stem)
+            if any(p in stem for p in partes):
+                return path
+    return candidatas[0]
+
+
 def _leer(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
@@ -486,10 +505,21 @@ class GeneradorAula:
             if nt:
                 cambios.append("tutor sección 1 (= docente)")
 
+        # --- banner de la portada ---
+        # El aula base trae el placeholder "Nombre de la asignatura - EP.png"
+        # y, como alt, el propio nombre del archivo. El alt tiene que describir
+        # la imagen: va el nombre de la asignatura.
+        if self.spec.nombre:
+            html, nb = re.subn(r'alt="Nombre de la asignatura[^"]*"',
+                               f'alt="{xml_escape(self.spec.nombre)}"', html)
+            if nb:
+                cambios.append("alt del banner")
+
         # --- foto del docente ---
         foto_item = next((i for k, i in items.items() if "fotografia" in k), None)
         foto = (foto_item.fuente.archivo if foto_item and foto_item.fuente.archivo
-                else (getattr(self.spec, "fotos_docente", []) or [None])[0])
+                else _elegir_foto_docente(
+                    getattr(self.spec, "fotos_docente", []) or [], nombre))
         if foto and foto.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"):
             destino_rel = f"web_resources/Multimedia cargada/{foto.name}"
             (self.working / "web_resources" / "Multimedia cargada").mkdir(
@@ -553,6 +583,19 @@ class GeneradorAula:
                                        ">Profesor autor<", html, count=1)
                     if ng:
                         cambios.append("género docente")
+
+        # Si no hubo biografía que poner, el placeholder del aula base no puede
+        # quedar publicado: "Titulación relevante." ya salió así en un curso.
+        # Se vacía el campo y se avisa para completarlo a mano.
+        html, np = re.subn(r"(>)\s*Titulación relevante\.?\s*(<)",
+                           lambda m: m.group(1) + "&nbsp;" + m.group(2),
+                           html, count=1)
+        if np:
+            cambios.append("placeholder de titulación vaciado")
+            self.spec.issues.append(Issue(Severidad.INFO,
+                "No se encontró la biografía/titulación del docente: el campo "
+                "quedó vacío en la página de inicio, hay que completarlo a mano.",
+                "Página de inicio"))
 
         if cambios:
             _escribir(pagina, html)

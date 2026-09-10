@@ -8,7 +8,7 @@ Los bloques se replican EXACTAMENTE como en el aula de snippets
     dp-callout-color-lg-tip + dp-callout-type-title-bar, borde #1b1e31,
     icono SVG de web_resources/Iconos/.
   - Resaltado Profundización (Reflexiona / Para pensar / Para saber más):
-    dp-callout-color-lg-warning + ícono lámpara, título #757121.
+    dp-callout-color-warning + ícono lámpara sobre #f4e600, título #757121.
   - Resaltado Atención/Importante: dp-callout-color-danger + triángulo.
   - Resaltado simple (sin título): borde #1b1e31, solo card-body.
 
@@ -79,9 +79,14 @@ def cta_descubri_leyendo(body_html: str) -> str:
 
 
 def resaltado_profundizacion(titulo: str, body_html: str) -> str:
-    """Reflexiona / Para pensar / Para saber más — amarillo con lámpara."""
-    return f"""<div class="dp-callout dp-callout-placeholder card dp-callout-position-default dp-callout-type-info dp-callout-color-lg-warning">
-<div class="dp-callout-side-emphasis"><i class="dp-icon fas fa-lightbulb dp-default-icon">​</i></div>
+    """Reflexiona / Para pensar / Para saber más — amarillo con lámpara.
+
+    Token de color `dp-callout-color-warning` (no el `lg-`) y el amarillo
+    institucional explícito en la barra lateral, como en "Estilos para
+    Llamados a la Acción…" y en las aulas maquetadas a mano.
+    """
+    return f"""<div class="dp-callout dp-callout-placeholder card dp-callout-position-default dp-callout-type-info dp-callout-color-warning">
+<div class="dp-callout-side-emphasis" style="background-color: #f4e600; color: #000000;"><i class="dp-icon fas fa-lightbulb dp-default-icon">​</i></div>
 <div class="card-body">
 <h3 class="card-title" style="color: #757121;">{titulo}</h3>
 {body_html}
@@ -279,6 +284,13 @@ _PAT_FIG_FILE = re.compile(
     r"(?:m[_\s]?(\d+)\s*fig(?:ura)?\s*(\d+))|(?:fig(?:ura)?\s*(\d+)\s*m[_\s]?(\d+))"
     r"|(?:tabla\s*(\d+)\s*m[_\s]?(\d+))|(?:m[_\s]?(\d+)\s*tabla\s*(\d+))", re.I)
 
+# "Estándares para Recursos Visuales y Datos": la figura estática lleva otro
+# borde que la expandible. La estática es el caso por defecto; el estilo con
+# lupa (dp-popup-image) solo cuando el asesor pide poder ampliarla.
+_FIG_CLASES_ESTATICA = "dp-max-width dp-image-rounded-10 dp-image-bordered"
+_FIG_CLASES_EXPANDIBLE = ("dp-max-width dp-popup-image dp-image-rounded-10 "
+                          "dp-image-padded dp-image-bordered dp-image-shadow")
+
 
 def indexar_figuras_diseno(archivos: list) -> dict:
     """{(modulo, 'figura'|'tabla', n): Path} a partir de los archivos de DISEÑO."""
@@ -363,9 +375,8 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
             usadas.add(path)
         elif clase == "table":
             nueva = BeautifulSoup(
-                f'<p style="text-align: center;"><img class="dp-popup-image '
-                f'dp-image-rounded-10 dp-image-padded dp-image-bordered '
-                f'dp-image-shadow" style="width: 700px; height: auto;" '
+                f'<p style="text-align: center;"><img class="{_FIG_CLASES_ESTATICA}" '
+                f'style="width: 700px; height: auto;" '
                 f'src="__DISENO__/{path.name}" alt="{texto[:120]}" '
                 f'loading="lazy"></p>', "html.parser")
             vecino.replace_with(nueva)
@@ -378,9 +389,8 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
             # cuando el párrafo traía descripción además del número.
             resto = texto[m.end():].strip(" .:–—-")
             img_html = (
-                f'<p style="text-align: center;"><img class="dp-popup-image '
-                f'dp-image-rounded-10 dp-image-padded dp-image-bordered '
-                f'dp-image-shadow" style="width: 700px; height: auto;" '
+                f'<p style="text-align: center;"><img class="{_FIG_CLASES_ESTATICA}" '
+                f'style="width: 700px; height: auto;" '
                 f'src="__DISENO__/{path.name}" alt="{texto[:120]}" '
                 f'loading="lazy"></p>')
             if resto:
@@ -675,6 +685,28 @@ def limpiar_anclas_vacias(html: str) -> str:
     return str(soup)
 
 
+def sanear_lista_objetivos(html: str) -> str:
+    """Devuelve todos los ítems de una lista a <li>.
+
+    Si en el DOCX un objetivo quedó con estilo de título (o el asesor lo puso
+    en negrita y Word lo volcó como encabezado), mammoth lo emite como
+    <h3>/<h4> suelto DENTRO del <ul> y Canvas lo muestra como una titulación
+    en medio de las viñetas. Todos los objetivos son ítems de la misma lista:
+    cualquier encabezado hijo directo de un <ul>/<ol> se degrada a <li>.
+    """
+    if not html:
+        return html
+    soup = BeautifulSoup(html, "html.parser")
+    for lista in soup.find_all(["ul", "ol"]):
+        for hijo in lista.find_all(["h1", "h2", "h3", "h4", "h5", "h6"],
+                                   recursive=False):
+            hijo.name = "li"
+            hijo.attrs = {}
+            for fuerte in hijo.find_all(["strong", "b"]):
+                fuerte.unwrap()
+    return str(soup)
+
+
 _PAT_GENIALLY_URL = re.compile(r"https?://(?:[\w-]+\.)?genial\.?ly/[^\s\"'<>]+", re.I)
 _EXPANDER_KW = ("expander", "expandible", "expandibles", "acordeon",
                 "desplegable", "desplegables")
@@ -775,6 +807,79 @@ def _procesar_genially(soup):
                 "Genially"), "html.parser"))
 
 
+# ---------------------------------------------------------------------- #
+#  Figuras: estilo, centrado y texto alternativo
+# ---------------------------------------------------------------------- #
+
+# El asesor escribe el texto alternativo como un párrafo suelto debajo de la
+# imagen ("Texto alternativo: Diagrama de Ishikawa…"). El estándar de la UCC
+# pide que viva en el atributo alt de la figura, no como texto visible.
+_PAT_ALT_PARRAFO = re.compile(
+    r"^texto\s*(?:alternativo|alt)\s*[:\.]\s*(.+)$", re.I | re.S)
+
+# Marcadores con los que el asesor pide que la figura se pueda ampliar.
+_FIG_EXPANDIBLE_KW = ("expandible", "expandida", "ampliable",
+                      "clic para ampliar", "click para ampliar")
+
+
+def _es_figura(img) -> bool:
+    """Imagen de contenido: no un icono de recuadro ni un SVG decorativo."""
+    src = img.get("src", "")
+    if "/Iconos/" in src or src.endswith(".svg"):
+        return False
+    if img.find_parent(class_="card-title") or img.find_parent(class_="dp-callout"):
+        return False
+    return True
+
+
+def _figura_vecina(p):
+    """Figura más cercana al párrafo: primero hacia arriba (el 'Texto
+    alternativo' suele ir debajo de la imagen), después hacia abajo."""
+    for buscar in (p.find_previous_siblings, p.find_next_siblings):
+        for vecino in list(buscar())[:3]:
+            if getattr(vecino, "name", None) == "img":
+                if _es_figura(vecino):
+                    return vecino
+            elif getattr(vecino, "find", None) is not None:
+                img = vecino.find("img")
+                if img is not None and _es_figura(img):
+                    return img
+    return None
+
+
+def _alt_parrafo_a_atributo(soup):
+    """Mueve los párrafos 'Texto alternativo: …' al alt de la figura vecina.
+
+    Pisa el alt que hubiera: `reemplazar_figuras_diseno` deja el epígrafe como
+    alt de arranque, pero si el asesor escribió un texto alternativo explícito
+    ese manda. El párrafo se elimina siempre que haya figura a la que pegarlo:
+    es una instrucción de maquetación, no contenido de la página.
+    """
+    for p in list(soup.find_all("p")):
+        m = _PAT_ALT_PARRAFO.match(p.get_text(" ", strip=True))
+        if not m:
+            continue
+        alt = " ".join(m.group(1).split()).strip(" .;")
+        img = _figura_vecina(p) if alt else None
+        if img is None:
+            continue
+        img["alt"] = alt
+        p.decompose()
+
+
+def _figura_es_expandible(img) -> bool:
+    """Solo si el asesor lo pidió explícitamente cerca de la figura."""
+    contenedor = img.find_parent("p") or img.parent
+    trozos = [img.get("alt", "")]
+    if contenedor is not None:
+        for vecino in list(contenedor.find_next_siblings())[:2]:
+            trozos.append(vecino.get_text(" ", strip=True))
+        for vecino in list(contenedor.find_previous_siblings())[:2]:
+            trozos.append(vecino.get_text(" ", strip=True))
+    texto = _norm(" ".join(t for t in trozos if t))
+    return any(kw in texto for kw in _FIG_EXPANDIBLE_KW)
+
+
 def procesar_contenido(html: str) -> str:
     if not html:
         return html
@@ -855,20 +960,26 @@ def procesar_contenido(html: str) -> str:
 
     # 3. Imágenes de contenido → estilo figura CidiLabs
     #    (los iconos SVG de los recuadros NO son figuras)
+    #    Primero el texto alternativo que el asesor dejó como párrafo suelto:
+    #    va al atributo alt, así la figura queda accesible y el texto deja de
+    #    verse como contenido de la página.
+    _alt_parrafo_a_atributo(soup)
     for img in soup.find_all("img"):
-        src = img.get("src", "")
-        if "/Iconos/" in src or src.endswith(".svg"):
-            continue
-        if img.find_parent(class_="card-title") or img.find_parent(class_="dp-callout"):
+        if not _es_figura(img):
             continue
         clases = img.get("class", [])
-        if "dp-popup-image" not in clases:
-            img["class"] = ("dp-popup-image dp-image-rounded-10 dp-image-padded "
-                            "dp-image-bordered dp-image-shadow")
-            img["style"] = "width: 700px; height: auto;"
-            padre = img.parent
-            if padre and padre.name == "p":
-                padre["style"] = "text-align: center;"
+        ya_estilada = any(c == "dp-popup-image" or c.startswith("dp-image-")
+                          for c in clases)
+        if not ya_estilada:
+            img["class"] = (_FIG_CLASES_EXPANDIBLE if _figura_es_expandible(img)
+                            else _FIG_CLASES_ESTATICA)
+            if not img.get("style"):
+                img["style"] = "width: 700px; height: auto;"
+        # Centrar el párrafo contenedor aunque Word haya envuelto la imagen en
+        # <strong>/<span>: hay que subir hasta el <p>, no mirar el padre directo.
+        contenedor = img.find_parent("p")
+        if contenedor is not None:
+            contenedor["style"] = "text-align: center;"
 
     # 3.5 Enlaces: URLs sueltas → <a>; todo enlace externo con el estilo
     #     institucional (inline_disabled dp-ext-ignore, target _blank)

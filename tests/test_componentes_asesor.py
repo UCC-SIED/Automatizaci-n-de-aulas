@@ -105,6 +105,10 @@ class TestAplicarCita:
 
 
 class TestCableado:
+    """Acordeón y expander son variantes DISTINTAS de DesignPLUS: el acordeón
+    es dp-accordion-default. Hasta la auditoría del 2026-09-10 ambos salían
+    como dp-expander-default y estos tests fijaban ese error."""
+
     def test_acordeon_desde_texto_se_arma(self):
         soup = BeautifulSoup(
             "<div><p>Autoevaluación: la persona valora su propio desempeño.</p>"
@@ -116,7 +120,7 @@ class TestCableado:
             "accion": "acordeon", "autor": "",
         }]
         aplicar_comentarios(soup, comentarios)
-        assert "dp-panels-wrapper dp-expander-default" in str(soup)
+        assert "dp-panels-wrapper dp-accordion-default" in str(soup)
         assert comentarios[0].get("_aplicado") is True
 
     def test_acordeon_desde_tabla_se_arma(self):
@@ -133,7 +137,7 @@ class TestCableado:
             "accion": "acordeon", "autor": "",
         }]
         aplicar_comentarios(soup, comentarios)
-        assert "dp-panels-wrapper dp-expander-default" in str(soup)
+        assert "dp-panels-wrapper dp-accordion-default" in str(soup)
         assert str(soup).count('class="dp-panel-group"') == 2
         assert comentarios[0].get("_aplicado") is True
         # la tabla original NO debe quedar duplicada

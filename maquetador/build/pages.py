@@ -11,7 +11,8 @@ import unicodedata
 
 from processors.cidilabs_builder import (DP_WRAPPER_CLASSES, DP_WRAPPER_ATTRS,
                                          _attrs_str)
-from maquetador.build.snippets import procesar_contenido, limpiar_anclas_vacias
+from maquetador.build.snippets import (procesar_contenido, limpiar_anclas_vacias,
+                                       sanear_lista_objetivos)
 from maquetador.build.bibliography import construir_bibliografia
 
 
@@ -67,7 +68,7 @@ def pagina_intro(titulo: str, intro_html: str, objetivos_html: str,
 </div>
 <div class="dp-content-block kl_readings2">
 <h2 class="dp-has-icon"><i class="fas fa-flag" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i> Objetivos</h2>
-{limpiar_anclas_vacias(objetivos_html)}
+{sanear_lista_objetivos(limpiar_anclas_vacias(objetivos_html))}
 <p>&nbsp;</p>
 </div>
 </div>
