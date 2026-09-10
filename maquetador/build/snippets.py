@@ -387,17 +387,21 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
             # cualquier separador): se inserta la figura de diseño en el lugar
             # del marcador, conservando el texto del epígrafe como pie de foto
             # cuando el párrafo traía descripción además del número.
+            #
+            # El epígrafe va ARRIBA de la imagen ("Estándares para Recursos
+            # Visuales y Datos" y las aulas a mano); salía invertido.
             resto = texto[m.end():].strip(" .:–—-")
-            img_html = (
-                f'<p style="text-align: center;"><img class="{_FIG_CLASES_ESTATICA}" '
-                f'style="width: 700px; height: auto;" '
-                f'src="__DISENO__/{path.name}" alt="{texto[:120]}" '
-                f'loading="lazy"></p>')
+            img_html = ""
             if resto:
                 img_html += (
                     '<p class="dp-heading-ignore" style="text-align: center;">'
                     f'<span style="font-size: 10pt;"><strong>{texto}</strong>'
                     '</span></p>')
+            img_html += (
+                f'<p style="text-align: center;"><img class="{_FIG_CLASES_ESTATICA}" '
+                f'style="width: 700px; height: auto;" '
+                f'src="__DISENO__/{path.name}" alt="{texto[:120]}" '
+                f'loading="lazy"></p>')
             p.replace_with(BeautifulSoup(img_html, "html.parser"))
             usadas.add(path)
     return str(soup)

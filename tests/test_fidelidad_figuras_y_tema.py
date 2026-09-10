@@ -128,3 +128,32 @@ class TestListaDeObjetivos:
         bloque = re.search(r"<ul>.*?</ul>", html, re.S).group(0)
         assert "<h3>" not in bloque
         assert bloque.count("<li>") == 4
+
+
+class TestFiguraDeDisenoDesdeMarcador:
+    """Cuando el asesor deja solo el marcador ("Figura 5. …") sin imagen
+    embebida al lado, se inserta la figura de diseño en su lugar."""
+
+    HTML = ('<p>La cláusula 4 a la 10 contiene los requisitos.</p>'
+            '<p>Figura 5. Cláusulas del sistema de gestión de la calidad</p>'
+            '<p>Texto alternativo: Breve resumen de las cláusulas de ISO 9001.</p>')
+
+    def _generar(self):
+        from pathlib import Path
+        from maquetador.build.snippets import reemplazar_figuras_diseno
+        return reemplazar_figuras_diseno(
+            self.HTML, 1, {(1, "figura", 5): Path("M_1 fig 5.jpg")}, set())
+
+    def test_inserta_la_figura_de_diseno(self):
+        out = self._generar()
+        assert "M_1 fig 5.jpg" in out
+
+    def test_el_epigrafe_va_ARRIBA_de_la_imagen(self):
+        """Salía invertido: primero la imagen y el epígrafe debajo."""
+        out = self._generar()
+        assert out.index("Cláusulas del sistema") < out.index("<img")
+
+    def test_usa_el_borde_estatico(self):
+        out = self._generar()
+        assert "dp-image-bordered" in out
+        assert "dp-popup-image" not in out
