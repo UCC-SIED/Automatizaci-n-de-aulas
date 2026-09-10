@@ -286,10 +286,34 @@
       </item>
     </items>
   </module>
+  <module identifier="g88e7daf311dd3e2f434b1a3d1c7641ea">
+    <title>Encuesta de valoración final</title>
+    <workflow_state>active</workflow_state>
+    <position>5</position>
+    <require_sequential_progress>false</require_sequential_progress>
+    <locked>false</locked>
+    <items>
+      <item identifier="g052d1ac728677e509a8170a62953bca4">
+        <content_type>Quizzes::Quiz</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Encuesta de valoración final </title>
+        <identifierref>g8d43e0c444d771d185a988cbffd4c6cb</identifierref>
+        <position>2</position>
+        <new_tab/>
+        <indent>0</indent>
+        <link_settings_json>null</link_settings_json>
+      </item>
+    </items>
+    <completionRequirements>
+      <completionRequirement type="must_submit">
+        <identifierref>g052d1ac728677e509a8170a62953bca4</identifierref>
+      </completionRequirement>
+    </completionRequirements>
+  </module>
   <module identifier="g29dc74a4ffff5906b75a7e7ecd93afe3">
     <title>Actividad final integradora</title>
     <workflow_state>active</workflow_state>
-    <position>5</position>
+    <position>6</position>
     <require_sequential_progress>false</require_sequential_progress>
     <locked>false</locked>
     <items>
@@ -310,24 +334,5 @@
         <identifierref>g6b7d7a644e1b43433fad411424a7c6e9</identifierref>
       </completionRequirement>
     </completionRequirements>
-  </module>
-  <module identifier="g88e7daf311dd3e2f434b1a3d1c7641ea">
-    <title>Encuesta de valoración final</title>
-    <workflow_state>active</workflow_state>
-    <position>6</position>
-    <require_sequential_progress>false</require_sequential_progress>
-    <locked>false</locked>
-    <items>
-      <item identifier="g052d1ac728677e509a8170a62953bca4">
-        <content_type>Quizzes::Quiz</content_type>
-        <workflow_state>active</workflow_state>
-        <title>Encuesta de valoración final </title>
-        <identifierref>g8d43e0c444d771d185a988cbffd4c6cb</identifierref>
-        <position>2</position>
-        <new_tab/>
-        <indent>0</indent>
-        <link_settings_json>null</link_settings_json>
-      </item>
-    </items>
   </module>
 </modules>
