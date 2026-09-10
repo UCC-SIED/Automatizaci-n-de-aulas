@@ -10,6 +10,8 @@ Ver docs/auditoria-fidelidad-gestion-calidad-2026-09-10.md
 
 import re
 
+import pytest
+
 from bs4 import BeautifulSoup
 
 from maquetador.ingest.docx_comments import _clasificar, _VARIANTE_PANEL, \
@@ -161,3 +163,56 @@ class TestMaquetadoDeActividad:
     def test_no_toca_un_parrafo_que_no_es_rotulo(self):
         out = maquetar_actividad("<p>Nutri Pet S.A.: una empresa del rubro.</p>")
         assert "<h3>" not in out
+
+
+class TestJerarquiaDeSubtitulos:
+    """Textos tomados de los comentarios reales del curso de prueba.
+
+    La política de jerarquía de la UCC: H2 título de página, H3 subtítulo,
+    H4 sub-subtítulo. "sub-subtítulo" contiene la palabra "subtítulo", así que
+    todos caían en H3.
+    """
+
+    def test_subtitulo_es_h3(self):
+        assert _clasificar("Para maquetación: subtítulo") == "subtitulo"
+
+    @pytest.mark.parametrize("texto", [
+        "Para maquetación: sub-subtítulo",
+        "Para maquetación: subsubtítulo",
+        "Para maquetación: sub subtitulo",
+    ])
+    def test_sub_subtitulo_es_h4(self, texto):
+        assert _clasificar(texto) == "subsubtitulo"
+
+    def test_aplica_el_nivel_correcto(self):
+        soup = BeautifulSoup("<div><p>¿Qué es un indicador?</p></div>",
+                             "html.parser")
+        coment = [{"instruccion": "Para maquetación: sub-subtítulo",
+                   "anclado": "¿Qué es un indicador?",
+                   "accion": "subsubtitulo", "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        assert "<h4>¿Qué es un indicador?</h4>" in str(soup)
+
+    def test_el_subtitulo_sigue_siendo_h3(self):
+        soup = BeautifulSoup("<div><p>Costos de la calidad</p></div>",
+                             "html.parser")
+        coment = [{"instruccion": "Para maquetación: subtítulo",
+                   "anclado": "Costos de la calidad",
+                   "accion": "subtitulo", "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        assert "<h3>Costos de la calidad</h3>" in str(soup)
+
+
+class TestMarcadorDeCierre:
+    """'fin del expander' marca dónde termina, no pide armar otro."""
+
+    @pytest.mark.parametrize("texto", [
+        "Para maquetación: fin del expander",
+        "Para maquetación: fin de la tabla",
+        "fin del acordeón",
+    ])
+    def test_no_dispara_un_componente(self, texto):
+        assert _clasificar(texto) is None
+
+    def test_el_expander_de_verdad_sigue_disparando(self):
+        assert _clasificar("Para maquetación: expander") == "expander"

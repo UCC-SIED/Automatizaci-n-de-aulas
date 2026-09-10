@@ -34,8 +34,12 @@ _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 # Acciones que se aplican solas vs. las que solo se avisan.
 # "quitar" NO se automatiza: a veces es un micro-pedido ("quitar los dos puntos")
 # y borrar el párrafo entero sería un error; se avisa para hacerlo a mano.
-_AUTO = {"subtitulo", "recuadro_simple", "lectura", "video", "podcast",
-         "sin_recuadro"}
+_AUTO = {"subtitulo", "subsubtitulo", "recuadro_simple", "lectura", "video",
+         "podcast", "sin_recuadro"}
+
+# Nivel de encabezado por acción, según la política de jerarquía de la UCC:
+# H2 es el título de la página, H3 el subtítulo y H4 el sub-subtítulo.
+_NIVEL_ENCABEZADO = {"subtitulo": "h3", "subsubtitulo": "h4"}
 
 _COMPONENTES = {"acordeon", "tabs", "tabs_vertical", "expander", "flip_card",
                 "tooltip", "cita"}
@@ -72,6 +76,14 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     if any(k in n for k in ("sin recuadro", "sin cuadro", "no resaltar",
                             "no encuadrar", "con sangria", "sangria sin")):
         return "sin_recuadro"
+    # Marcador de cierre de un componente ("fin del expander"): señala dónde
+    # termina, no pide armar otro. Va ANTES de detectar el tipo de componente.
+    if re.match(r"^\s*(?:para\s+maquetacion\s*:\s*)?(?:fin|final)\s+(?:de[l ]|"
+                r"de la\s)", n):
+        return None
+    # "sub-subtítulo" contiene "subtítulo": hay que mirarlo primero.
+    if re.search(r"sub\s*-?\s*sub\s*-?\s*titulo", n):
+        return "subsubtitulo"
     if "subtitulo" in n:
         return "subtitulo"
     if "acordeon" in n:
@@ -304,10 +316,10 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
         # --- Acciones simples existentes ---
         c["_aplicado"] = True
         inner = "".join(str(x) for x in el.children).strip()
-        if accion == "subtitulo":
-            h3 = soup.new_tag("h3")
-            h3.string = el.get_text(" ", strip=True)
-            el.replace_with(h3)
+        if accion in _NIVEL_ENCABEZADO:
+            enc = soup.new_tag(_NIVEL_ENCABEZADO[accion])
+            enc.string = el.get_text(" ", strip=True)
+            el.replace_with(enc)
         elif accion == "quitar":
             el.decompose()
         elif accion == "recuadro_simple":
