@@ -262,6 +262,11 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
         el = _buscar_elemento(soup, c["anclado"])
         if el is None:
             continue
+        # Ya está dentro de un recuadro/componente armado: encuadrarlo otra vez
+        # deja una caja dentro de otra.
+        if accion == "recuadro_simple" and el.find_parent(class_="dp-callout"):
+            c["_aplicado"] = True
+            continue
 
         # El comentario del asesor suele anclar sobre una tabla de pares
         # título/contenido (o un fragmento dentro de ella): el componente se

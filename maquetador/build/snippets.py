@@ -114,11 +114,36 @@ def resaltado_ejemplo(body_html: str, titulo: str = "Ejemplo que iluminan") -> s
 </div>"""
 
 
+#  Frase corta dentro de un recuadro simple: el equipo la centra.
+_LARGO_FRASE_CORTA = 220
+
+
 def resaltado_simple(body_html: str) -> str:
-    """Recuadro destacado sin título (borde institucional)."""
+    """Recuadro destacado sin título (borde institucional).
+
+    Si el contenido es una frase corta va centrado, como lo maqueta el equipo
+    a mano ("si la frase es chica, centrala").
+    """
+    cuerpo = body_html
+    texto = BeautifulSoup(body_html, "html.parser").get_text(" ", strip=True)
+    if 0 < len(texto) <= _LARGO_FRASE_CORTA:
+        soup = BeautifulSoup(body_html, "html.parser")
+        parrafos = soup.find_all("p")
+        if parrafos:
+            for p in parrafos:
+                estilo = (p.get("style") or "").rstrip("; ")
+                if "text-align" not in estilo:
+                    p["style"] = (estilo + "; " if estilo else "") + "text-align: center;"
+                clases = p.get("class") or []
+                if "card-text" not in clases:
+                    p["class"] = clases + ["card-text"]
+            cuerpo = str(soup)
+        else:
+            cuerpo = (f'<p class="card-text" style="text-align: center;">'
+                      f'{body_html}</p>')
     return f"""<div class="dp-callout dp-callout-color-lg-tip card dp-callout-position-default dp-callout-type-title-bar" style="border-color: {ACCENT}; border-radius: 5px;">
 <div class="card-body">
-{body_html}
+{cuerpo}
 </div>
 </div>"""
 
@@ -977,8 +1002,14 @@ def procesar_contenido(html: str) -> str:
             tabla["style"] = ("border-collapse: collapse; width: 100%;")
             tabla["border"] = "1"
 
-    # 1.5 Citas (estilo Quote de Word) → resaltado simple
+    # 1.5 Citas (estilo Quote de Word) → resaltado simple.
+    #     Si el comentario del asesor ya pidió recuadro sobre el párrafo de
+    #     adentro, la cita YA quedó encuadrada: volver a envolverla dejaba un
+    #     recuadro dentro de otro (se veía como el recuadro "puesto doble").
     for bq in soup.find_all("blockquote"):
+        if bq.find(class_="dp-callout"):
+            bq.unwrap()
+            continue
         inner = "".join(str(x) for x in bq.children).strip()
         if inner:
             bq.replace_with(BeautifulSoup(resaltado_simple(inner), "html.parser"))
