@@ -42,7 +42,8 @@ from maquetador.build.pages import (slugify, pagina_intro, pagina_contenido,
 from maquetador.build.snippets import (separar_consignas, procesar_contenido,
                                        indexar_figuras_diseno,
                                        reemplazar_figuras_diseno,
-                                       maquetar_actividad)
+                                       maquetar_actividad,
+                                       _FIG_CLASES_ESTATICA)
 from maquetador.build.bibliography import construir_bibliografia
 from maquetador.extract.segmenter import ImagenInline
 from maquetador.ingest.folder_scanner import normalizar
@@ -672,6 +673,9 @@ class GeneradorAula:
                 'dp-panel-color-dp-primary dp-panel-active-color-dp-secondary" '
                 'title="contenido insertado">\n' + "\n".join(grupos)
                 + '\n</div>\n</div>')
+            # El esquema de la asignatura va pegado debajo del índice, como
+            # bloque "Visión General" (así lo maqueta el equipo a mano).
+            bloque2 += self._bloque_esquema()
             nuevo = self._reemplazar_bloque_div(html, "kl_custom_block_2", bloque2)
             if nuevo != html:
                 html = nuevo
@@ -688,6 +692,43 @@ class GeneradorAula:
         if cambios:
             _escribir(syl_path, html)
             logger.info(f"  [Programa] syllabus armado: {', '.join(cambios)}")
+
+    def _bloque_esquema(self) -> str:
+        """Bloque 'Visión General' del programa con el esquema de la asignatura.
+
+        La planilla lo pide como ítem de inicio ("Esquema introductorio a la
+        asignatura") y el equipo lo maqueta en el syllabus, debajo del índice
+        de contenidos. Devuelve "" si no hay un esquema utilizable.
+        """
+        from urllib.parse import quote
+        item = next((i for i in self.spec.items_inicio
+                     if "esquema" in normalizar(i.detalle.get("item_planilla",
+                                                              i.titulo))), None)
+        esquema = item.fuente.archivo if item and item.fuente.archivo else None
+        if esquema is None or esquema.suffix.lower() not in (
+                ".jpg", ".jpeg", ".png", ".webp"):
+            if item is not None:
+                self.spec.issues.append(Issue(Severidad.AVISO,
+                    "La planilla pide el esquema introductorio pero no encontré "
+                    "la imagen en la carpeta de diseño. Se carga a mano en el "
+                    "programa, debajo del índice.", "Programa"))
+            return ""
+
+        destino_rel = f"web_resources/Multimedia cargada/{esquema.name}"
+        (self.working / "web_resources" / "Multimedia cargada").mkdir(
+            parents=True, exist_ok=True)
+        shutil.copy2(esquema, self.working / destino_rel)
+        self.recursos_nuevos.append((_gen_id(), destino_rel))
+        url = "$IMS-CC-FILEBASE$/Multimedia%20cargada/" + quote(esquema.name)
+        return (
+            '\n<div class="dp-content-block content-block" '
+            'data-title="Esquema del módulo" data-category="Instructional">\n'
+            '<h2 class="dp-has-icon"><i class="fas fa-network-wired" '
+            'aria-hidden="true"><span class="dp-icon-content" '
+            'style="display: none;">&nbsp;</span></i>Visión General</h2>\n'
+            '<p style="text-align: center;">'
+            f'<img class="{_FIG_CLASES_ESTATICA}" src="{url}" '
+            'alt="Esquema de la asignatura" loading="lazy"></p>\n</div>')
 
     def _construir_bibliografia_consolidada(self, syl_html: str) -> str:
         """Bloque kl_custom_block_3 del programa: la bibliografía de TODOS los
