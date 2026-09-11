@@ -31,6 +31,17 @@ from maquetador.build.componentes_asesor import construir_flipcards, construir_p
 # hasta ahora TODO curso salía con el color de posgrado, también los de
 # educación.
 ACENTO_POR_TEMA = {"educacion": "#003087", "posgrado": "#1b1e31"}
+
+# Estilo institucional de tabla de datos ("Estándares para Recursos Visuales y
+# Datos" + catálogo de snippets). El encabezado NO usa el mismo color que los
+# recuadros: educación va #004a80 y posgrado #1b1e31.
+CABECERA_TABLA_POR_TEMA = {"educacion": "#004a80", "posgrado": "#1b1e31"}
+_TABLA_CLASES = ("ic-Table dp-shadow-b3 ic-Table--striped dp-border-dir-all "
+                 "cp-bg-dp-white")
+_TABLA_ESTILO = ("width: 100%; border-radius: 10px; border-collapse: separate; "
+                 "overflow: hidden; table-layout: fixed;")
+_TABLA_BORDE_CELDA = "border-bottom: 1px solid #e2e8f0;"
+_TABLA_FILA_PAR, _TABLA_FILA_IMPAR = "#ffffff", "#f4f7fa"
 ACCENT = ACENTO_POR_TEMA["posgrado"]
 ICONOS_BASE = "$IMS-CC-FILEBASE$/Iconos"
 ICONOS = {
@@ -970,6 +981,53 @@ def _figura_es_expandible(img) -> bool:
     return any(kw in texto for kw in _FIG_EXPANDIBLE_KW)
 
 
+def estilar_tabla_datos(tabla, tema: str = "") -> None:
+    """Tabla de datos del DOCX → estilo institucional UCC.
+
+    Venía como una tabla pelada con `border="1"`: sin barra de encabezado, sin
+    filas alternadas y sin contenedor, así que en pantalla chica rompía el
+    ancho de la página.
+    """
+    cabecera = CABECERA_TABLA_POR_TEMA.get(_norm(tema or ""),
+                                           CABECERA_TABLA_POR_TEMA["posgrado"])
+    tabla["class"] = _TABLA_CLASES
+    tabla["style"] = _TABLA_ESTILO
+    if tabla.has_attr("border"):
+        del tabla["border"]
+
+    filas = tabla.find_all("tr")
+    if not filas:
+        return
+
+    # La primera fila es el encabezado: si el DOCX no trajo <thead>, se arma.
+    encabezado = filas[0]
+    if encabezado.find_parent("thead") is None:
+        thead = BeautifulSoup("<thead></thead>", "html.parser").thead
+        encabezado.insert_before(thead)
+        thead.append(encabezado.extract())
+    encabezado["style"] = (f"background-color: {cabecera}; color: #ffffff; "
+                           "height: 60px;")
+    for celda in encabezado.find_all(["td", "th"]):
+        celda.name = "th"
+        celda["scope"] = "col"
+        celda["class"] = "align-middle text-center"
+        celda["style"] = "text-align: left; padding: 12px 16px;"
+
+    for i, fila in enumerate(filas[1:]):
+        fila["style"] = ("background-color: "
+                         + (_TABLA_FILA_PAR if i % 2 == 0 else _TABLA_FILA_IMPAR)
+                         + ";")
+        for celda in fila.find_all(["td", "th"]):
+            celda["class"] = "align-middle text-center"
+            celda["style"] = f"padding: 12px 16px; {_TABLA_BORDE_CELDA}"
+
+    # Contenedor con scroll horizontal: en el celular la tabla no rompe la caja.
+    if tabla.find_parent(class_="dp-table-scroll") is None:
+        cont = BeautifulSoup('<div class="dp-table-scroll"></div>',
+                             "html.parser").div
+        tabla.wrap(cont)
+
+
 _PAT_ATRIB_ESTILO = re.compile(r'style="([^"]*)"')
 
 
@@ -1020,8 +1078,7 @@ def procesar_contenido(html: str, tema: str = "") -> str:
             if nuevo:
                 tabla.replace_with(BeautifulSoup(nuevo, "html.parser"))
         else:
-            tabla["style"] = ("border-collapse: collapse; width: 100%;")
-            tabla["border"] = "1"
+            estilar_tabla_datos(tabla, tema)
 
     # 1.5 Citas (estilo Quote de Word) → resaltado simple.
     #     Si el comentario del asesor ya pidió recuadro sobre el párrafo de
