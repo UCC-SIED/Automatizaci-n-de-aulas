@@ -52,7 +52,7 @@ def _banner(banner_src: str, alt: str = "") -> str:
 
 
 def pagina_intro(titulo: str, intro_html: str, objetivos_html: str,
-                 banner_src: str, identifier: str) -> str:
+                 banner_src: str, identifier: str, tema: str = "") -> str:
     """Página 'Introducción MN' del módulo."""
     return f"""{_cabecera(titulo, identifier)}
 <div id="dp-wrapper" class="{DP_WRAPPER_CLASSES}" {_attrs_str(DP_WRAPPER_ATTRS)}>
@@ -63,7 +63,7 @@ def pagina_intro(titulo: str, intro_html: str, objetivos_html: str,
 </div>
 <div class="dp-content-block kl_objectives2" style="background-color: #f8f8f8; color: #000000;">
 <h2 class="dp-has-icon"><i class="fas fa-book dp-i-border-mid dp-i-size-small" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i> Introducción</h2>
-{procesar_contenido(intro_html)}
+{procesar_contenido(intro_html, tema)}
 <ol id="kl_objective_list"></ol>
 </div>
 <div class="dp-content-block kl_readings2">
@@ -78,7 +78,7 @@ def pagina_intro(titulo: str, intro_html: str, objetivos_html: str,
 
 
 def pagina_contenido(titulo: str, body_html: str, banner_src: str,
-                     identifier: str) -> str:
+                     identifier: str, tema: str = "") -> str:
     """Página de contenido (1.1, 1.2, …)."""
     return f"""{_cabecera(titulo, identifier)}
 <div id="dp-wrapper" class="{DP_WRAPPER_CLASSES}" {_attrs_str(DP_WRAPPER_ATTRS)}>
@@ -88,7 +88,7 @@ def pagina_contenido(titulo: str, body_html: str, banner_src: str,
 </div>
 <div class="dp-content-block kl_readings2" style="background-color: #ffffff; color: #000000;">
 <h2 class="dp-has-icon"><i class="fa-book fas" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i></h2>
-{procesar_contenido(body_html)}
+{procesar_contenido(body_html, tema)}
 <p>&nbsp;</p>
 </div>
 </div>
@@ -97,9 +97,9 @@ def pagina_contenido(titulo: str, body_html: str, banner_src: str,
 
 
 def pagina_bibliografia(titulo: str, body_html: str, banner_src: str,
-                        identifier: str) -> str:
+                        identifier: str, tema: str = "") -> str:
     """Página 'Bibliografía MN' con estructura oficial kl_custom_block_0."""
-    bib_body = construir_bibliografia(body_html) or procesar_contenido(body_html)
+    bib_body = construir_bibliografia(body_html) or procesar_contenido(body_html, tema)
     return f"""{_cabecera(titulo, identifier)}
 <div id="dp-wrapper" class="{DP_WRAPPER_CLASSES}" {_attrs_str(DP_WRAPPER_ATTRS)}>
 {_banner(banner_src, titulo)}

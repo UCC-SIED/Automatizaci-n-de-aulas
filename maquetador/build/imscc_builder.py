@@ -311,7 +311,8 @@ class GeneradorAula:
                 intro_html=self._rutear_media(intro_html),
                 objetivos_html=self._rutear_media(objetivos_html),
                 banner_src=_extraer_banner(viejo),
-                identifier=_extraer_identifier(viejo))
+                identifier=_extraer_identifier(viejo),
+                tema=self.spec.tema)
             _escribir(archivo_intro, nuevo)
             logger.info(f"  [M{n}] Introducción sobreescrita")
         elif intro_html:
@@ -400,7 +401,8 @@ class GeneradorAula:
                 titulo=f"Bibliografía M{n}",
                 body_html=self._rutear_media(referencias),
                 banner_src=_extraer_banner(viejo),
-                identifier=_extraer_identifier(viejo))
+                identifier=_extraer_identifier(viejo),
+                tema=self.spec.tema)
             _escribir(archivo_bib, nuevo)
             logger.info(f"  [M{n}] Bibliografía sobreescrita")
 
@@ -418,7 +420,8 @@ class GeneradorAula:
             html = pagina_contenido(
                 titulo=item.titulo,
                 body_html=self._rutear_media(item.fuente.html),
-                banner_src=banner, identifier=page_id)
+                banner_src=banner, identifier=page_id,
+                tema=self.spec.tema)
             _escribir(self.working / href, html)
             nuevos.append((page_id, href, item.titulo))
         # Para el índice del programa (syllabus): páginas reales del módulo.
@@ -809,7 +812,7 @@ class GeneradorAula:
         for nombre, data, ctype in img.imagenes:
             self.media[f"{prefijo}_{nombre}"] = (data, ctype)
         html = str(soup).replace("__MEDIA__/", f"__MEDIA__/{prefijo}_")
-        return procesar_contenido(self._rutear_media(html))
+        return procesar_contenido(self._rutear_media(html), self.spec.tema)
 
     def _rid_en_meta(self, content_type: str, patron_titulo: str) -> str:
         pat = re.compile(

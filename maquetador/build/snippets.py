@@ -26,7 +26,12 @@ import unicodedata
 from bs4 import BeautifulSoup, NavigableString
 from maquetador.build.componentes_asesor import construir_flipcards, construir_panels
 
-ACCENT = "#1b1e31"
+# Acento institucional por aula base. Los snippets se arman con el de posgrado
+# y al final se repintan según el tema del curso (ver aplicar_acento_del_tema):
+# hasta ahora TODO curso salía con el color de posgrado, también los de
+# educación.
+ACENTO_POR_TEMA = {"educacion": "#003087", "posgrado": "#1b1e31"}
+ACCENT = ACENTO_POR_TEMA["posgrado"]
 ICONOS_BASE = "$IMS-CC-FILEBASE$/Iconos"
 ICONOS = {
     "lectura": "Icono%20recuadro%20lectura.svg",
@@ -965,7 +970,23 @@ def _figura_es_expandible(img) -> bool:
     return any(kw in texto for kw in _FIG_EXPANDIBLE_KW)
 
 
-def procesar_contenido(html: str) -> str:
+_PAT_ATRIB_ESTILO = re.compile(r'style="([^"]*)"')
+
+
+def aplicar_acento_del_tema(html: str, tema: str) -> str:
+    """Repinta los snippets con el color institucional del aula base.
+
+    Educación usa #003087 y posgrado #1b1e31. Solo se toca el color dentro de
+    atributos style=, para no reemplazar nada del texto del asesor.
+    """
+    acento = ACENTO_POR_TEMA.get(_norm(tema or ""))
+    if not acento or acento == ACCENT or not html:
+        return html
+    return _PAT_ATRIB_ESTILO.sub(
+        lambda m: 'style="' + m.group(1).replace(ACCENT, acento) + '"', html)
+
+
+def procesar_contenido(html: str, tema: str = "") -> str:
     if not html:
         return html
     soup = BeautifulSoup(html, "html.parser")
@@ -1121,4 +1142,4 @@ def procesar_contenido(html: str) -> str:
         if not ya_espaciado:
             h3.insert_before(BeautifulSoup("<p>&nbsp;</p>", "html.parser"))
 
-    return str(soup)
+    return aplicar_acento_del_tema(str(soup), tema)
