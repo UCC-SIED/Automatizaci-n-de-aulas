@@ -94,6 +94,34 @@ def cta_descubri_leyendo(body_html: str) -> str:
 </div>"""
 
 
+# Marcador que deja el asesor donde va un video propio ("VIDEO M2.", "VIDEO 2").
+# A veces es un párrafo suelto y a veces queda pegado al final de la invitación.
+_PAT_MARCADOR_VIDEO = re.compile(r"^\s*videos?\s*(?:m\s*)?\d*\s*[\.:]?\s*$", re.I)
+_PAT_MARCADOR_VIDEO_FINAL = re.compile(
+    r"\s*\bvideos?\s*(?:m\s*)?\d*\s*\.?\s*(?=</|$)", re.I)
+
+
+def _sin_marcador_video(html: str) -> str:
+    """Saca el marcador de video del final del párrafo, si quedó ahí."""
+    return _PAT_MARCADOR_VIDEO_FINAL.sub("", html, count=1)
+
+
+def bloque_video_studio(body_html: str = "") -> str:
+    """Bloque de video propio de la UCC (Canvas Studio).
+
+    Los videos de desarrollo / introducción / conceptuales NO son un CTA: no
+    mandan a YouTube, se suben a Canvas Studio y se incrustan. Como el id del
+    video recién existe cuando alguien lo sube —después de generar el aula— el
+    bloque queda armado y vacío, listo para pegar el embed.
+    """
+    intro = f'{body_html}<p>&nbsp;</p>' if body_html else ""
+    return f"""<div class="dp-content-block" data-title="Video" data-category="+UCC">
+<h2 class="dp-has-icon"><i class="dp-icon fab fa-youtube" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i></h2>
+{intro}<div class="dp-embed-wrapper mx-auto d-block" style="text-align: center;"><!-- Pegar aquí el embed de Canvas Studio --></div>
+<p>&nbsp;</p>
+</div>"""
+
+
 def resaltado_profundizacion(titulo: str, body_html: str) -> str:
     """Reflexiona / Para pensar / Para saber más — amarillo con lámpara.
 
@@ -611,11 +639,29 @@ def _procesar_cues_parrafo(soup):
         if not tipo:
             continue
         grupo = [p] + _absorber_siguientes(p)
+        if tipo == "video":
+            # El marcador donde va el video ("VIDEO 2") suele ir en su propio
+            # párrafo, después de la invitación: entra al mismo bloque para
+            # que no quede publicado como texto suelto.
+            sig = grupo[-1].find_next_sibling()
+            if sig is not None and getattr(sig, "name", "") == "p" \
+                    and _PAT_MARCADOR_VIDEO.match(sig.get_text(" ", strip=True)):
+                grupo.append(sig)
         body = "\n".join(str(x) for x in grupo)
         if tipo == "lectura":
             nuevo = cta_titulo("Descubrí leyendo", body, ICONOS["lectura"])
         elif tipo == "video":
-            nuevo = cta_titulo("Auriculares on", body, ICONOS["video"])
+            # Con enlace a YouTube/Vimeo es un CTA que manda afuera; sin
+            # enlace es un video propio de la UCC (Canvas Studio).
+            if _PAT_URL_VIDEO.search(body):
+                nuevo = cta_titulo("Auriculares on", body, ICONOS["video"])
+            else:
+                # El marcador que el asesor deja donde va el video ("VIDEO M2.")
+                # no es contenido: no se publica, ni como párrafo suelto ni
+                # pegado al final de la invitación.
+                nuevo = bloque_video_studio("\n".join(
+                    _sin_marcador_video(str(x)) for x in grupo
+                    if not _PAT_MARCADOR_VIDEO.match(x.get_text(" ", strip=True))))
         elif tipo == "imagen":
             nuevo = cta_titulo("Miralo con lupa", body, ICONOS["imagen"])
         else:
@@ -1145,6 +1191,10 @@ def procesar_contenido(html: str, tema: str = "") -> str:
     # si usó el estilo de título de Word (mammoth lo vuelca tal cual a
     # <h1>/<h2>, sin bajarlo de nivel).
     for h in soup.find_all(["h1", "h2"]):
+        # El h2 con ícono no es un encabezado del contenido: es el divisor de
+        # sección que arma el propio generador (bloque de video, por ejemplo).
+        if "dp-has-icon" in (h.get("class") or []):
+            continue
         for strong in h.find_all(["strong", "b"]):
             strong.unwrap()
         h.name = "h3"
