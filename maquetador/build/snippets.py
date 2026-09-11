@@ -854,7 +854,10 @@ def sanear_lista_objetivos(html: str) -> str:
     return str(soup)
 
 
-_PAT_GENIALLY_URL = re.compile(r"https?://(?:[\w-]+\.)?genial\.?ly/[^\s\"'<>]+", re.I)
+# Genially tiene dos dominios: el corto (genial.ly/…) y el de las vistas
+# publicadas (view.genially.com/…), que es el que aparece en las aulas.
+_PAT_GENIALLY_URL = re.compile(
+    r"https?://(?:[\w-]+\.)*genial(?:\.ly|ly\.com)/[^\s\"'<>]+", re.I)
 _EXPANDER_KW = ("expander", "expandible", "expandibles", "acordeon",
                 "desplegable", "desplegables")
 
@@ -927,10 +930,30 @@ def _tabla_a_acordeon(tabla):
     return construir_panels(grupos)
 
 
+def bloque_recurso_incrustado(iframe_html: str = "", titulo: str = "") -> str:
+    """Contenedor responsivo 16:9 para un recurso incrustado (Genially y demás).
+
+    Es el mismo molde que usan las aulas a mano: el alto se resuelve con el
+    padding-bottom del 56.25% y el iframe se estira adentro, así el recurso no
+    rompe el ancho en pantalla chica.
+
+    Sin `iframe_html` queda vacío a propósito: el pedido de Genially es un
+    encargo para el diseñador, que después entrega el div para incrustar. El
+    hueco marca dónde va.
+    """
+    interior = iframe_html or (
+        f"<!-- Incrustar aquí el recurso{' — ' + titulo if titulo else ''}: "
+        "el diseñador entrega el div -->")
+    return ('<div style="width: 100%;" title="contenido insertado">\n'
+            '<div style="position: relative; padding-bottom: 56.25%; '
+            'padding-top: 0; height: 0;">\n'
+            f'<div class="dp-embed-wrapper">{interior}</div>\n</div>\n</div>')
+
+
 def _procesar_genially(soup):
-    """Genially: si hay URL, se incrusta (iframe). Si es una descripción del
-    recurso ('Recurso tipo Genially: …'), no va como texto: se reemplaza por un
-    recuadro que marca dónde incrustarlo, con la indicación para hacerlo a mano."""
+    """Genially: si ya hay URL se incrusta; si no, queda el hueco para el div
+    que entrega el diseñador. La descripción del recurso es el encargo para
+    diseño y NO se copia a la página."""
     for p in list(soup.find_all(["p", "li"])):
         if p.parent is None:
             continue
@@ -940,18 +963,17 @@ def _procesar_genially(soup):
         m = _PAT_GENIALLY_URL.search(str(p))
         if m:
             url = m.group(0).rstrip(".,;)")
-            embed = (
-                '<div class="dp-content-block" data-title="Genially">\n'
-                '<div class="dp-embed-wrapper" style="text-align: center;">'
-                f'<iframe src="{url}" width="100%" height="500" frameborder="0" '
-                'allowfullscreen="allowfullscreen" loading="lazy"></iframe></div>\n</div>')
-            p.replace_with(BeautifulSoup(embed, "html.parser"))
+            iframe = (
+                '<iframe style="position: absolute; top: 0; left: 0; '
+                'width: 100%; height: 100%;" title="Recurso interactivo" '
+                f'src="{url}" width="1200" height="675" frameborder="0" '
+                'scrolling="yes" allowfullscreen="allowfullscreen" '
+                'loading="lazy"></iframe>')
+            p.replace_with(BeautifulSoup(bloque_recurso_incrustado(iframe),
+                                         "html.parser"))
         elif re.search(r"genial\.?ly", texto, re.I):
-            # No hay URL todavía: marca mínima dónde va el Genially. La
-            # descripción es una INDICACIÓN para el diseñador y NO se copia.
-            p.replace_with(BeautifulSoup(resaltado_atencion(
-                "<p><strong>Recurso Genially — incrustar aquí.</strong></p>",
-                "Genially"), "html.parser"))
+            p.replace_with(BeautifulSoup(
+                bloque_recurso_incrustado(titulo="Genially"), "html.parser"))
 
 
 # ---------------------------------------------------------------------- #
