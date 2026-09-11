@@ -991,6 +991,23 @@ _FIG_EXPANDIBLE_KW = ("expandible", "expandida", "ampliable",
                       "clic para ampliar", "click para ampliar")
 
 
+def _introducido_por_dos_puntos(p) -> bool:
+    """¿El párrafo anterior termina en ':' y por lo tanto lo está presentando?
+
+    Sirve para no confundir una frase destacada con un subtítulo: "Esta
+    evolución puede resumirse como un desplazamiento progresivo:" seguido de
+    "detectar defectos → controlar procesos → …" en negrita es contenido, no
+    un título de sección.
+    """
+    anterior = p.find_previous_sibling()
+    while anterior is not None and getattr(anterior, "name", None) not in (
+            "p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "table"):
+        anterior = anterior.find_previous_sibling()
+    if anterior is None or getattr(anterior, "name", None) not in ("p", "li"):
+        return False
+    return anterior.get_text(" ", strip=True).endswith(":")
+
+
 def _es_figura(img) -> bool:
     """Imagen de contenido: no un icono de recuadro ni un SVG decorativo."""
     src = img.get("src", "")
@@ -1238,6 +1255,13 @@ def procesar_contenido(html: str, tema: str = "") -> str:
         if (texto and texto == texto_strong and 10 <= len(texto) <= 90
                 and not texto.endswith(":") and not _NO_H3.match(texto)
                 and not p.find("img")):
+            if _introducido_por_dos_puntos(p):
+                # El párrafo anterior termina en ":": esto es lo que estaba
+                # introduciendo, no un subtítulo nuevo. Queda como párrafo
+                # destacado (estilo lead, en negrita), que es como lo maqueta
+                # el equipo a mano.
+                p["class"] = (p.get("class") or []) + ["lead", "dp-text-bold"]
+                continue
             h3 = soup.new_tag("h3")
             h3.string = texto
             p.replace_with(h3)

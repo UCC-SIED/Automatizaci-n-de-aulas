@@ -72,6 +72,19 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     if "queda ok" in n or ("ok" in n and "original" in n) \
             or "queda bien" in n or "sin cambios" in n:
         return None
+    # Comentarios que solo repiten algo que ya está escrito en el cuerpo del
+    # DOCX: el pie de fuente de una figura ("Nota. Figura elaborada con base
+    # en…") y el texto alternativo. El generador los toma del párrafo, no del
+    # globo; acá son ruido del proceso editorial que quedó sin limpiar y no
+    # tiene que aparecer como un pedido pendiente.
+    if re.match(r"^\s*(?:para\s+(?:maquetacion|el\s+maquetado)\s*:\s*)?"
+                r"(?:nota\s*[\.:]|texto\s+alt)", n):
+        return None
+    # "Para diseño: …" es un encargo para el diseñador (el Genially, por
+    # ejemplo), no una instrucción de maquetación.
+    if n.startswith(("para diseno", "para diseño")):
+        return None
+
     # Señales negativas primero (NO encuadrar)
     if any(k in n for k in ("sin recuadro", "sin cuadro", "no resaltar",
                             "no encuadrar", "con sangria", "sangria sin")):
