@@ -232,6 +232,55 @@ def construir_flipcards(pares: list) -> str:
     return f'<div class="row justify-content-center">\n{cards}\n</div>'
 
 
+# Palabras que no aportan inicial a una sigla ("Sistema de Gestión de la
+# Calidad" → SGC).
+_VACIAS_SIGLA = {"de", "del", "la", "las", "el", "los", "y", "e", "en", "a",
+                 "para", "por", "con", "al"}
+
+
+def sigla_de(contenido: str) -> str:
+    """Sigla que forman las iniciales de un término ('SGC')."""
+    palabras = [w for w in re.findall(r"[^\W\d_]+", contenido, re.UNICODE)
+                if w.lower() not in _VACIAS_SIGLA]
+    return "".join(w[0].upper() for w in palabras)
+
+
+def disparador_tooltip(texto: str, contenido: str) -> str:
+    """Qué palabra del texto debe abrir el tooltip.
+
+    El asesor ancla el comentario sobre TODO el párrafo y escribe aparte qué
+    tiene que emerger. Lo que hay que marcar es el término que ese contenido
+    explica: primero la sigla que forman sus iniciales (SGC ← Sistema de
+    Gestión de la Calidad), y si no, el término escrito completo. Devuelve ""
+    si no aparece ninguno: marcar el párrafo entero como disparador —que es lo
+    que pasaba— deja la página con un párrafo convertido en link.
+    """
+    sigla = sigla_de(contenido)
+    if len(sigla) >= 2 and re.search(rf"\b{re.escape(sigla)}\b", texto):
+        return sigla
+    if contenido and contenido.lower() in texto.lower():
+        i = texto.lower().index(contenido.lower())
+        return texto[i:i + len(contenido)]
+    return ""
+
+
+def construir_tooltip(palabra: str, contenido: str, n: int) -> str:
+    """Tooltip CidiLabs: el globo gris chico que aparece sobre un término.
+
+    Distinto del popover (que es una ficha grande y se dispara con clic): el
+    disparador y el contenido van juntos dentro del mismo contenedor.
+    """
+    return (f'<span class="dp-tooltip-container">'
+            f'<a id="dpPopup{n}" class="dp-tooltip-trigger dp-popup-trigger" '
+            f'role="button" href="#dpPopup{n}tooltip" aria-describedby="" '
+            f'data-bs-toggle="tooltip">{palabra}</a> '
+            f'<span id="dpPopup{n}tooltip" '
+            'class="dp-tooltip-content dp-popup-content" '
+            'style="background-color: #545454; color: #ffffff; '
+            'padding: 2px 5px; border-radius: 3px;" role="tooltip">'
+            f'{contenido}</span></span>')
+
+
 def construir_popover(palabra: str, contenido: str, n: int) -> tuple:
     """Popover CidiLabs: trigger (la palabra) + content (lo que emerge)."""
     trigger = (f'<a class="dp-popover-trigger" href="#dpPopup{n}Content" '

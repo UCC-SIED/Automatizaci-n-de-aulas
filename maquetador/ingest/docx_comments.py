@@ -26,7 +26,7 @@ from maquetador.ingest.folder_scanner import normalizar
 from maquetador.build.snippets import resaltado_simple, cta_titulo, ICONOS
 from maquetador.build.componentes_asesor import (
     extraer_pares, construir_panels, construir_flipcards,
-    construir_popover, aplicar_cita,
+    construir_tooltip, disparador_tooltip, aplicar_cita,
 )
 
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -297,20 +297,32 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
                 c["_aplicado"] = True
             continue
         if accion == "tooltip":
+            # El asesor ancla el comentario sobre TODO el párrafo y escribe
+            # aparte qué debe emerger. Lo que se marca es el término que ese
+            # contenido explica (la sigla, o el término completo), no el
+            # párrafo entero: eso dejaba la página con un párrafo hecho link.
             contenido = _texto_tooltip(c["instruccion"])
-            palabra = (c["anclado"] or "").strip()
-            nodo = el.find(string=lambda s: bool(s) and palabra in s) if (contenido and palabra) else None
+            anclado = (c["anclado"] or "").strip()
+            texto_el = el.get_text(" ", strip=True)
+            if anclado and len(anclado) <= 40 and anclado in texto_el:
+                # El asesor señaló la palabra exacta: esa es.
+                palabra = anclado
+            elif contenido:
+                palabra = disparador_tooltip(texto_el, contenido)
+            else:
+                palabra = ""
+            nodo = (el.find(string=lambda s: bool(s) and palabra in s)
+                    if palabra else None)
             if nodo is not None:
-                trigger, content = construir_popover(palabra, contenido, contador_popover)
+                html = construir_tooltip(palabra, contenido, contador_popover)
                 contador_popover += 1
                 antes, _, despues = nodo.partition(palabra)
-                a_tag = BeautifulSoup(trigger, "html.parser").find("a")
-                nodo.replace_with(a_tag)
+                cont = BeautifulSoup(html, "html.parser").find("span")
+                nodo.replace_with(cont)
                 if antes:
-                    a_tag.insert_before(antes)
+                    cont.insert_before(antes)
                 if despues:
-                    a_tag.insert_after(despues)
-                el.insert_after(BeautifulSoup(content, "html.parser"))
+                    cont.insert_after(despues)
                 c["_aplicado"] = True
             continue
         if accion == "cita":

@@ -173,7 +173,7 @@ class TestCableado:
         aplicar_comentarios(soup, comentarios)
         p = soup.find("p")
         assert p is not None                          # el <p> sobrevive
-        assert "dp-popover-trigger" in str(p)         # el trigger queda DENTRO del <p>
+        assert "dp-tooltip-trigger" in str(p)         # el trigger queda DENTRO del <p>
         assert comentarios[0].get("_aplicado") is True
 
     def test_tooltip_palabra_ausente_no_aplica(self):
@@ -181,7 +181,7 @@ class TestCableado:
         comentarios = [{"instruccion": "al hacer clic aparezca: X",
                         "anclado": "inexistenteylargo", "accion": "tooltip", "autor": ""}]
         aplicar_comentarios(soup, comentarios)
-        assert "dp-popover-trigger" not in str(soup)
+        assert "dp-tooltip-trigger" not in str(soup)
         assert comentarios[0].get("_aplicado") is not True
 
 
