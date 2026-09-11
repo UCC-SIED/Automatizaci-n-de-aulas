@@ -236,6 +236,7 @@ class GeneradorAula:
         self._personalizar_inicio()
         self._construir_syllabus()
         self._empaquetar_media()
+        self._unificar_tema_wrapper()
         self._registrar_recursos()
         self._renumerar_posiciones()
         # Con todos los archivos válidos ya en su sitio, cualquier <resource>
@@ -695,6 +696,28 @@ class GeneradorAula:
         if cambios:
             _escribir(syl_path, html)
             logger.info(f"  [Programa] syllabus armado: {', '.join(cambios)}")
+
+    def _unificar_tema_wrapper(self):
+        """Deja TODAS las páginas con el tema de encabezados vigente.
+
+        Las páginas que el generador arma ya salen con el string correcto, pero
+        las que se clonan del aula base conservan el que traían. El editor
+        DesignPLUS lo reescribe cuando alguien abre y guarda la página, así que
+        el aula base puede tener páginas al día y otras no: el syllabus quedaba
+        con el tema anterior. Se normaliza al final, cuando ya están todos los
+        archivos en su sitio.
+        """
+        pat = re.compile(r'(id="dp-wrapper"\s+class=")([^"]*)(")')
+        tocados = 0
+        for archivo in self.working.rglob("*.html"):
+            html = _leer(archivo)
+            nuevo, n = pat.subn(
+                lambda m: m.group(1) + DP_WRAPPER_CLASSES + m.group(3), html)
+            if n and nuevo != html:
+                _escribir(archivo, nuevo)
+                tocados += 1
+        if tocados:
+            logger.info(f"  [Tema] wrapper actualizado en {tocados} página(s)")
 
     def _bloque_esquema(self) -> str:
         """Bloque 'Visión General' del programa con el esquema de la asignatura.

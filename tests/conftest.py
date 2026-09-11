@@ -38,12 +38,16 @@ def paquete_sintetico(curso_sintetico, tmp_path_factory):
 def paquetes_imscc(request):
     """Paquetes .imscc a validar.
 
-    Si el equipo ya generó paquetes en output/ se validan esos (son los
-    reales, con material de cátedra); si no hay ninguno, se genera uno a
-    partir del curso sintético para no dejar la validación sin correr.
+    El sintético va SIEMPRE: es el único que ejercita el generador de punta a
+    punta, así que si se saltara, la validación pasaría sin haber generado
+    nada. (Pasó: con un paquete real en output/ la cobertura del builder cayó
+    de 64% a 10% sin que ningún test fallara.)
+
+    Los paquetes que el equipo haya dejado en output/ se validan además, por
+    ser material real de cátedra.
     """
     reales = sorted((Path(__file__).parent.parent / "output").glob("*.imscc"))
-    return reales or [request.getfixturevalue("paquete_sintetico")]
+    return [request.getfixturevalue("paquete_sintetico"), *reales]
 
 
 @pytest.fixture

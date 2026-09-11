@@ -1020,7 +1020,11 @@ def _es_figura(img) -> bool:
 
 def _figura_vecina(p):
     """Figura más cercana al párrafo: primero hacia arriba (el 'Texto
-    alternativo' suele ir debajo de la imagen), después hacia abajo."""
+    alternativo' suele ir debajo de la imagen), después hacia abajo.
+
+    Devuelve la imagen, o la tabla cuando la "figura" es una tabla de datos
+    (hay epígrafes 'Figura N.' que refieren a una tabla, no a una imagen).
+    """
     for buscar in (p.find_previous_siblings, p.find_next_siblings):
         for vecino in list(buscar())[:3]:
             if getattr(vecino, "name", None) == "img":
@@ -1030,6 +1034,10 @@ def _figura_vecina(p):
                 img = vecino.find("img")
                 if img is not None and _es_figura(img):
                     return img
+                tabla = (vecino if getattr(vecino, "name", None) == "table"
+                         else vecino.find("table"))
+                if tabla is not None:
+                    return tabla
     return None
 
 
@@ -1089,10 +1097,14 @@ def _alt_parrafo_a_atributo(soup):
         if not m:
             continue
         alt = " ".join(m.group(1).split()).strip(" .;")
-        img = _figura_vecina(p) if alt else None
-        if img is None:
+        figura = _figura_vecina(p) if alt else None
+        if figura is None:
             continue
-        img["alt"] = alt
+        if figura.name == "table":
+            # Una tabla no lleva alt: el equivalente accesible es aria-label.
+            figura["aria-label"] = alt
+        else:
+            figura["alt"] = alt
         p.decompose()
 
 
@@ -1272,6 +1284,22 @@ def procesar_contenido(html: str, tema: str = "") -> str:
     #    va al atributo alt, así la figura queda accesible y el texto deja de
     #    verse como contenido de la página.
     _alt_parrafo_a_atributo(soup)
+
+    # Marcador de video suelto ("VIDEO 2") que no quedó pegado a ninguna
+    # invitación: señala que ahí va un video de Canvas Studio. Se convierte en
+    # el bloque vacío, nunca se publica como texto.
+    for p in list(soup.find_all("p")):
+        if not _PAT_MARCADOR_VIDEO.match(p.get_text(" ", strip=True)):
+            continue
+        previo = p.find_previous_sibling()
+        ya_hay_bloque = (previo is not None
+                         and getattr(previo, "get", None) is not None
+                         and previo.get("data-title") == "Video")
+        if ya_hay_bloque:
+            p.decompose()
+        else:
+            p.replace_with(BeautifulSoup(bloque_video_studio(), "html.parser"))
+
     for img in soup.find_all("img"):
         if not _es_figura(img):
             continue
