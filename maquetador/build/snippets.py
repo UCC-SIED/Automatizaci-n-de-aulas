@@ -789,11 +789,11 @@ _PAT_PREFIJO_ACTIVIDAD = re.compile(
     r"\s*(?:m\s*\d+)?\s*[:\-–—]\s*", re.I)
 
 _H2_TITULO_ACTIVIDAD = ('<h2 class="dp-ignore-theme" '
-                        'style="color: #003087; text-align: center;">'
-                        "<strong>{}</strong></h2>")
+                        'style="color: {color}; text-align: center;">'
+                        "<strong>{titulo}</strong></h2>")
 
 
-def maquetar_actividad(html: str) -> str:
+def maquetar_actividad(html: str, tema: str = "") -> str:
     """Da forma al cuerpo de una actividad según el "Modelo de actividad".
 
     - El primer encabezado es el título de la actividad: va como H2 de título
@@ -812,8 +812,10 @@ def maquetar_actividad(html: str) -> str:
         texto = primero.get_text(" ", strip=True)
         limpio = _PAT_PREFIJO_ACTIVIDAD.sub("", texto).strip()
         if limpio:
+            color = ACENTO_POR_TEMA.get(_norm(tema or ""), ACCENT)
             primero.replace_with(BeautifulSoup(
-                _H2_TITULO_ACTIVIDAD.format(limpio), "html.parser"))
+                _H2_TITULO_ACTIVIDAD.format(color=color, titulo=limpio),
+                "html.parser"))
 
     for p in list(soup.find_all("p")):
         texto = p.get_text(" ", strip=True)
@@ -991,6 +993,55 @@ _FIG_EXPANDIBLE_KW = ("expandible", "expandida", "ampliable",
                       "clic para ampliar", "click para ampliar")
 
 
+def _es_espaciador(el) -> bool:
+    """¿Es un <p> de aire (&nbsp; y nada más)?"""
+    return (getattr(el, "name", None) == "p"
+            and el.get_text(strip=True) in ("", "\xa0")
+            and not el.find("img"))
+
+
+def _aire_antes(el, soup):
+    previo = el.previous_sibling
+    while isinstance(previo, NavigableString) and not previo.strip():
+        previo = previo.previous_sibling
+    if previo is not None and not _es_espaciador(previo):
+        el.insert_before(BeautifulSoup("<p>&nbsp;</p>", "html.parser"))
+
+
+def _aire_despues(el, soup):
+    sig = el.next_sibling
+    while isinstance(sig, NavigableString) and not sig.strip():
+        sig = sig.next_sibling
+    if sig is not None and not _es_espaciador(sig):
+        el.insert_after(BeautifulSoup("<p>&nbsp;</p>", "html.parser"))
+
+
+def _espaciar_figuras(soup):
+    """Un párrafo de aire arriba y abajo de cada figura, con su epígrafe.
+
+    El equipo separa SIEMPRE la figura del texto que la rodea. El aire de
+    arriba va antes del epígrafe, no entre el epígrafe y la imagen.
+    """
+    bloques = list(soup.find_all("figure"))
+    for p in soup.find_all("p"):
+        img = p.find("img")
+        if img is not None and _es_figura(img) and p.find_parent("figure") is None:
+            bloques.append(p)
+    for bloque in bloques:
+        if bloque.parent is None:
+            continue
+        _aire_despues(bloque, soup)
+        # El epígrafe ("Figura N. …") es parte del bloque: el aire va antes.
+        inicio = bloque
+        previo = bloque.previous_sibling
+        while isinstance(previo, NavigableString) and not previo.strip():
+            previo = previo.previous_sibling
+        if previo is not None and getattr(previo, "name", None) == "p" \
+                and _PAT_CAPTION.match(previo.get_text(" ", strip=True)):
+            inicio = previo
+        _aire_antes(inicio, soup)
+
+
 def _introducido_por_dos_puntos(p) -> bool:
     """¿El párrafo anterior termina en ':' y por lo tanto lo está presentando?
 
@@ -1064,8 +1115,16 @@ def _nota_a_figcaption(soup):
 
         contenedor = img.find_parent("p") or img
         fig = soup.new_tag("figure")
+        # bs4 devuelve la clase como lista o como string según cómo se haya
+        # seteado; se normaliza a lista antes de sumarle nada.
         clases = img.get("class") or []
-        fig["class"] = clases if clases else _FIG_CLASES_ESTATICA.split()
+        if isinstance(clases, str):
+            clases = clases.split()
+        # mx-auto d-block centra la CAJA de la figura. Sin eso queda pegada a
+        # la izquierda por más text-align que tenga: el text-align solo alinea
+        # lo de adentro, no el <figure>, que es un bloque de ancho fijo.
+        fig["class"] = (["mx-auto", "d-block"]
+                        + (clases or _FIG_CLASES_ESTATICA.split()))
         fig["style"] = "width: 700px; height: auto; text-align: center;"
 
         cap = soup.new_tag("figcaption")
@@ -1320,6 +1379,7 @@ def procesar_contenido(html: str, tema: str = "") -> str:
     # Con las figuras ya estiladas: el pie de fuente pasa a <figcaption> y las
     # clases se mudan al <figure> (la imagen queda limpia, como a mano).
     _nota_a_figcaption(soup)
+    _espaciar_figuras(soup)
 
     # 3.5 Enlaces: URLs sueltas → <a>; todo enlace externo con el estilo
     #     institucional (inline_disabled dp-ext-ignore, target _blank)

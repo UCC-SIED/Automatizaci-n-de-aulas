@@ -677,13 +677,24 @@ class GeneradorAula:
                 'dp-panel-color-dp-primary dp-panel-active-color-dp-secondary" '
                 'title="contenido insertado">\n' + "\n".join(grupos)
                 + '\n</div>\n</div>')
-            # El esquema de la asignatura va pegado debajo del índice, como
-            # bloque "Visión General" (así lo maqueta el equipo a mano).
-            bloque2 += self._bloque_esquema()
             nuevo = self._reemplazar_bloque_div(html, "kl_custom_block_2", bloque2)
             if nuevo != html:
                 html = nuevo
                 cambios.append(f"índice ({len(grupos)} módulos)")
+
+        # --- Bloque "Visión General": el esquema de la asignatura ---
+        # El aula base ya trae el bloque (viene de un curso real), así que se
+        # REEMPLAZA el que está en vez de agregar otro: agregándolo quedaban
+        # dos, y el de arriba sin imagen.
+        esquema = self._bloque_esquema()
+        if esquema:
+            html, reemplazado = self._reemplazar_bloque_por_data_title(
+                html, "Esquema del módulo", esquema.lstrip("\n"))
+            if not reemplazado:
+                html = self._reemplazar_bloque_div(
+                    html, "kl_custom_block_2", bloque2 + esquema) \
+                    if grupos else html
+            cambios.append("esquema de la asignatura")
 
         # --- Bloque 3: bibliografía consolidada (todos los módulos juntos) ---
         bloque3 = self._construir_bibliografia_consolidada(html)
@@ -801,6 +812,23 @@ class GeneradorAula:
                 return item.fuente.archivo
         return None
 
+    def _reemplazar_bloque_por_data_title(self, html: str, titulo: str,
+                                          nuevo: str) -> tuple:
+        """Reemplaza el <div data-title="…"> por `nuevo`. (html, reemplazado)."""
+        ancla = re.search(rf'<div[^>]*\bdata-title="{re.escape(titulo)}"[^>]*>',
+                          html)
+        if not ancla:
+            return html, False
+        inicio = ancla.start()
+        depth = 0
+        fin = inicio
+        for mm in re.finditer(r'<div\b[^>]*>|</div>', html[inicio:]):
+            depth += -1 if mm.group(0).startswith("</div") else 1
+            if depth == 0:
+                fin = inicio + mm.end()
+                break
+        return html[:inicio] + nuevo + html[fin:], True
+
     def _reemplazar_bloque_div(self, html: str, clase: str, nuevo: str) -> str:
         """Reemplaza el <div class="…clase…">…</div> (con divs anidados) por
         `nuevo`, cortando en el </div> balanceado. Si no lo encuentra, devuelve
@@ -910,7 +938,8 @@ class GeneradorAula:
             return False
         html = pat.sub(
             lambda m: (m.group(1) + m.group(2) + "\n"
-                       + maquetar_actividad(body_html) + "\n" + m.group(3)),
+                       + maquetar_actividad(body_html, self.spec.tema)
+                       + "\n" + m.group(3)),
             html, count=1)
         _escribir(archivos[0], html)
         self.assignments_escritos.add(rid)

@@ -63,3 +63,44 @@ class TestNotaAFigcaption:
     def test_sin_nota_no_arma_figure(self):
         simple = '<p><img src="__MEDIA__/x.jpg"></p><p>Un párrafo normal.</p>'
         assert "<figure" not in procesar_contenido(simple)
+
+
+class TestCentradoYEspaciado:
+    """Revisión del aula en Canvas: "la figura le faltó centrar la imagen, y
+    todas las imágenes llevan un espacio de párrafo tanto arriba como abajo"."""
+
+    CON_TEXTO = ('<p>Texto anterior.</p>'
+                 '<p class="dp-heading-ignore" style="text-align: center;">'
+                 '<span style="font-size: 10pt;"><strong>Figura 1. Evolución'
+                 '</strong></span></p>'
+                 '<p><strong><img src="__MEDIA__/M_1 fig 1.jpg"></strong></p>'
+                 '<p>Texto siguiente.</p>')
+
+    def test_la_caja_de_la_figura_se_centra(self):
+        """text-align solo alinea lo de adentro: la caja necesita mx-auto."""
+        out = procesar_contenido(BLOQUE)
+        soup = BeautifulSoup(out, "html.parser")
+        clases = " ".join(soup.find("figure").get("class", []))
+        assert "mx-auto" in clases and "d-block" in clases
+
+    def test_aire_arriba_del_epigrafe_y_abajo_de_la_figura(self):
+        soup = BeautifulSoup(procesar_contenido(self.CON_TEXTO), "html.parser")
+        hijos = [c for c in soup.children if getattr(c, "name", None)]
+        textos = [c.get_text(strip=True) for c in hijos]
+        # …Texto anterior · aire · epígrafe · imagen · aire · Texto siguiente
+        assert textos[0].startswith("Texto anterior")
+        assert textos[1] in ("", "\xa0")
+        assert "Figura 1" in textos[2]
+        assert textos[-2] in ("", "\xa0")
+        assert textos[-1].startswith("Texto siguiente")
+
+    def test_el_aire_va_antes_del_epigrafe_no_entre_epigrafe_e_imagen(self):
+        out = procesar_contenido(self.CON_TEXTO)
+        assert out.index("<p> </p>") < out.index("Figura 1")
+
+    def test_no_duplica_el_aire_si_ya_estaba(self):
+        html = ("<p>Antes.</p><p>&nbsp;</p>"
+                '<p><img src="__MEDIA__/x.jpg"></p>'
+                "<p>&nbsp;</p><p>Después.</p>")
+        out = procesar_contenido(html)
+        assert out.count("<p> </p>") == 2
