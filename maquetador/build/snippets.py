@@ -948,6 +948,49 @@ def _figura_vecina(p):
     return None
 
 
+# "Nota. Figura elaborada con base en …": el pie de fuente de la figura. No es
+# un párrafo del contenido: va como <figcaption> dentro del <figure>, y la
+# palabra "Nota." se cae (el equipo la saca al maquetar).
+_PAT_NOTA_FIGURA = re.compile(r"^nota\s*[\.:]\s*(.+)$", re.I | re.S)
+
+
+def _nota_a_figcaption(soup):
+    """Imagen + 'Nota. …' → <figure> con <figcaption>.
+
+    El pie de fuente queda pegado a la figura en vez de suelto como un párrafo
+    más del texto, y la figura pasa a ser un <figure> de verdad.
+    """
+    for p in list(soup.find_all("p")):
+        texto = p.get_text(" ", strip=True)
+        m = _PAT_NOTA_FIGURA.match(texto)
+        if not m:
+            continue
+        img = _figura_vecina(p)
+        if img is None:
+            continue
+
+        contenedor = img.find_parent("p") or img
+        fig = soup.new_tag("figure")
+        clases = img.get("class") or []
+        fig["class"] = clases if clases else _FIG_CLASES_ESTATICA.split()
+        fig["style"] = "width: 700px; height: auto; text-align: center;"
+
+        cap = soup.new_tag("figcaption")
+        interior = BeautifulSoup(
+            f'<span style="font-size: 10pt;"><strong>{m.group(1).strip()}</strong>'
+            "</span>", "html.parser")
+        cap.append(interior)
+
+        contenedor.insert_before(fig)
+        fig.append(img.extract())
+        img["class"] = ""
+        fig.append(cap)
+        if contenedor is not img and not contenedor.get_text(strip=True)                 and not contenedor.find("img"):
+            contenedor.decompose()
+        p.decompose()
+        fig.insert_after(BeautifulSoup("<p>&nbsp;</p>", "html.parser"))
+
+
 def _alt_parrafo_a_atributo(soup):
     """Mueve los párrafos 'Texto alternativo: …' al alt de la figura vecina.
 
@@ -1149,6 +1192,10 @@ def procesar_contenido(html: str, tema: str = "") -> str:
         contenedor = img.find_parent("p")
         if contenedor is not None:
             contenedor["style"] = "text-align: center;"
+
+    # Con las figuras ya estiladas: el pie de fuente pasa a <figcaption> y las
+    # clases se mudan al <figure> (la imagen queda limpia, como a mano).
+    _nota_a_figcaption(soup)
 
     # 3.5 Enlaces: URLs sueltas → <a>; todo enlace externo con el estilo
     #     institucional (inline_disabled dp-ext-ignore, target _blank)
