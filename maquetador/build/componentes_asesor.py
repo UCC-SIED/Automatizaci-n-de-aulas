@@ -62,6 +62,8 @@ def pares_de_texto(parrafos: list) -> list:
     pares = []
     for p in parrafos:
         txt = p.get_text(" ", strip=True)
+        if _PAT_EPIGRAFE.match(txt):      # "Tabla 1: …" es epígrafe, no un par
+            continue
         m = _RE_NOMBRE_CONTENIDO.match(txt)
         if m:
             pares.append((m.group(1).strip(), m.group(2).strip()))
@@ -75,6 +77,14 @@ _TAGS_FLUJO = ("p", "ul", "ol", "table", "blockquote", "h3", "h4", "h5", "h6")
 
 def _plano(texto: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", texto.lower())
+
+
+# Epígrafe de figura/tabla/esquema. Va en negrita como un subtítulo, pero NO es
+# un título de sección: si se lo toma como tal, el componente se traga la
+# figura (pasó con "Figura 5. Síntesis de enfoques", que terminó de título de
+# una solapa con la tabla adentro, y encima dejó sin ubicar la figura de
+# diseño que tenía que reemplazarla).
+_PAT_EPIGRAFE = re.compile(r"^(figura|tabla|esquema|nota)\s*\d*\s*[\.:]", re.I)
 
 
 def _es_encabezado_de_seccion(el, solo_subrayado: bool = False) -> bool:
@@ -91,6 +101,8 @@ def _es_encabezado_de_seccion(el, solo_subrayado: bool = False) -> bool:
         return False
     texto = el.get_text(" ", strip=True)
     if not texto or len(texto) > 90 or el.find("img"):
+        return False
+    if _PAT_EPIGRAFE.match(texto):
         return False
 
     def _cubre(tags):
