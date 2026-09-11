@@ -253,11 +253,22 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
     vez por cada sección ya cortada (así un comentario se aplica en la sección
     que lo contiene y nunca rompe los límites de sección)."""
     contador_popover = 0
+    # Un mismo pedido de componente suele venir anclado en varios lugares: el
+    # asesor marca con el mismo globo cada tramo que va adentro ("TABS vertical
+    # ISO 14001 ISO 45001" aparece 3 veces, "flipcards" una por tarjeta). Es UN
+    # componente, no uno por globo: en cuanto se arma, el resto del grupo queda
+    # saldado para no apilar componentes repetidos.
+    grupos_armados = set()
     for c in comentarios:
         accion = c["accion"]
         if c.get("_aplicado"):
             continue
         if accion not in _AUTO and accion not in _COMPONENTES:
+            continue
+        grupo = (accion, normalizar(c["instruccion"]))
+        es_componente = accion in _VARIANTE_PANEL or accion == "flip_card"
+        if es_componente and grupo in grupos_armados:
+            c["_aplicado"] = True
             continue
         el = _buscar_elemento(soup, c["anclado"])
         if el is None:
@@ -286,6 +297,7 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
                 for extra in consumidos[1:]:
                     extra.decompose()
                 c["_aplicado"] = True
+                grupos_armados.add(grupo)
             continue
         if accion == "flip_card":
             pares, consumidos = extraer_pares(el)
@@ -295,6 +307,7 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
                 for extra in consumidos[1:]:
                     extra.decompose()
                 c["_aplicado"] = True
+                grupos_armados.add(grupo)
             continue
         if accion == "tooltip":
             # El asesor ancla el comentario sobre TODO el párrafo y escribe

@@ -216,3 +216,65 @@ class TestMarcadorDeCierre:
 
     def test_el_expander_de_verdad_sigue_disparando(self):
         assert _clasificar("Para maquetación: expander") == "expander"
+
+
+class TestPedidoRepetido:
+    """Un mismo pedido anclado en varios lugares es UN componente.
+
+    El asesor marca con el mismo globo cada tramo que va adentro: "TABS
+    vertical ISO 14001 ISO 45001" aparece 3 veces en el DOCX del curso de
+    prueba y "flipcards" una vez por tarjeta. El generador intentaba armar uno
+    por globo.
+    """
+
+    HTML = ("<div>"
+            "<p><u>ISO 14001</u></p><p>Gestión ambiental de la organización.</p>"
+            "<p><u>ISO 45001</u></p><p>Seguridad y salud en el trabajo.</p>"
+            "<p><u>ISO 50001</u></p><p>Gestión de la energía.</p>"
+            "</div>")
+    INSTR = "Para maquetación: TABS vertical ISO 14001 ISO 45001"
+
+    def _aplicar(self):
+        soup = BeautifulSoup(self.HTML, "html.parser")
+        coments = [{"instruccion": self.INSTR, "anclado": a,
+                    "accion": "tabs_vertical", "autor": ""}
+                   for a in ("ISO 14001", "Gestión ambiental de la organización.",
+                             "Seguridad y salud en el trabajo.")]
+        aplicar_comentarios(soup, coments)
+        return str(soup), coments
+
+    def test_arma_un_solo_componente(self):
+        out, _ = self._aplicar()
+        assert out.count("dp-panels-wrapper") == 1
+
+    def test_con_todos_los_paneles(self):
+        out, _ = self._aplicar()
+        assert out.count('class="dp-panel-group"') == 3
+
+    def test_saldar_todo_el_grupo(self):
+        """Los globos repetidos quedan resueltos, no pendientes de aviso."""
+        _, coments = self._aplicar()
+        assert all(c.get("_aplicado") for c in coments)
+
+    def test_pedidos_distintos_siguen_siendo_componentes_distintos(self):
+        """La deduplicación agrupa por pedido: dos pedidos distintos, en dos
+        tramos distintos, siguen dando dos componentes."""
+        soup = BeautifulSoup(
+            "<div>"
+            "<p><u>ISO 14001</u></p><p>Gestión ambiental.</p>"
+            "<p><u>ISO 45001</u></p><p>Seguridad y salud.</p>"
+            "<h2>Otra sección</h2>"
+            "<p><u>Planificar</u></p><p>Definir el alcance.</p>"
+            "<p><u>Verificar</u></p><p>Medir los resultados.</p>"
+            "</div>", "html.parser")
+        coments = [
+            {"instruccion": "Para maquetación: TABS vertical",
+             "anclado": "ISO 14001", "accion": "tabs_vertical", "autor": ""},
+            {"instruccion": "Para maquetación: acordeón",
+             "anclado": "Planificar", "accion": "acordeon", "autor": ""},
+        ]
+        aplicar_comentarios(soup, coments)
+        out = str(soup)
+        assert out.count("dp-panels-wrapper") == 2
+        assert "dp-tabs-buttons-vertical" in out
+        assert "dp-accordion-default" in out
