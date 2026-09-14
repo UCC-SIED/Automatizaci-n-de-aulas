@@ -1540,14 +1540,16 @@ def procesar_contenido(html: str, tema: str = "") -> str:
             p.clear()
             p.append(BeautifulSoup(inner, "html.parser"))
 
-    # 5. Espaciador antes de subtítulos sueltos (h3 sin clase — de los pasos
-    # 1.7 y 2, no los card-title/dp-panel-heading de componentes): el equipo
-    # SIEMPRE separa un subtítulo del párrafo anterior con <p>&nbsp;</p>,
-    # salvo que sea el primer elemento de la página.
-    for h3 in soup.find_all("h3", class_=lambda c: not c):
-        if h3.parent is not soup:
+    # 5. Espaciador antes de subtítulos sueltos (h3/h4 sin clase — de los
+    # pasos 1.7 y 2, o el sub-subtítulo que arma docx_comments; no los
+    # card-title/dp-panel-heading de componentes): el equipo SIEMPRE separa
+    # un subtítulo del párrafo anterior con <p>&nbsp;</p>, salvo que sea el
+    # primer elemento de la página. Alcanza también al h4: el sub-subtítulo
+    # se marca igual que el subtítulo, solo cambia el nivel de encabezado.
+    for hx in soup.find_all(["h3", "h4"], class_=lambda c: not c):
+        if hx.parent is not soup:
             continue
-        anterior = h3.previous_sibling
+        anterior = hx.previous_sibling
         while isinstance(anterior, NavigableString) and not anterior.strip():
             anterior = anterior.previous_sibling
         if anterior is None:
@@ -1556,6 +1558,6 @@ def procesar_contenido(html: str, tema: str = "") -> str:
                         and anterior.get_text(strip=True) in ("", "\xa0")
                         and not anterior.find("img"))
         if not ya_espaciado:
-            h3.insert_before(BeautifulSoup("<p>&nbsp;</p>", "html.parser"))
+            hx.insert_before(BeautifulSoup("<p>&nbsp;</p>", "html.parser"))
 
     return aplicar_acento_del_tema(str(soup), tema)

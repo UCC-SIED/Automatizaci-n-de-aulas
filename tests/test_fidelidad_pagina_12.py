@@ -132,3 +132,36 @@ class TestBiodata:
     def test_la_heuristica_de_retrato_sigue_andando(self):
         assert _PARECE_RETRATO(normalizar("EMILIANO MARINO 2"))
         assert not _PARECE_RETRATO(normalizar("video-01"))
+
+
+class TestEspaciadoDeH4:
+    """"h4 los 2 primeros... le faltó un párrafo de espacio arriba".
+
+    El espaciador de subtítulos solo cubría <h3>; el sub-subtítulo
+    (docx_comments lo marca como <h4>) quedaba pegado al párrafo anterior.
+    """
+
+    def test_el_h4_lleva_aire_arriba(self):
+        from maquetador.build.snippets import procesar_contenido
+        html = ("<p>Texto previo que cierra un párrafo normal.</p>"
+                "<h4>Sub-subtítulo suelto</h4>"
+                "<p>Contenido que sigue.</p>")
+        out = procesar_contenido(html)
+        assert out.index("<p>\xa0</p>") < out.index("<h4>")
+
+    def test_no_duplica_el_aire_si_ya_estaba(self):
+        from maquetador.build.snippets import procesar_contenido
+        html = ("<p>Texto previo.</p><p>&nbsp;</p>"
+                "<h4>Sub-subtítulo</h4><p>Contenido.</p>")
+        out = procesar_contenido(html)
+        assert out.count("<p>\xa0</p>") == 1
+
+    def test_el_h4_de_un_panel_no_se_toca(self):
+        """dp-panel-heading tiene clase: el filtro "sin clase" lo excluye."""
+        from maquetador.build.snippets import procesar_contenido
+        html = ('<div class="dp-panels-wrapper dp-expander-default">'
+                '<div class="dp-panel-group">'
+                '<h4 class="dp-panel-heading">Título</h4>'
+                '<div class="dp-panel-content"><p>x</p></div></div></div>')
+        out = procesar_contenido(html)
+        assert '<h4 class="dp-panel-heading">Título</h4>' in out
