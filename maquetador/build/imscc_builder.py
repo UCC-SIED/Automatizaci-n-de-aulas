@@ -547,6 +547,14 @@ class GeneradorAula:
                     html = html.replace(
                         'alt="Avatar docente"',
                         f'alt="Fotografía del docente {xml_escape(nombre)}"')
+                # La foto del docente va en círculo. El recorte real se hace a
+                # mano antes de subirla; acá se fuerza por CSS para que salga
+                # redonda igual, y object-fit evita que se deforme si la foto
+                # no es cuadrada.
+                html = re.sub(
+                    r'(<img[^>]*alt="Fotograf[íi]a del docente[^"]*")',
+                    r'\1 style="border-radius: 50%; object-fit: cover; '
+                    r'width: 150px; height: 150px;"', html, count=1)
                 cambios.append("foto del docente")
             # Tutor de la Sección 1 = mismo docente autor por defecto (foto).
             html, nt = re.subn(
@@ -557,7 +565,12 @@ class GeneradorAula:
                 if nombre:
                     html = html.replace(
                         'alt="Avatar tutor"',
-                        f'alt="Fotografía del docente {xml_escape(nombre)}"')
+                        f'alt="Fotografía del tutor {xml_escape(nombre)}"')
+                # La del tutor va con el borde institucional (no en círculo).
+                html = re.sub(
+                    r'(<img)([^>]*alt="Fotograf[íi]a del tutor[^"]*")',
+                    r'\1 class="dp-image-rounded-10 dp-image-bordered"'
+                    r' style="height: auto; width: 100px;"\2', html, count=1)
                 cambios.append("foto del tutor (= docente)")
 
         # --- titulación / biografía ---
@@ -782,11 +795,6 @@ class GeneradorAula:
             '<h2 class="dp-has-icon"><i class="fas fa-bookmark" aria-hidden="true">'
             '<span class="dp-icon-content" style="display: none;">&nbsp;</span>'
             '</i> Bibliografía</h2>')
-        m_estilo = re.search(
-            r'<h3(\s+class="dp-ignore-theme")?\s+style="border-top: 0px;[^"]*">',
-            syl_html)
-        attr_clase = ' class="dp-ignore-theme"' if (m_estilo and m_estilo.group(1)) else ""
-
         secciones = []
         for modulo in self.spec.modulos:
             refs = getattr(modulo, "extras", {}).get("referencias", "")
@@ -794,8 +802,12 @@ class GeneradorAula:
             if not cuerpo:
                 continue
             titulo_mod = xml_escape(f"Módulo {modulo.numero}: {modulo.titulo}".strip(": "))
+            # El título de módulo va SIN el estilo de encabezado del tema
+            # (dp-ignore-theme), solo en negrita: si no, compite visualmente
+            # con los rótulos Obligatoria / Sugerida de cada bloque.
             secciones.append(
-                f'<h3{attr_clase} style="border-top: 0px; text-align: left;">'
+                '<h3 class="dp-ignore-theme" '
+                'style="border-top: 0px; text-align: left;">'
                 f'<strong><span style="font-size: 18pt;">{titulo_mod}</span>'
                 f'</strong></h3>\n{cuerpo}')
         if not secciones:

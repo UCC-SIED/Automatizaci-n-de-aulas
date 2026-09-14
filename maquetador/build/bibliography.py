@@ -2,14 +2,14 @@
 """Constructor de la página de Bibliografía con la estructura oficial UCC.
 
 El aula base usa el bloque kl_custom_block_0:
-  <h3>Obligatoria</h3>
+  <h4>Obligatoria</h4>
   <div class="dp-columns-container container-fluid">
     <div class="row">  (una por referencia)
       <div class="col-md-1 col-xs-2"> icono lectura (link si hay URL) </div>
       <div class="col-md-11 col-xs-10"> texto + URL + &nbsp; </div>
     </div>
   </div>
-  <h3>Sugerida y referente</h3>
+  <h4>Sugerida y referente</h4>
   ...
 
 Este módulo toma el HTML crudo de la sección "referencias" del DOCX (lista
@@ -160,9 +160,9 @@ def construir_bibliografia(refs_html: str) -> str:
 
     partes = []
     if obligatoria:
-        partes.append('<h3 style="text-align: left;">Obligatoria</h3>')
+        partes.append('<h4 style="text-align: left;">Obligatoria</h4>')
         partes.append(_bloque_columnas(obligatoria))
     if sugerida:
-        partes.append('<h3 style="text-align: left;">Sugerida y referente</h3>')
+        partes.append('<h4 style="text-align: left;">Sugerida y referente</h4>')
         partes.append(_bloque_columnas(sugerida))
     return "\n".join(partes)

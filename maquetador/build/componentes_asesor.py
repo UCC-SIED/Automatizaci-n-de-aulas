@@ -8,6 +8,8 @@ expander y flip card. Dos fuentes: una tabla de 1 columna con celdas alternadas
 
 import re
 
+from bs4 import BeautifulSoup
+
 _RE_NOMBRE_CONTENIDO = re.compile(r"^(.{2,60}?):\s+(.+)$", re.DOTALL)
 
 
@@ -87,22 +89,45 @@ def _plano(texto: str) -> str:
 _PAT_EPIGRAFE = re.compile(r"^(figura|tabla|esquema|nota)\s*\d*\s*[\.:]", re.I)
 
 
-def _es_encabezado_de_seccion(el, solo_subrayado: bool = False) -> bool:
-    """¿El elemento es un subtítulo que abre una sección?
+def _titulo_en_negrita_al_inicio(el):
+    """Título que el asesor marcó poniendo en negrita SOLO las primeras
+    palabras del párrafo, no todo.
 
-    El asesor marca los cortes subrayando el subtítulo (o poniéndolo en
-    negrita). Se exige que TODO el texto del párrafo esté subrayado/en negrita:
-    un párrafo normal con una palabra resaltada no es un título.
+    Caso real: "<strong>Principio N.° 1</strong>: Enfoque al cliente" — el
+    comentario pedía "TABS horizontal (palabras en negrita)". Devuelve
+    (titulo, resto_html) o (None, None).
+    """
+    if getattr(el, "name", None) != "p":
+        return None, None
+    hijos = [h for h in el.children
+             if getattr(h, "name", None) or str(h).strip()]
+    if not hijos or getattr(hijos[0], "name", None) not in ("strong", "b"):
+        return None, None
+    titulo = hijos[0].get_text(" ", strip=True)
+    if not (2 <= len(titulo) <= 60):
+        return None, None
+    resto = "".join(str(h) for h in hijos[1:]).lstrip(" :–—-")
+    if not BeautifulSoup(resto, "html.parser").get_text(strip=True):
+        return None, None       # todo el párrafo era el título: no es prefijo
+    return titulo, f"<p>{resto}</p>"
+
+
+def _es_encabezado_de_seccion(el, modo: str = "auto") -> bool:
+    """¿El elemento abre una sección?
+
+    Tres formas de marcarlo, según lo que diga el comentario del asesor:
+      · "subrayado": todo el párrafo subrayado.
+      · "negrita":   el párrafo ARRANCA con las palabras en negrita y sigue
+                     con el contenido ("Principio N.° 1: Enfoque al cliente").
+      · "auto":      todo el párrafo subrayado o todo en negrita.
     """
     nombre = getattr(el, "name", None)
     if nombre in ("h1", "h2", "h3", "h4", "h5", "h6"):
-        return not solo_subrayado
+        return modo != "subrayado"
     if nombre != "p":
         return False
     texto = el.get_text(" ", strip=True)
-    if not texto or len(texto) > 90 or el.find("img"):
-        return False
-    if _PAT_EPIGRAFE.match(texto):
+    if not texto or el.find("img") or _PAT_EPIGRAFE.match(texto):
         return False
 
     def _cubre(tags):
@@ -110,19 +135,23 @@ def _es_encabezado_de_seccion(el, solo_subrayado: bool = False) -> bool:
             return False
         return _plano(" ".join(t.get_text(" ", strip=True) for t in tags)) == _plano(texto)
 
+    if modo == "negrita" and _titulo_en_negrita_al_inicio(el)[0]:
+        return True
+    if len(texto) > 90:
+        return False
     if _cubre(el.find_all("u")):
         return True
-    if solo_subrayado:
+    if modo == "subrayado":
         return False
     return _cubre(el.find_all(["strong", "b"]))
 
 
-def pares_de_secciones(el, solo_subrayado: bool = False) -> tuple:
+def pares_de_secciones(el, modo: str = "auto") -> tuple:
     """Tramo de párrafos con subtítulos intercalados → (pares, consumidos).
 
-    Es el caso de "expander (títulos subrayados)": el asesor no arma una tabla,
-    escribe el contenido corrido y marca los cortes subrayando los subtítulos.
-    Cada subtítulo abre un panel y se lleva los párrafos que lo siguen.
+    El asesor no arma una tabla: escribe el contenido corrido y marca los
+    cortes. Cada subtítulo abre un panel y se lleva los párrafos que lo siguen.
+    `modo` dice cómo están marcados (ver _es_encabezado_de_seccion).
     """
     elementos, actual = [], el
     while actual is not None and getattr(actual, "name", None) in _TAGS_FLUJO:
@@ -131,16 +160,23 @@ def pares_de_secciones(el, solo_subrayado: bool = False) -> tuple:
 
     # Lo anterior al primer subtítulo es introducción: queda fuera del panel.
     idx = next((i for i, e in enumerate(elementos)
-                if _es_encabezado_de_seccion(e, solo_subrayado)), None)
+                if _es_encabezado_de_seccion(e, modo)), None)
     if idx is None:
         return [], []
 
     pares, consumidos, titulo, cuerpo = [], [], None, []
     for e in elementos[idx:]:
-        if _es_encabezado_de_seccion(e, solo_subrayado):
+        if _es_encabezado_de_seccion(e, modo):
             if titulo is not None:
                 pares.append((titulo, "".join(cuerpo) or "&nbsp;"))
-            titulo, cuerpo = e.get_text(" ", strip=True), []
+            # Con el título en negrita al inicio, lo que sigue en ESE mismo
+            # párrafo ya es contenido del panel.
+            prefijo, resto = ((None, None) if modo != "negrita"
+                              else _titulo_en_negrita_al_inicio(e))
+            if prefijo:
+                titulo, cuerpo = prefijo, [resto]
+            else:
+                titulo, cuerpo = e.get_text(" ", strip=True), []
         else:
             cuerpo.append(str(e))
         consumidos.append(e)
@@ -192,10 +228,21 @@ def extraer_pares(el, instruccion: str = ""):
     #      Ishikawa: explorar posibles causas" también encaja en ese patrón, y
     #      salía un panel con el título cortado a la mitad y sin los párrafos
     #      que le seguían.
-    solo_subrayado = "subrayad" in _plano(instruccion)
-    pares, consumidos = pares_de_secciones(el, solo_subrayado=solo_subrayado)
-    if len(pares) >= 2:
-        return pares, consumidos
+    # Cada asesor escribe el pedido distinto ("títulos subrayados", "palabras
+    # en negrita", "poner Principio 1 / Principio 2 y el título dentro del
+    # TAB"…). En vez de atarse a la redacción: si el comentario nombra una
+    # forma, se respeta; si no, se prueban todas y gana la que dé secciones.
+    plano = _plano(instruccion)
+    if "subrayad" in plano:
+        modos = ("subrayado",)
+    elif "negrita" in plano:
+        modos = ("negrita",)
+    else:
+        modos = ("auto", "negrita")
+    for modo in modos:
+        pares, consumidos = pares_de_secciones(el, modo=modo)
+        if len(pares) >= 2:
+            return pares, consumidos
 
     # 3) Texto
     parrafos, actual = [], el

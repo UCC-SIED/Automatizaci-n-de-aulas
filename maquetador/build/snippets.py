@@ -1042,6 +1042,56 @@ def _espaciar_figuras(soup):
         _aire_antes(inicio, soup)
 
 
+def _es_recuadro_simple(caja) -> bool:
+    """Recuadro sin título ni barra lateral: el 'resaltado simple'."""
+    return (caja.find(class_="card-title") is None
+            and caja.find(class_="dp-callout-side-emphasis") is None)
+
+
+def _aire_corto_antes(el):
+    """Espaciado chico: un salto de línea al final del párrafo anterior.
+
+    Es el shift+enter que hace el equipo: separa menos que un párrafo vacío.
+    """
+    previo = el.previous_sibling
+    while isinstance(previo, NavigableString) and not previo.strip():
+        previo = previo.previous_sibling
+    if previo is None or getattr(previo, "name", None) != "p":
+        return
+    if _es_espaciador(previo):
+        return
+    hijos = [h for h in previo.children if getattr(h, "name", None) or str(h).strip()]
+    if hijos and getattr(hijos[-1], "name", None) == "br":
+        return
+    previo.append(BeautifulSoup("<br>", "html.parser"))
+
+
+def _espaciar_recuadros(soup):
+    """Aire alrededor de los recuadros.
+
+    El recuadro con título (Profundización, Atención, Ejemplos…) se separa con
+    un párrafo entero. El simple lleva un espaciado MENOR —el shift+enter del
+    equipo—, para que no quede tan despegado del texto que lo rodea.
+    """
+    for caja in soup.find_all("div", class_="dp-callout"):
+        if caja.parent is None or caja.find_parent(class_="dp-callout"):
+            continue
+        if _es_recuadro_simple(caja):
+            _aire_corto_antes(caja)
+        else:
+            _aire_antes(caja, soup)
+            _aire_despues(caja, soup)
+
+
+def _espaciar_destacados(soup):
+    """Aire arriba y abajo de la frase destacada (estilo lead)."""
+    for p in soup.find_all("p", class_="lead"):
+        if p.parent is None or "dp-text-bold" not in (p.get("class") or []):
+            continue
+        _aire_antes(p, soup)
+        _aire_despues(p, soup)
+
+
 def _introducido_por_dos_puntos(p) -> bool:
     """¿El párrafo anterior termina en ':' y por lo tanto lo está presentando?
 
@@ -1180,6 +1230,41 @@ def _figura_es_expandible(img) -> bool:
     return any(kw in texto for kw in _FIG_EXPANDIBLE_KW)
 
 
+# Rótulos de la tabla de portada que traen las plantillas de los asesores.
+_ROTULOS_PLANTILLA = ("unidad academica", "carrera", "asignatura", "docente",
+                      "modalidad", "ciclo lectivo", "ano lectivo")
+
+
+def quitar_encabezado_plantilla(soup) -> bool:
+    """Saca la portada de la plantilla del DOCX del arranque del contenido.
+
+    Los asesores escriben sobre una plantilla que abre con el título del ítem
+    y una tabla de metadatos (Unidad académica / Carrera / Asignatura). Eso es
+    la carátula del formulario, no contenido: el foro tiene que empezar en
+    "¡Hola a todos!". Solo se mira el ARRANQUE, para no borrar una tabla de
+    datos que esté más abajo.
+    """
+    primeros = [e for e in soup.find_all(True, recursive=False)][:4]
+    tabla = next((e for e in primeros
+                  if e.name == "table" or (e.name == "div" and e.find("table"))),
+                 None)
+    if tabla is None:
+        return False
+    real = tabla if tabla.name == "table" else tabla.find("table")
+    rotulos = [_norm(c.get_text(" ", strip=True))
+               for f in real.find_all("tr") for c in f.find_all(["td", "th"])[:1]]
+    if not rotulos or sum(r in _ROTULOS_PLANTILLA for r in rotulos) < 2:
+        return False
+
+    # El título que la precede repite el nombre del ítem: también sobra.
+    previo = tabla.find_previous_sibling()
+    if previo is not None and previo.name in ("h1", "h2", "h3", "h4", "p") \
+            and len(previo.get_text(" ", strip=True)) <= 60:
+        previo.decompose()
+    tabla.decompose()
+    return True
+
+
 def estilar_tabla_datos(tabla, tema: str = "") -> None:
     """Tabla de datos del DOCX → estilo institucional UCC.
 
@@ -1200,10 +1285,22 @@ def estilar_tabla_datos(tabla, tema: str = "") -> None:
 
     # La primera fila es el encabezado: si el DOCX no trajo <thead>, se arma.
     encabezado = filas[0]
-    if encabezado.find_parent("thead") is None:
+    thead = encabezado.find_parent("thead")
+    if thead is None:
         thead = BeautifulSoup("<thead></thead>", "html.parser").thead
         encabezado.insert_before(thead)
         thead.append(encabezado.extract())
+    else:
+        # Mammoth a veces mete TODAS las filas en el <thead>: solo la primera
+        # es encabezado, el resto es cuerpo (si no, se pintan como títulos).
+        cuerpo = tabla.find("tbody")
+        for fila in thead.find_all("tr")[1:]:
+            if cuerpo is None:
+                cuerpo = BeautifulSoup("<tbody></tbody>", "html.parser").tbody
+                thead.insert_after(cuerpo)
+            for celda in fila.find_all("th"):
+                celda.name = "td"
+            cuerpo.append(fila.extract())
     encabezado["style"] = (f"background-color: {cabecera}; color: #ffffff; "
                            "height: 60px;")
     for celda in encabezado.find_all(["td", "th"]):
@@ -1253,6 +1350,10 @@ def procesar_contenido(html: str, tema: str = "") -> str:
         if not a.get("href") and not a.get_text(strip=True) and not a.find("img"):
             a.unwrap() if a.contents else a.decompose()
 
+    # 0.4 Carátula de la plantilla del DOCX (título + tabla de metadatos): es
+    #     el formulario, no el contenido.
+    quitar_encabezado_plantilla(soup)
+
     # 0.5 Genially: incrustar (URL) o marcar para incrustar (descripción).
     _procesar_genially(soup)
 
@@ -1293,6 +1394,31 @@ def procesar_contenido(html: str, tema: str = "") -> str:
 
     # 1.6 Párrafos con frases-señal → recuadros (Lectura / Video / Atención)
     _procesar_cues_parrafo(soup)
+
+    # 1.65 El mismo texto encuadrado dos veces. Pasa cuando llega por dos
+    #      caminos (una cita del DOCX y un comentario que pide resaltarlo, por
+    #      ejemplo) y cada uno arma su recuadro. Queda uno solo, esté el
+    #      segundo al lado o metido adentro del primero.
+    for caja in list(soup.find_all("div", class_="dp-callout")):
+        if caja.parent is None:
+            continue
+        texto = caja.get_text(" ", strip=True)
+
+        # Anidado: el de adentro dice lo mismo → se queda el de adentro, que
+        # es el que tiene el estilo que pidió el comentario.
+        dentro = caja.find("div", class_="dp-callout")
+        if dentro is not None and dentro.get_text(" ", strip=True) == texto:
+            caja.replace_with(dentro.extract())
+            continue
+
+        # Al lado.
+        sig = caja.find_next_sibling()
+        while sig is not None and _es_espaciador(sig):
+            sig = sig.find_next_sibling()
+        if sig is not None and "dp-callout" in (sig.get("class") or []) \
+                and sig.get_text(" ", strip=True) == texto:
+            sig.decompose()
+
 
     # 1.7 Encabezados reales de Word (estilo "Título 1"/"Título 2") dentro
     # del cuerpo → <h3>. El título de la página en Canvas ya cumple el rol
@@ -1380,6 +1506,8 @@ def procesar_contenido(html: str, tema: str = "") -> str:
     # clases se mudan al <figure> (la imagen queda limpia, como a mano).
     _nota_a_figcaption(soup)
     _espaciar_figuras(soup)
+    _espaciar_recuadros(soup)
+    _espaciar_destacados(soup)
 
     # 3.5 Enlaces: URLs sueltas → <a>; todo enlace externo con el estilo
     #     institucional (inline_disabled dp-ext-ignore, target _blank)

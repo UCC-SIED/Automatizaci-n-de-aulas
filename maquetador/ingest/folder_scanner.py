@@ -185,9 +185,13 @@ def escanear(carpeta: Path) -> InventarioCurso:
             elif "video" in nombre or "guion" in nombre or "audiovisual" in nombre \
                     or ("grabaci" in carpeta_padre and "biograf" not in nombre):
                 inv.guiones_video.append((num, path))
-            elif "biograf" in nombre or "curriculum" in nombre \
+            elif "biograf" in nombre or "biodata" in nombre \
+                    or "curriculum" in nombre \
                     or re.search(r"\bcv\b", nombre) \
                     or "presentacion" in nombre and "foro" not in nombre:
+                # "biodata" es como lo nombra la planilla en varios cursos y
+                # quedaba sin clasificar: la titulación del docente salía
+                # "sin fuente" aunque el archivo estuviera en la carpeta.
                 inv.biografia.append(path)
             elif "hoja de ruta" in nombre or "hoja_de_ruta" in nombre:
                 inv.hoja_de_ruta.append(path)
