@@ -35,8 +35,13 @@ class TestComentariosMuertos:
 
 class TestNoSeLlevaPuestoLoQueSiImporta:
     def test_una_instruccion_real_sigue_avisandose(self):
+        """El foro 'directamente en siguiente pág' ya no cae en el cajón
+        genérico de revisar a mano: se reconoce como su propio pedido
+        (sacar el contenido de esta página, ver TestOtraPagina) y de
+        cualquier forma sigue sin perderse como si fuera ruido editorial."""
         assert _clasificar("Para maquetación: foro directamente en siguiente pág") \
-            == "revisar"
+            == "otra_pagina"
+        assert _clasificar("Para maquetación: revisar este párrafo") == "revisar"
 
     @pytest.mark.parametrize("texto,esperado", [
         ("Para maquetación: subtítulo", "subtitulo"),
@@ -53,3 +58,37 @@ class TestNoSeLlevaPuestoLoQueSiImporta:
         """'notar' no es 'Nota.' — el filtro pide el punto o los dos puntos."""
         assert _clasificar("Para maquetación: notar que va en recuadro") \
             == "recuadro_simple"
+
+
+class TestOtraPagina:
+    """El asesor deja el texto de un componente (el foro) en el DOCX de este
+    módulo pero aclara que va en OTRA página: no hay que maquetarlo acá.
+    Caso real: 'foro directamente en siguiente pág', anclado sobre una tabla
+    de 1 columna cuya primera celda dice apenas 'Foro' — el resto de la
+    tabla es la consigna completa del foro."""
+
+    def test_se_reconoce_la_instruccion(self):
+        from maquetador.ingest.docx_comments import _clasificar
+        assert _clasificar("Para maquetación: foro directamente en "
+                            "siguiente pág") == "otra_pagina"
+        assert _clasificar("Para maquetación: va en la próxima página") \
+            == "otra_pagina"
+
+    def test_se_saca_la_tabla_entera_no_solo_la_celda_del_titulo(self):
+        from bs4 import BeautifulSoup
+        from maquetador.ingest.docx_comments import aplicar_comentarios
+        soup = BeautifulSoup(
+            "<div><p>Texto de la página.</p>"
+            "<table><tr><th><p><strong>Foro</strong></p></th></tr>"
+            "<tr><th><p>Reflexioná sobre el rol de la calidad en tu "
+            "ámbito.</p></th></tr></table>"
+            "<p>Sigue el resto de la página.</p></div>", "html.parser")
+        coment = [{"instruccion": "Para maquetación: foro directamente en "
+                                  "siguiente pág",
+                   "anclado": "Foro", "accion": "otra_pagina", "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        out = str(soup)
+        assert "<table>" not in out
+        assert "Reflexioná sobre el rol" not in out
+        assert "Sigue el resto de la página" in out
+        assert coment[0].get("_aplicado") is True

@@ -414,6 +414,22 @@ class TestBusquedaDeElementoEsEspecifica:
         el = _buscar_elemento(soup, "Auditorías internas")
         assert el.get_text(strip=True) == "Auditorías internas"
 
+    def test_ancla_muy_corta_solo_matchea_por_igualdad_exacta(self):
+        """Un ancla de menos de 6 caracteres squasheados ('Foro') es
+        demasiado corta para prefijo/substring: solo vale si el párrafo
+        candidato es, entero, ese mismo texto — así 'Foro' no matchea por
+        casualidad contra 'Foro de discusión' u otro párrafo no relacionado."""
+        from maquetador.ingest.docx_comments import _buscar_elemento
+        soup = BeautifulSoup(
+            "<div>"
+            "<p>Foro de discusión general del curso.</p>"
+            "<p><strong>Foro</strong></p>"
+            "<p>Reflexioná sobre el rol de la calidad.</p>"
+            "</div>", "html.parser")
+        el = _buscar_elemento(soup, "Foro")
+        assert el is not None
+        assert el.get_text(strip=True) == "Foro"
+
 
 class TestAcordeonSeDetieneEnSuAncla:
     """Un acordeón de un solo globo también tiene un final: el texto anclado

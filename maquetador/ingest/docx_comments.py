@@ -35,7 +35,7 @@ _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 # "quitar" NO se automatiza: a veces es un micro-pedido ("quitar los dos puntos")
 # y borrar el párrafo entero sería un error; se avisa para hacerlo a mano.
 _AUTO = {"subtitulo", "subsubtitulo", "recuadro_simple", "lectura", "video",
-         "podcast", "sin_recuadro"}
+         "podcast", "sin_recuadro", "otra_pagina"}
 
 # Nivel de encabezado por acción, según la política de jerarquía de la UCC:
 # H2 es el título de la página, H3 el subtítulo y H4 el sub-subtítulo.
@@ -94,6 +94,13 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     if re.match(r"^\s*(?:para\s+maquetacion\s*:\s*)?(?:fin|final)\s+(?:de[l ]|"
                 r"de la\s)", n):
         return None
+    # El asesor deja el texto de un componente (típicamente el foro) en el
+    # DOCX de este módulo pero aclara que va en OTRA página ("foro
+    # directamente en siguiente pág"): no hay que maquetarlo acá — va antes
+    # de "recuadro"/"revisar" para no encuadrarlo como si fuera contenido de
+    # esta página.
+    if re.search(r"(siguiente|pr[oó]xima)\s*p[aá]g", n):
+        return "otra_pagina"
     # "sub-subtítulo" contiene "subtítulo": hay que mirarlo primero.
     if re.search(r"sub\s*-?\s*sub\s*-?\s*titulo", n):
         return "subsubtitulo"
@@ -243,7 +250,15 @@ def _buscar_elemento(soup, anclado: str):
     el primero hacía que el comentario se aplicara sobre el elemento
     equivocado (y fallara en silencio, al no tener con qué seguir armando)."""
     objetivo = _squash(anclado)
+    if not objetivo:
+        return None
     if len(objetivo) < 6:
+        # Ancla muy corta ("Foro"): con tan poco texto, cualquier coincidencia
+        # por prefijo/substring es puro azar — solo vale una coincidencia
+        # EXACTA (el párrafo entero es, ni más ni menos, ese texto).
+        for el in soup.find_all(["p", "li"]):
+            if _squash(el.get_text(" ", strip=True)) == objetivo:
+                return _lista_de_un_item(el)
         return None
     clave = objetivo[:40]
     mejor, mejor_score = None, 0
@@ -463,3 +478,9 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
             # El asesor pide NO encuadrar: se marca para que procesar_contenido
             # no lo convierta en recuadro por sus heurísticas.
             el["data-keep-plain"] = "1"
+        elif accion == "otra_pagina":
+            # El contenido (típicamente el foro) vive en el DOCX de este
+            # módulo pero el asesor aclaró que va en OTRA página: se saca
+            # entero de acá, tabla incluida si el ancla cayó en una celda,
+            # para que no quede maquetado como si fuera de esta página.
+            (el.find_parent("table") or el).decompose()
