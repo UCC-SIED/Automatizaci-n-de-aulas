@@ -255,7 +255,13 @@ def _buscar_elemento(soup, anclado: str):
             score = len(clave)
         elif objetivo.startswith(t[:40]):
             score = len(t[:40])
-        elif clave in t:
+        elif clave in t and len(t) <= len(clave) + 150:
+            # El ancla aparece adentro de `t`, pero solo cuenta si `t` no es
+            # mucho más largo que el ancla (un párrafo/oración normal, no
+            # cualquier párrafo largo de otra parte del documento que solo
+            # MENCIONA de paso esa frase: "...junto con las auditorías
+            # internas como instrumentos..." en la introducción no debe
+            # ganarle al subtítulo real "Auditorías internas" más abajo).
             score = len(clave)
         else:
             continue

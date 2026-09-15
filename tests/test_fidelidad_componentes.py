@@ -208,6 +208,31 @@ class TestJerarquiaDeSubtitulos:
         aplicar_comentarios(soup, coment)
         assert "<h3>Costos de la calidad</h3>" in str(soup)
 
+    def test_una_mencion_de_paso_no_convierte_la_intro_en_titulo(self):
+        """Caso real (módulo 2): la introducción del módulo menciona
+        'auditorías internas' de pasada; el comentario 'subtítulo' que en
+        realidad apunta al subtítulo real (mucho más abajo) no debe resolver
+        sobre ese párrafo de introducción y convertirlo entero en <h3>."""
+        soup = BeautifulSoup(
+            "<div>"
+            "<p>Una vez definidos los estándares y mecanismos de calidad, "
+            "la gestión del proyecto debe sostenerlos durante toda la "
+            "ejecución. Esto implica detectar desvíos, gestionar "
+            "evidencias, validar entregables periódicamente e interpretar "
+            "la percepción de los interesados a lo largo del tiempo, junto "
+            "con las auditorías internas como instrumentos de evaluación "
+            "y aprendizaje dentro del proyecto en curso.</p>"
+            "<p>Auditorías internas</p>"
+            "<p>Permiten evaluar el cumplimiento de los procesos.</p>"
+            "</div>", "html.parser")
+        coment = [{"instruccion": "Para maquetación: subtítulo",
+                   "anclado": "Auditorías internas",
+                   "accion": "subtitulo", "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        out = str(soup)
+        assert "<h3>Auditorías internas</h3>" in out
+        assert "<h3>La mejora continua" not in out
+
 
 class TestMarcadorDeCierre:
     """'fin del expander' marca dónde termina, no pide armar otro."""
@@ -366,6 +391,28 @@ class TestBusquedaDeElementoEsEspecifica:
                                      "significa calidad para el proyecto.")
         assert el.name == "p"
         assert el.get_text(strip=True) == "Planificación de la calidad"
+
+    def test_no_confunde_una_mencion_de_paso_con_el_subtitulo_real(self):
+        """Caso real (módulo 2): un párrafo largo de introducción MENCIONA
+        'auditorías internas' de paso, mucho antes del subtítulo real que el
+        comentario 'Para maquetación: subtítulo' señala. La mención de paso
+        no debe ganarle al subtítulo real por aparecer antes en el documento
+        (regresión: la introducción entera terminaba convertida en <h3>)."""
+        from maquetador.ingest.docx_comments import _buscar_elemento
+        soup = BeautifulSoup(
+            "<div>"
+            "<p>Una vez definidos los estándares y mecanismos de calidad, "
+            "la gestión del proyecto debe sostenerlos durante toda la "
+            "ejecución. Esto implica detectar desvíos, gestionar "
+            "evidencias, validar entregables periódicamente e interpretar "
+            "la percepción de los interesados a lo largo del tiempo, junto "
+            "con las auditorías internas como instrumentos de evaluación "
+            "y aprendizaje dentro del proyecto en curso.</p>"
+            "<p>Auditorías internas</p>"
+            "<p>Permiten evaluar el grado de cumplimiento de los procesos.</p>"
+            "</div>", "html.parser")
+        el = _buscar_elemento(soup, "Auditorías internas")
+        assert el.get_text(strip=True) == "Auditorías internas"
 
 
 class TestAcordeonSeDetieneEnSuAncla:
