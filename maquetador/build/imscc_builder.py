@@ -201,6 +201,7 @@ class GeneradorAula:
         self.recursos_nuevos = []   # [(identifier, href)]
         self.topics_escritos = set()       # rids de foros ya llenados
         self.assignments_escritos = set()  # rids de actividades ya llenadas
+        self._reorders_pendientes = []     # [(rid, pagina_titulo)] p/ organizations
         self.paginas_por_modulo = {}       # {n: [(page_id, titulo)]} para el syllabus
         self.indice_diseno = indexar_figuras_diseno(
             getattr(spec, "imagenes_diseno", []))
@@ -369,6 +370,9 @@ class GeneradorAula:
         # --- foros con la consigna escrita en la planilla (no como DOCX) ---
         self._inyectar_foros_de_planilla(modulo, ctx)
 
+        # --- foros con la consigna escrita adentro de otra página ---
+        self._inyectar_otra_pagina(modulo, ctx)
+
         # --- foros y actividades que llegan como DOCX separados ---
         self._inyectar_foros_y_actividades(modulo, ctx)
 
@@ -392,6 +396,14 @@ class GeneradorAula:
             self.spec.issues.append(Issue(Severidad.AVISO,
                 f"El módulo {n} no tiene páginas con contenido extraído; "
                 "queda el placeholder del aula base.", ctx))
+
+        # Recién ahora existen en organizations los <item> de las páginas:
+        # se resuelven los reordenamientos que quedaron pendientes de
+        # _inyectar_otra_pagina (si el módulo no tenía páginas, no hay
+        # después de qué ubicarlos: quedan donde ya estaban).
+        for rid, pagina_titulo in self._reorders_pendientes:
+            self._reordenar_item_despues_de_pagina(rid, pagina_titulo)
+        self._reorders_pendientes = []
 
         # --- Bibliografía MN ---
         referencias = getattr(modulo, "extras", {}).get("referencias", "")
@@ -1033,6 +1045,53 @@ class GeneradorAula:
                     f"{destino}.", item.titulo))
                 logger.info(f"  [M{n}] {destino} ← consigna de la planilla")
 
+    def _inyectar_otra_pagina(self, modulo, ctx: str):
+        """Contenido marcado 'va en otra página' (típicamente un foro sin DOCX
+        propio, escrito adentro de la lectura de otra sección): se carga en el
+        foro del módulo y ese ítem se reordena para quedar justo después de la
+        página de la que se sacó."""
+        n = modulo.numero
+        for extra in getattr(modulo, "extras_otra_pagina", []):
+            html = extra.get("html", "")
+            if not html:
+                continue
+            rid = self._rid_en_meta("DiscussionTopic",
+                                    rf"[^<]*[Ff]oro[^<]*M{n}[^<]*")
+            if not rid or rid in self.topics_escritos:
+                continue
+            cuerpo = procesar_contenido(self._rutear_media(html), self.spec.tema)
+            if self._escribir_topic(rid, cuerpo, ctx):
+                logger.info(f"  [M{n}] Foro del módulo {n} ← contenido "
+                           "embebido en la lectura")
+                # El <item> de la página todavía no existe en organizations
+                # (las páginas se inyectan más adelante, en _inyectar_
+                # paginas): el reordenamiento se hace después, no acá.
+                self._reorders_pendientes.append(
+                    (rid, extra.get("pagina_titulo", "")))
+
+    def _reordenar_item_despues_de_pagina(self, rid: str, pagina_titulo: str):
+        """Mueve, dentro de organizations, el <item> cuyo identifierref es
+        `rid` para que quede justo después del <item> de la página
+        `pagina_titulo` (mismo módulo). No hace nada si no encuentra alguno
+        de los dos — el ítem queda donde ya estaba, en su lugar del aula
+        base, en vez de arriesgar un manifiesto roto."""
+        if not rid or not pagina_titulo:
+            return
+        m_item = re.search(
+            rf'<item identifier="[^"]+" identifierref="{rid}">.*?</item>',
+            self.manifest, re.DOTALL)
+        if not m_item:
+            return
+        bloque = m_item.group(0)
+        sin_item = self.manifest[:m_item.start()] + self.manifest[m_item.end():]
+        m_pag = re.search(
+            r'<item identifier="[^"]+" identifierref="[^"]+">\s*'
+            rf'<title>{re.escape(pagina_titulo)}</title>\s*</item>', sin_item)
+        if not m_pag:
+            return
+        self.manifest = (sin_item[:m_pag.end()] + bloque
+                         + sin_item[m_pag.end():])
+
     def _inyectar_foros_y_actividades(self, modulo, ctx: str):
         """Vuelca los DOCX de foros y actividades en los topics/assignments
         que el aula base ya trae para el módulo."""
@@ -1640,7 +1699,7 @@ class GeneradorAula:
     # dos "Una pausa para reflexionar"), no es un duplicado accidental.
     _TITULOS_ESTANDARIZADOS = {
         "una pausa para reflexionar", "no pases de largo",
-        "ejemplo que iluminan", "descubri leyendo", "auriculares on",
+        "ejemplos que iluminan", "descubri leyendo", "auriculares on",
         "miralo con lupa", "voces que construyen",
         "¿como vengo hasta aca?", "caja de herramientas para usar",
     }

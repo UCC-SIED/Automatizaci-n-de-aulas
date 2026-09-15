@@ -208,6 +208,36 @@ class TestJerarquiaDeSubtitulos:
         aplicar_comentarios(soup, coment)
         assert "<h3>Costos de la calidad</h3>" in str(soup)
 
+    def test_estilo_subtitle_ya_resuelto_no_queda_pendiente_de_revision(self):
+        """Un párrafo con estilo Word 'Subtitle' ya llega como <h3> (mammoth,
+        vía el style_map de segmenter.py) — _buscar_elemento no lo encuentra
+        entre los <p>/<li>. Si el nivel YA es el que pide el comentario, no
+        hay nada que hacer: no debe quedar avisado como pendiente."""
+        soup = BeautifulSoup(
+            "<div><h3>Costos de la calidad</h3></div>", "html.parser")
+        coment = [{"instruccion": "Para maquetación: subtítulo",
+                   "anclado": "Costos de la calidad",
+                   "accion": "subtitulo", "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        assert coment[0].get("_aplicado") is True
+        assert "<h3>Costos de la calidad</h3>" in str(soup)
+
+    def test_estilo_subtitle_en_h3_se_baja_a_h4_si_el_comentario_pide_subsubtitulo(self):
+        """El estilo Word 'Subtitle' siempre da <h3>, pero el asesor puede
+        pedir sub-subtítulo (h4) para ESE párrafo puntual: hay que corregir
+        el nivel, no dejarlo en h3 avisado como 'revisar a mano' sin más
+        (regresión real: '¿Qué es un indicador?' y 'Indicadores aplicados a
+        proyectos' quedaban en h3 en vez de h4)."""
+        soup = BeautifulSoup(
+            "<div><h3>¿Qué es un indicador?</h3></div>", "html.parser")
+        coment = [{"instruccion": "Para maquetación: sub-subtítulo",
+                   "anclado": "¿Qué es un indicador?",
+                   "accion": "subsubtitulo", "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        assert coment[0].get("_aplicado") is True
+        assert "<h4>¿Qué es un indicador?</h4>" in str(soup)
+        assert "<h3>¿Qué es un indicador?</h3>" not in str(soup)
+
     def test_una_mencion_de_paso_no_convierte_la_intro_en_titulo(self):
         """Caso real (módulo 2): la introducción del módulo menciona
         'auditorías internas' de pasada; el comentario 'subtítulo' que en

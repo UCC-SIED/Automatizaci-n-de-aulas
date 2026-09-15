@@ -160,9 +160,14 @@ def segmentar_docx(docx_path: Path, marcadores: dict) -> tuple:
     reconciliador (p.ej. {"1.1": "1.1. El problema de la corrupción",
     "3.1": "Onboarding digital: …"}).
 
-    Devuelve ({clave: html}, [imagenes], [no_encontrados], [comentarios]).
-    El 4º elemento son los pedidos de maquetación del asesor (comentarios del
-    DOCX) que no se pudieron aplicar solos y hay que revisar/armar a mano.
+    Devuelve ({clave: html}, [imagenes], [no_encontrados], [comentarios],
+    [origenes_otra_pagina]). El 4º elemento son los pedidos de maquetación del
+    asesor (comentarios del DOCX) que no se pudieron aplicar solos y hay que
+    revisar/armar a mano. El 5º son los pedidos "va en otra página" que SÍ se
+    aplicaron (ver aplicar_comentarios): [{"anclado", "pagina_origen", "html"}],
+    con la clave de la sección de la que se sacó cada uno (la pista de dónde
+    ubicar ese ítem —un foro, típicamente— en el flujo del módulo) y el HTML
+    que se sacó (la consigna real, para cargarla en el ítem que corresponde).
     """
     img = ImagenInline()
     with open(docx_path, "rb") as f:
@@ -221,12 +226,25 @@ def segmentar_docx(docx_path: Path, marcadores: dict) -> tuple:
     # sobre cada sección ya cortada, para no romper los límites de sección.
     # Cada comentario se aplica en la sección que contiene su texto anclado.
     comentarios = extraer_comentarios(docx_path)
+    # "otra_pagina" (p.ej. el foro "directamente en siguiente pág") se saca de
+    # la sección que lo contiene, pero esa sección es justo la pista de dónde
+    # debe ubicarse el ítem real (el foro) en el flujo del aula: se registra
+    # qué clave lo contenía para que el builder pueda ordenar el módulo.
+    origenes_otra_pagina = []
     if comentarios:
         for clave, html_sec in list(secciones.items()):
             soup_sec = BeautifulSoup(html_sec, "html.parser")
             aplicar_comentarios(soup_sec, comentarios)
             secciones[clave] = str(soup_sec)
+            for c in comentarios:
+                if c.get("accion") == "otra_pagina" and c.get("_aplicado") \
+                        and not any(o["anclado"] == c["anclado"]
+                                    for o in origenes_otra_pagina):
+                    origenes_otra_pagina.append({
+                        "anclado": c["anclado"], "pagina_origen": clave,
+                        "html": c.get("_contenido_extraido", "")})
     comentarios_pendientes = [c for c in comentarios if not c.get("_aplicado")]
 
     no_encontrados = [c for c in marcadores if c not in secciones]
-    return secciones, img.imagenes, no_encontrados, comentarios_pendientes
+    return (secciones, img.imagenes, no_encontrados, comentarios_pendientes,
+            origenes_otra_pagina)

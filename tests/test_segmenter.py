@@ -36,7 +36,7 @@ def test_subtitulo_objetivo_dentro_de_seccion_no_secuestra_la_seccion(tmp_path):
         "item_2": "1.2. Otra sección",
     }
 
-    secciones, _img, faltantes, _com = segmentar_docx(ruta, marcadores)
+    secciones, _img, faltantes, _com, _otp = segmentar_docx(ruta, marcadores)
 
     assert "item_1" not in faltantes
     assert "El cuerpo real de la sección uno punto uno" in secciones.get("item_1", "")
@@ -64,7 +64,7 @@ def test_encabezado_con_nota_al_pie_igual_matchea(tmp_path):
         "item_8": "1.8. Guía para comenzar",
     }
 
-    secciones, _img, faltantes, _com = segmentar_docx(ruta, marcadores)
+    secciones, _img, faltantes, _com, _otp = segmentar_docx(ruta, marcadores)
 
     assert "item_7" not in faltantes
     assert "cuerpo real de la sección uno punto siete" in secciones.get("item_7", "").lower()
@@ -87,7 +87,7 @@ def test_subtitulo_estilo_subtitle_se_convierte_en_h3(tmp_path):
     doc.save(ruta)
 
     marcadores = {"item_4": "1.4. Gestión de la calidad en proyectos"}
-    secciones, _img, faltantes, _com = segmentar_docx(ruta, marcadores)
+    secciones, _img, faltantes, _com, _otp = segmentar_docx(ruta, marcadores)
 
     assert "item_4" not in faltantes
     assert "<h3>Planificación, aseguramiento y control de la calidad</h3>" \

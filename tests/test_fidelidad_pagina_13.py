@@ -14,6 +14,17 @@ class TestTituloDeEjemplos:
         assert "Ejemplos que iluminan" in resaltado_ejemplo("<p>cuerpo</p>")
         assert "Ejemplo que iluminan<" not in resaltado_ejemplo("<p>cuerpo</p>")
 
+    def test_no_se_avisa_como_titulo_duplicado_por_paginas(self):
+        """_TITULOS_ESTANDARIZADOS tenía la forma vieja en singular: con el
+        título ya corregido a plural, dos 'Ejemplos que iluminan' en la misma
+        página (título de catálogo reutilizado a propósito) no debe salir
+        como aviso de 'título repetido' — quedó con el singular viejo y ya no
+        matcheaba tras corregir resaltado_ejemplo()."""
+        from maquetador.build.imscc_builder import GeneradorAula
+        from maquetador.ingest.folder_scanner import normalizar
+        assert normalizar("Ejemplos que iluminan") \
+            in GeneradorAula._TITULOS_ESTANDARIZADOS
+
     def test_recuadro_de_tabla_tipo_ejemplo_usa_el_titulo_del_catalogo(self):
         html = ("<table><tr><td>Ejemplo</td></tr>"
                 "<tr><td>Un caso real de aplicación.</td></tr></table>")

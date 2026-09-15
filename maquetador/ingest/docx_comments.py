@@ -379,6 +379,26 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
             continue
         el = _buscar_elemento(soup, c["anclado"])
         if el is None:
+            # "Para maquetación: subtítulo"/"sub-subtítulo" sobre un párrafo
+            # con estilo Word "Subtitle": mammoth ya lo convirtió en <h3> (ver
+            # _MAMMOTH_STYLE_MAP en segmenter.py), así que _buscar_elemento no
+            # lo encuentra entre los <p>/<li>. Si ya quedó en el nivel que
+            # pide el comentario no hay nada que hacer (avisar "revisar a
+            # mano" ahí sería ruido); si quedó en OTRO nivel —el estilo
+            # "Subtitle" siempre da h3, pero el asesor pidió sub-subtítulo
+            # (h4)— se corrige el nivel en vez de dejarlo mal y sin avisar.
+            if accion in _NIVEL_ENCABEZADO:
+                objetivo = _squash(c["anclado"])
+                nivel = _NIVEL_ENCABEZADO[accion]
+                encabezado = next(
+                    (h for h in soup.find_all(
+                        ["h1", "h2", "h3", "h4", "h5", "h6"])
+                     if objetivo and _squash(h.get_text(" ", strip=True)) == objetivo),
+                    None)
+                if encabezado is not None:
+                    if encabezado.name != nivel:
+                        encabezado.name = nivel
+                    c["_aplicado"] = True
             continue
         # Ya está dentro de un recuadro/componente armado: encuadrarlo otra vez
         # deja una caja dentro de otra.
@@ -482,5 +502,19 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
             # El contenido (típicamente el foro) vive en el DOCX de este
             # módulo pero el asesor aclaró que va en OTRA página: se saca
             # entero de acá, tabla incluida si el ancla cayó en una celda,
-            # para que no quede maquetado como si fuera de esta página.
-            (el.find_parent("table") or el).decompose()
+            # para que no quede maquetado como si fuera de esta página. Antes
+            # de sacarlo, se guarda el cuerpo (todo menos la fila/celda del
+            # rótulo) para que ese contenido pueda ir a parar a donde
+            # corresponde de verdad (ver aplicar_comentarios/segmentar_docx).
+            tabla = el.find_parent("table")
+            if tabla is not None:
+                piezas = []
+                for fila in tabla.find_all("tr")[1:]:
+                    celda = fila.find(["td", "th"])
+                    if celda is not None:
+                        piezas.append("".join(str(x) for x in celda.children))
+                c["_contenido_extraido"] = "".join(piezas)
+                tabla.decompose()
+            else:
+                c["_contenido_extraido"] = inner
+                el.decompose()
