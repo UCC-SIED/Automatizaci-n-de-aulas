@@ -45,7 +45,7 @@ from maquetador.build.snippets import (separar_consignas, procesar_contenido,
                                        maquetar_actividad,
                                        _FIG_CLASES_ESTATICA)
 from maquetador.build.bibliography import construir_bibliografia
-from maquetador.extract.segmenter import ImagenInline
+from maquetador.extract.segmenter import ImagenInline, _MAMMOTH_STYLE_MAP
 from maquetador.ingest.folder_scanner import normalizar
 from processors.cidilabs_builder import DP_WRAPPER_CLASSES
 
@@ -867,7 +867,8 @@ class GeneradorAula:
         img = ImagenInline()
         with open(path, "rb") as f:
             html = mammoth.convert_to_html(
-                f, convert_image=mammoth.images.img_element(img.handler)).value
+                f, convert_image=mammoth.images.img_element(img.handler),
+                style_map=_MAMMOTH_STYLE_MAP).value
         soup = BeautifulSoup(html, "html.parser")
         primeros = soup.find_all(recursive=False)
         if primeros and primeros[0].name == "table":

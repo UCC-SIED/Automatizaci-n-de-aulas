@@ -245,7 +245,7 @@ class TestPedidoRepetido:
         coments = [{"instruccion": self.INSTR, "anclado": a,
                     "accion": "tabs_vertical", "autor": ""}
                    for a in ("ISO 14001", "Gestión ambiental de la organización.",
-                             "Seguridad y salud en el trabajo.")]
+                             "Gestión de la energía.")]
         aplicar_comentarios(soup, coments)
         return str(soup), coments
 
@@ -284,3 +284,112 @@ class TestPedidoRepetido:
         assert out.count("dp-panels-wrapper") == 2
         assert "dp-tabs-buttons-vertical" in out
         assert "dp-accordion-default" in out
+
+
+class TestSubtituloEnvueltoEnLista:
+    """Mammoth a veces envuelve un subtítulo corto en negrita en una lista de
+    un solo ítem ("<ul><li><strong>ISO 14001</strong></li></ul>") en vez de
+    dejarlo como <p>. Caso real: "TABS vertical ISO 14001 ISO 45001" — el
+    componente no se armaba porque el título vivía en un <li> invisible para
+    la detección de encabezados, y el <p> en negrita que sigue (la bajada del
+    título, "Gestión ambiental") se tomaba por error como una sección nueva.
+    """
+
+    HTML = (
+        "<div>"
+        "<p>Existen normas relacionadas:</p>"
+        "<ul><li><strong>ISO 14001</strong> </li></ul>"
+        "<p><strong>Gestión ambiental</strong></p>"
+        "<p>Norma de gestión ambiental.</p>"
+        "<p>Implica identificar impactos ambientales.</p>"
+        "<ul><li><strong>ISO 45001</strong> </li></ul>"
+        "<p><strong>Seguridad y salud ocupacional</strong></p>"
+        "<p>Norma de seguridad laboral.</p>"
+        "<p>Es relevante para reducir accidentes y proteger a las personas "
+        "en el trabajo.</p>"
+        "<p>Nota: hay más normas de las mencionadas.</p>"
+        "</div>")
+    INSTR = "Para maquetación: TABS vertical ISO 14001 ISO 45001"
+
+    def _aplicar(self):
+        soup = BeautifulSoup(self.HTML, "html.parser")
+        coments = [
+            {"instruccion": self.INSTR, "anclado": "ISO 14001",
+             "accion": "tabs_vertical", "autor": ""},
+            {"instruccion": self.INSTR,
+             "anclado": "Norma de seguridad laboral.",
+             "accion": "tabs_vertical", "autor": ""},
+            {"instruccion": self.INSTR,
+             "anclado": "Es relevante para reducir accidentes y proteger a "
+                        "las personas en el trabajo.",
+             "accion": "tabs_vertical", "autor": ""},
+        ]
+        aplicar_comentarios(soup, coments)
+        return BeautifulSoup(str(soup), "html.parser")
+
+    def test_arma_dos_paneles_iso(self):
+        soup = self._aplicar()
+        titulos = [h.get_text(strip=True)
+                   for h in soup.find_all(class_="dp-panel-heading")]
+        assert titulos == ["ISO 14001", "ISO 45001"]
+
+    def test_la_bajada_en_negrita_no_abre_seccion_propia(self):
+        """'Gestión ambiental' es parte del contenido del panel ISO 14001,
+        no un tercer panel."""
+        soup = self._aplicar()
+        assert len(soup.find_all(class_="dp-panel-group")) == 2
+
+    def test_no_se_come_lo_que_sigue_al_desplegable(self):
+        """El párrafo posterior al cierre del tramo anclado queda afuera del
+        componente, como contenido normal de la página."""
+        soup = self._aplicar()
+        wrapper = soup.find(class_="dp-panels-wrapper")
+        assert "Nota: hay más normas" not in str(wrapper)
+        assert "Nota: hay más normas" in str(soup)
+
+
+class TestBusquedaDeElementoEsEspecifica:
+    """_buscar_elemento se queda con el candidato más específico: una celda
+    de tabla corta ('Planificación') que por casualidad es prefijo del texto
+    anclado no debe ganarle al párrafo real ('Planificación de la calidad')
+    solo por aparecer antes en el documento."""
+
+    def test_prefiere_el_parrafo_largo_al_rotulo_corto_anterior(self):
+        from maquetador.ingest.docx_comments import _buscar_elemento
+        soup = BeautifulSoup(
+            "<div>"
+            "<table><tr><th><p><strong>Planificación</strong></p></th></tr></table>"
+            "<p><strong>Planificación de la calidad</strong></p>"
+            "<p>Define qué significa calidad para el proyecto.</p>"
+            "</div>", "html.parser")
+        el = _buscar_elemento(soup, "Planificación de la calidad Define qué "
+                                     "significa calidad para el proyecto.")
+        assert el.name == "p"
+        assert el.get_text(strip=True) == "Planificación de la calidad"
+
+
+class TestAcordeonSeDetieneEnSuAncla:
+    """Un acordeón de un solo globo también tiene un final: el texto anclado
+    completo (no solo el arranque) marca hasta dónde llega el componente."""
+
+    def test_no_sigue_de_largo_mas_alla_del_texto_anclado(self):
+        soup = BeautifulSoup(
+            "<div>"
+            "<p><strong>Planificación</strong></p>"
+            "<p>Define qué se va a medir.</p>"
+            "<p><strong>Control</strong></p>"
+            "<p>Verifica que se cumplan los criterios.</p>"
+            "<h3>Video módulo 1</h3>"
+            "<p>Contenido que no debería entrar al acordeón.</p>"
+            "</div>", "html.parser")
+        coment = [{
+            "instruccion": "Para maquetación: acordeón",
+            "anclado": "Planificación Define qué se va a medir. Control "
+                       "Verifica que se cumplan los criterios.",
+            "accion": "acordeon", "autor": "",
+        }]
+        aplicar_comentarios(soup, coment)
+        out = str(soup)
+        assert "Contenido que no debería entrar al acordeón" not in \
+            soup.find(class_="dp-panels-wrapper").decode_contents()
+        assert "Video módulo 1" in out

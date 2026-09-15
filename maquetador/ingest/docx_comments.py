@@ -233,18 +233,64 @@ def _squash(texto: str) -> str:
 
 
 def _buscar_elemento(soup, anclado: str):
-    """Encuentra el <p>/<li> cuyo texto corresponde al texto anclado."""
+    """Encuentra el <p>/<li> cuyo texto corresponde al texto anclado.
+
+    Se queda con el candidato MÁS ESPECÍFICO (mayor solapamiento con el
+    ancla), no el primero que coincide: un párrafo real puede empezar con la
+    misma palabra que una celda de tabla no relacionada más arriba en el
+    documento ("Planificación" de un encabezado de tabla vs. "Planificación
+    de la calidad", el párrafo real que el comentario señala), y quedarse con
+    el primero hacía que el comentario se aplicara sobre el elemento
+    equivocado (y fallara en silencio, al no tener con qué seguir armando)."""
     objetivo = _squash(anclado)
     if len(objetivo) < 6:
         return None
     clave = objetivo[:40]
+    mejor, mejor_score = None, 0
     for el in soup.find_all(["p", "li"]):
         t = _squash(el.get_text(" ", strip=True))
         if not t:
             continue
-        if t.startswith(clave) or objetivo.startswith(t[:40]) or clave in t:
-            return el
-    return None
+        if t.startswith(clave):
+            score = len(clave)
+        elif objetivo.startswith(t[:40]):
+            score = len(t[:40])
+        elif clave in t:
+            score = len(clave)
+        else:
+            continue
+        if score > mejor_score:
+            mejor, mejor_score = el, score
+    return _lista_de_un_item(mejor) if mejor is not None else None
+
+
+def _lista_de_un_item(el):
+    """Si `el` es el único <li> de su <ul>/<ol>, devuelve esa lista: mammoth
+    envuelve así algunos párrafos cortos en negrita, y la lista (no el <li>
+    suelto) es el nodo del flujo que hay que anclar/recorrer."""
+    padre = getattr(el, "parent", None)
+    if el.name == "li" and getattr(padre, "name", None) in ("ul", "ol") \
+            and len(padre.find_all("li", recursive=False)) == 1:
+        return padre
+    return el
+
+
+def _buscar_elemento_final(soup, anclado: str):
+    """Como _buscar_elemento, pero ubica el elemento donde TERMINA un tramo
+    por el SUFIJO del texto anclado: el asesor a veces marca con el mismo
+    comentario el principio y el final de un desplegable largo, resaltando
+    tramos discontinuos del documento que comparten el mismo texto de
+    comentario (ver aplicar_comentarios)."""
+    objetivo = _squash(anclado)
+    if len(objetivo) < 6:
+        return None
+    clave = objetivo[-40:]
+    resultado = None
+    for el in soup.find_all(["p", "li"]):
+        t = _squash(el.get_text(" ", strip=True))
+        if t and (t.endswith(clave) or clave.endswith(t)):
+            resultado = el
+    return resultado
 
 
 def _texto_tooltip(instruccion: str) -> str:
@@ -272,6 +318,33 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
     # componente, no uno por globo: en cuanto se arma, el resto del grupo queda
     # saldado para no apilar componentes repetidos.
     grupos_armados = set()
+
+    # El texto anclado del ÚLTIMO globo del grupo (en orden del documento; el
+    # propio globo si el pedido no se repite) marca dónde termina el tramo:
+    # sin este límite, el armado sigue consumiendo párrafos hasta quedarse
+    # sin _TAGS_FLUJO, mucho más allá de lo que el asesor pidió (pasó con
+    # "TABS vertical ISO 14001 ISO 45001", cuyo comentario se repite 3 veces,
+    # y con un "acordeón" de un solo globo cuyo texto anclado también tiene
+    # un final preciso: sin usarlo, el armado seguía de largo hasta la
+    # bibliografía).
+    grupos_textos = {}
+    for c in comentarios:
+        if c["accion"] in _VARIANTE_PANEL:
+            grupos_textos.setdefault(
+                (c["accion"], normalizar(c["instruccion"])), []).append(c)
+    # Un ancla corta ("ISO 14001") es una simple etiqueta de arranque, no una
+    # marca de final: solo un ancla larga (un tramo real de contenido) sirve
+    # como límite de cierre. Sin este piso, un ancla corta usada como "fin"
+    # coincide con el propio elemento de arranque y trunca el componente a
+    # un solo elemento.
+    grupos_fin = {}
+    for grupo, cs in grupos_textos.items():
+        if len(_squash(cs[-1]["anclado"])) < 40:
+            continue
+        el_fin = _buscar_elemento_final(soup, cs[-1]["anclado"])
+        if el_fin is not None:
+            grupos_fin[grupo] = el_fin
+
     for c in comentarios:
         accion = c["accion"]
         if c.get("_aplicado"):
@@ -303,7 +376,8 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
 
         # --- Componentes de pedido del asesor ---
         if accion in _VARIANTE_PANEL:                 # acordeon / tabs / expander
-            pares, consumidos = extraer_pares(el, c["instruccion"])
+            pares, consumidos = extraer_pares(
+                el, c["instruccion"], hasta=grupos_fin.get(grupo))
             if len(pares) >= 2:
                 html = construir_panels(pares, _VARIANTE_PANEL[accion])
                 consumidos[0].replace_with(BeautifulSoup(html, "html.parser"))

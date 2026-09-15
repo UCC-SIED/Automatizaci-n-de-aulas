@@ -70,3 +70,25 @@ def test_encabezado_con_nota_al_pie_igual_matchea(tmp_path):
     assert "cuerpo real de la sección uno punto siete" in secciones.get("item_7", "").lower()
     # No debe haberse filtrado a la sección anterior.
     assert "cuerpo real de la sección uno punto siete" not in secciones.get("item_6", "").lower()
+
+
+def test_subtitulo_estilo_subtitle_se_convierte_en_h3(tmp_path):
+    """Mammoth solo mapea por defecto "Heading 1".."Heading 6" a <hN>: el
+    estilo Word "Subtitle" que los asesores usan para el subtítulo debajo del
+    título de sección quedaba como <p> suelto (sin negrita ni marca alguna),
+    invisible para el resto del pipeline. Regresión: "Planificación,
+    aseguramiento y control de la calidad" no salía como <h3>."""
+    doc = docx.Document()
+    doc.add_paragraph("1.4. Gestión de la calidad en proyectos", style="Heading 1")
+    doc.add_paragraph("Planificación, aseguramiento y control de la calidad",
+                       style="Subtitle")
+    doc.add_paragraph("La gestión de la calidad se organiza en tres procesos.")
+    ruta = tmp_path / "modulo.docx"
+    doc.save(ruta)
+
+    marcadores = {"item_4": "1.4. Gestión de la calidad en proyectos"}
+    secciones, _img, faltantes, _com = segmentar_docx(ruta, marcadores)
+
+    assert "item_4" not in faltantes
+    assert "<h3>Planificación, aseguramiento y control de la calidad</h3>" \
+        in secciones.get("item_4", "")

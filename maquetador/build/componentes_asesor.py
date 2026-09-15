@@ -124,7 +124,17 @@ def _es_encabezado_de_seccion(el, modo: str = "auto") -> bool:
     nombre = getattr(el, "name", None)
     if nombre in ("h1", "h2", "h3", "h4", "h5", "h6"):
         return modo != "subrayado"
-    if nombre != "p":
+    if nombre in ("ul", "ol"):
+        # Mammoth a veces envuelve un subtítulo corto en negrita en una lista
+        # de un solo ítem ("<ul><li><strong>ISO 14001</strong></li></ul>") en
+        # vez de dejarlo como <p>, según la numeración interna de Word. Un
+        # ítem así, solo en su lista, es en los hechos el mismo párrafo suelto.
+        items = el.find_all("li", recursive=False)
+        if len(items) != 1:
+            return False
+        el = items[0]
+        nombre = "li"
+    if nombre not in ("p", "li"):
         return False
     texto = el.get_text(" ", strip=True)
     if not texto or el.find("img") or _PAT_EPIGRAFE.match(texto):
@@ -146,16 +156,22 @@ def _es_encabezado_de_seccion(el, modo: str = "auto") -> bool:
     return _cubre(el.find_all(["strong", "b"]))
 
 
-def pares_de_secciones(el, modo: str = "auto") -> tuple:
+def pares_de_secciones(el, modo: str = "auto", hasta=None) -> tuple:
     """Tramo de párrafos con subtítulos intercalados → (pares, consumidos).
 
     El asesor no arma una tabla: escribe el contenido corrido y marca los
     cortes. Cada subtítulo abre un panel y se lleva los párrafos que lo siguen.
     `modo` dice cómo están marcados (ver _es_encabezado_de_seccion).
+    `hasta`, si se pasa, es el último elemento que debe entrar al componente
+    (inclusive): el asesor a veces marca con el mismo comentario el principio
+    Y el final del tramo, y sin este límite el armado sigue de largo por el
+    resto de la página.
     """
     elementos, actual = [], el
     while actual is not None and getattr(actual, "name", None) in _TAGS_FLUJO:
         elementos.append(actual)
+        if hasta is not None and actual is hasta:
+            break
         actual = actual.find_next_sibling()
 
     # Lo anterior al primer subtítulo es introducción: queda fuera del panel.
@@ -165,8 +181,17 @@ def pares_de_secciones(el, modo: str = "auto") -> tuple:
         return [], []
 
     pares, consumidos, titulo, cuerpo = [], [], None, []
+    titulo_es_marcador_lista = False
     for e in elementos[idx:]:
-        if _es_encabezado_de_seccion(e, modo):
+        abre = _es_encabezado_de_seccion(e, modo)
+        # Un "<ul><li><strong>…</strong></li></ul>" (ver _es_encabezado_de_
+        # seccion) suele venir seguido, en el propio DOCX, de un <p> también
+        # todo en negrita que es su bajada ("ISO 14001" → "Gestión
+        # ambiental"): esa bajada es parte del MISMO título, no abre una
+        # sección nueva.
+        if abre and titulo_es_marcador_lista and not cuerpo:
+            abre = False
+        if abre:
             if titulo is not None:
                 pares.append((titulo, "".join(cuerpo) or "&nbsp;"))
             # Con el título en negrita al inicio, lo que sigue en ESE mismo
@@ -177,6 +202,7 @@ def pares_de_secciones(el, modo: str = "auto") -> tuple:
                 titulo, cuerpo = prefijo, [resto]
             else:
                 titulo, cuerpo = e.get_text(" ", strip=True), []
+            titulo_es_marcador_lista = getattr(e, "name", None) in ("ul", "ol")
         else:
             cuerpo.append(str(e))
         consumidos.append(e)
@@ -185,8 +211,12 @@ def pares_de_secciones(el, modo: str = "auto") -> tuple:
     return (pares, consumidos) if len(pares) >= 2 else ([], [])
 
 
-def extraer_pares(el, instruccion: str = ""):
+def extraer_pares(el, instruccion: str = "", hasta=None):
     """Desde el elemento anclado → (pares, consumidos). ([], []) si <2 pares.
+
+    `hasta`: último elemento que debe entrar al componente (inclusive), si el
+    comentario del asesor marca también el final del tramo (ver
+    pares_de_secciones).
 
     `consumidos` son los elementos del soup que el componente reemplaza: el
     primero se sustituye por el componente y el resto se elimina (así no quedan
@@ -240,7 +270,7 @@ def extraer_pares(el, instruccion: str = ""):
     else:
         modos = ("auto", "negrita")
     for modo in modos:
-        pares, consumidos = pares_de_secciones(el, modo=modo)
+        pares, consumidos = pares_de_secciones(el, modo=modo, hasta=hasta)
         if len(pares) >= 2:
             return pares, consumidos
 

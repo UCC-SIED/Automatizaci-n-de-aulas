@@ -49,6 +49,30 @@ class TestVideoPropio:
         assert "VIDEO 2" not in out
 
 
+class TestMarcadorConNombreDeModulo:
+    """El asesor también marca el video como "VIDEO MÓDULO 1" (no solo
+    "VIDEO 2"/"VIDEO M2."), y a veces lo deja separado de la invitación por un
+    párrafo de aire (&nbsp;): igual debe quedar adentro del mismo bloque, sin
+    duplicar el hueco del embed ni publicarse como título suelto."""
+
+    CON_AIRE = ("<p>Te invito a ver el siguiente video sobre calidad.</p>"
+                "<p>&nbsp;</p><p><strong>VIDEO MÓDULO 1</strong></p>")
+
+    def test_no_publica_el_marcador_con_modulo(self):
+        out = procesar_contenido(self.CON_AIRE)
+        assert "VIDEO MÓDULO" not in out.upper()
+
+    def test_un_solo_bloque_de_video(self):
+        out = procesar_contenido(self.CON_AIRE)
+        assert out.count('data-title="Video"') == 1
+
+    def test_suelto_separado_por_aire_no_publica_titulo(self):
+        out = procesar_contenido(
+            "<p>Te invito a ver el video.</p><p>&nbsp;</p><p>VIDEO MÓDULO 2</p>")
+        assert "VIDEO MÓDULO" not in out.upper()
+        assert out.count('data-title="Video"') == 1
+
+
 class TestVideoExterno:
     def test_con_enlace_sigue_siendo_cta(self):
         out = procesar_contenido(EXTERNO)

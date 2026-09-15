@@ -94,11 +94,13 @@ def cta_descubri_leyendo(body_html: str) -> str:
 </div>"""
 
 
-# Marcador que deja el asesor donde va un video propio ("VIDEO M2.", "VIDEO 2").
-# A veces es un párrafo suelto y a veces queda pegado al final de la invitación.
-_PAT_MARCADOR_VIDEO = re.compile(r"^\s*videos?\s*(?:m\s*)?\d*\s*[\.:]?\s*$", re.I)
+# Marcador que deja el asesor donde va un video propio ("VIDEO M2.", "VIDEO 2",
+# "VIDEO MÓDULO 1"). A veces es un párrafo suelto y a veces queda pegado al
+# final de la invitación.
+_PAT_MARCADOR_VIDEO = re.compile(
+    r"^\s*videos?\s*(?:m(?:[oó]dulo)?\s*)?\d*\s*[\.:]?\s*$", re.I)
 _PAT_MARCADOR_VIDEO_FINAL = re.compile(
-    r"\s*\bvideos?\s*(?:m\s*)?\d*\s*\.?\s*(?=</|$)", re.I)
+    r"\s*\bvideos?\s*(?:m(?:[oó]dulo)?\s*)?\d*\s*\.?\s*(?=</|$)", re.I)
 
 
 def _sin_marcador_video(html: str) -> str:
@@ -641,9 +643,12 @@ def _procesar_cues_parrafo(soup):
         grupo = [p] + _absorber_siguientes(p)
         if tipo == "video":
             # El marcador donde va el video ("VIDEO 2") suele ir en su propio
-            # párrafo, después de la invitación: entra al mismo bloque para
-            # que no quede publicado como texto suelto.
+            # párrafo, después de la invitación —a veces separado por un
+            # párrafo de aire (&nbsp;)— y entra al mismo bloque para que no
+            # quede publicado como texto suelto.
             sig = grupo[-1].find_next_sibling()
+            while sig is not None and _es_espaciador(sig):
+                sig = sig.find_next_sibling()
             if sig is not None and getattr(sig, "name", "") == "p" \
                     and _PAT_MARCADOR_VIDEO.match(sig.get_text(" ", strip=True)):
                 grupo.append(sig)
@@ -1477,6 +1482,8 @@ def procesar_contenido(html: str, tema: str = "") -> str:
         if not _PAT_MARCADOR_VIDEO.match(p.get_text(" ", strip=True)):
             continue
         previo = p.find_previous_sibling()
+        while previo is not None and _es_espaciador(previo):
+            previo = previo.find_previous_sibling()
         ya_hay_bloque = (previo is not None
                          and getattr(previo, "get", None) is not None
                          and previo.get("data-title") == "Video")

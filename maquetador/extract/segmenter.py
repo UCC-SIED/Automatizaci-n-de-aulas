@@ -27,6 +27,14 @@ from maquetador.ingest.docx_comments import extraer_comentarios, aplicar_comenta
 
 logger = logging.getLogger("segmenter")
 
+# Mammoth solo mapea por defecto los estilos "Heading 1".."Heading 6" a <hN>.
+# Los asesores también usan el estilo Word "Subtitle" (subtítulo debajo del
+# título de sección) para subtítulos de nivel h3, y ese estilo NO tiene
+# mapeo por defecto: sin esta regla, el párrafo queda como <p> suelto (sin
+# negrita, sin marca alguna) y el resto del pipeline no tiene forma de
+# reconocerlo como encabezado.
+_MAMMOTH_STYLE_MAP = "p[style-name='Subtitle'] => h3:fresh"
+
 _PAT_NUM = re.compile(r"^(\d+(?:\.\d+)+)\.?\s*")
 
 
@@ -159,7 +167,8 @@ def segmentar_docx(docx_path: Path, marcadores: dict) -> tuple:
     img = ImagenInline()
     with open(docx_path, "rb") as f:
         html = mammoth.convert_to_html(
-            f, convert_image=mammoth.images.img_element(img.handler)).value
+            f, convert_image=mammoth.images.img_element(img.handler),
+            style_map=_MAMMOTH_STYLE_MAP).value
     soup = BeautifulSoup(html, "html.parser")
     _aplanar_listas_con_titulos(soup, marcadores)
     elementos = [el for el in soup.find_all(recursive=False)]
