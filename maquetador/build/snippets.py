@@ -793,9 +793,26 @@ _PAT_PREFIJO_ACTIVIDAD = re.compile(
     r"^\s*actividad\s*(?:final\s*integradora|obligatoria|sugerida|optativa)?"
     r"\s*(?:m\s*\d+)?\s*[:\-–—]\s*", re.I)
 
+# "Actividad obligatoria 1" a secas (sin ":" ni nada después): no queda un
+# título propio al sacarle el prefijo, así que no aporta nada — Canvas ya
+# muestra ese mismo nombre en el banner de la Assignment.
+_PAT_TITULO_GENERICO_ACTIVIDAD = re.compile(
+    r"^\s*actividad\s*(?:final\s*integradora|obligatoria|sugerida|optativa)?"
+    r"\s*(?:m\s*\d+)?\s*\d*\s*[:\-–—]?\s*$", re.I)
+
 _H2_TITULO_ACTIVIDAD = ('<h2 class="dp-ignore-theme" '
                         'style="color: {color}; text-align: center;">'
                         "<strong>{titulo}</strong></h2>")
+
+# Rótulo dentro de la narrativa del caso que se destaca en línea (subrayado y
+# negrita), sin cortar el párrafo en un encabezado aparte: no abre una
+# sección nueva, es énfasis dentro del relato.
+_PAT_ROTULO_EN_LINEA = re.compile(
+    r"^(situaci[oó]n de incertidumbre)\s*:\s*", re.I)
+
+# Disclaimer de uso de IA del "Modelo de actividad": va en recuadro simple,
+# no como texto corrido.
+_PAT_DISCLAIMER_IA = re.compile(r"aporte de la ia", re.I)
 
 
 def maquetar_actividad(html: str, tema: str = "") -> str:
@@ -803,10 +820,18 @@ def maquetar_actividad(html: str, tema: str = "") -> str:
 
     - El primer encabezado es el título de la actividad: va como H2 de título
       (dp-ignore-theme, centrado), no como subtítulo, y sin el prefijo
-      "Actividad …:" que duplica el nombre del ítem en Canvas.
+      "Actividad …:" que duplica el nombre del ítem en Canvas. Si no queda
+      texto propio al sacarle el prefijo (era solo "Actividad obligatoria 1"),
+      se saca directamente: el banner de la Assignment ya lo muestra.
+    - Los "Título N" nativos de Word que trae el caso planteado (más
+      profundos que el título de la actividad) bajan un nivel: quedan <h4>,
+      no <h3>, para no competir con los rótulos de sección de abajo.
     - Los rótulos de sección (Objetivo, Consigna, Pautas de presentación,
       Criterios de evaluación, Anexo) pasan a <h3> y se les saca los dos
       puntos; si el párrafo traía el cuerpo pegado, queda debajo.
+    - Un rótulo dentro del relato ("Situación de incertidumbre:") se destaca
+      en línea (negrita + subrayado), sin volverse un encabezado propio.
+    - El disclaimer de uso de IA va en recuadro simple.
     """
     if not html:
         return html
@@ -815,15 +840,44 @@ def maquetar_actividad(html: str, tema: str = "") -> str:
     primero = soup.find(["h1", "h2", "h3", "h4"])
     if primero is not None and not primero.get("class"):
         texto = primero.get_text(" ", strip=True)
-        limpio = _PAT_PREFIJO_ACTIVIDAD.sub("", texto).strip()
-        if limpio:
-            color = ACENTO_POR_TEMA.get(_norm(tema or ""), ACCENT)
-            primero.replace_with(BeautifulSoup(
-                _H2_TITULO_ACTIVIDAD.format(color=color, titulo=limpio),
-                "html.parser"))
+        if _PAT_TITULO_GENERICO_ACTIVIDAD.match(texto):
+            primero.decompose()
+        else:
+            limpio = _PAT_PREFIJO_ACTIVIDAD.sub("", texto).strip()
+            if limpio:
+                color = ACENTO_POR_TEMA.get(_norm(tema or ""), ACCENT)
+                primero.replace_with(BeautifulSoup(
+                    _H2_TITULO_ACTIVIDAD.format(color=color, titulo=limpio),
+                    "html.parser"))
+
+    # Los <h3> que ya traía el DOCX (estilo "Título 3" de Word, el caso
+    # planteado) bajan a <h4>: van antes del bucle de rótulos de sección, así
+    # los <h3> que ESE bucle arma después (Objetivo/Consigna/…) no se tocan.
+    # Un rótulo de sección que YA llegó como encabezado nativo en vez de
+    # <p> ("Pautas de presentación:" es "Título 2" en este DOCX, y
+    # procesar_contenido ya lo bajó a h3 antes de llegar acá) se deja: tiene
+    # que terminar en el mismo nivel que sus hermanos armados desde <p>.
+    for h3 in soup.find_all("h3"):
+        etiqueta = _norm(re.sub(r"[:\s]+$", "", h3.get_text(" ", strip=True)))
+        if etiqueta in _SECCIONES_ACTIVIDAD:
+            continue
+        h3.name = "h4"
 
     for p in list(soup.find_all("p")):
         texto = p.get_text(" ", strip=True)
+        if _PAT_DISCLAIMER_IA.search(_norm(texto)):
+            p.replace_with(BeautifulSoup(
+                resaltado_simple("".join(str(x) for x in p.children)),
+                "html.parser"))
+            continue
+        m_rotulo = _PAT_ROTULO_EN_LINEA.match(texto)
+        if m_rotulo:
+            resto = texto[m_rotulo.end():]
+            p.clear()
+            p.append(BeautifulSoup(
+                f"<u><strong>{m_rotulo.group(1)}:</strong></u> {resto}",
+                "html.parser"))
+            continue
         m = re.match(r"^([^:]{3,40}):\s*(.*)$", texto, re.S)
         if not m or _norm(m.group(1)) not in _SECCIONES_ACTIVIDAD:
             continue

@@ -171,6 +171,71 @@ class TestMaquetadoDeActividad:
         assert "<h3>" not in out
 
 
+class TestTituloGenericoDeActividad:
+    """'Actividad obligatoria 1' a secas (sin nada más en el título, solo el
+    tipo + número) no aporta nada: Canvas ya muestra ese mismo nombre en el
+    banner de la Assignment. Se saca en vez de duplicarlo como H2."""
+
+    @pytest.mark.parametrize("titulo", [
+        "Actividad obligatoria 1", "Actividad obligatoria 2",
+        "Actividad final integradora", "Actividad M1",
+    ])
+    def test_titulo_generico_se_saca_sin_dejar_h2(self, titulo):
+        out = maquetar_actividad(f"<h3>{titulo}</h3><p>Objetivo: Diagnosticar.</p>")
+        assert "dp-ignore-theme" not in out
+        assert titulo not in out
+
+    def test_titulo_con_nombre_propio_sigue_yendo_al_h2(self):
+        """Diferencia real con el caso de arriba: acá SÍ queda texto propio
+        después de sacar el prefijo del tipo de actividad."""
+        out = maquetar_actividad(
+            "<h3>Actividad obligatoria: Diagnóstico de un caso real</h3>")
+        assert 'class="dp-ignore-theme"' in out
+        assert "Diagnóstico de un caso real" in out
+
+
+class TestNivelDeEncabezadosDelCaso:
+    """Los "Título N" nativos de Word que trae el caso planteado (más
+    profundos que el H2 de la actividad) bajan a <h4>: si quedaran en <h3>
+    competirían de igual a igual con los rótulos de sección (Objetivo,
+    Consigna…), que sí son <h3>."""
+
+    def test_encabezado_nativo_del_caso_baja_a_h4(self):
+        out = maquetar_actividad(
+            "<h2>Proyecto: Caso X</h2><h3>Contexto del proyecto:</h3>"
+            "<p>Descripción del contexto.</p>")
+        assert "<h4>Contexto del proyecto:</h4>" in out
+        assert "<h3>Contexto del proyecto:</h3>" not in out
+
+    def test_rotulo_de_seccion_que_llega_como_encabezado_nativo_sigue_en_h3(self):
+        """'Pautas de presentación:' puede llegar ya como <h3> (si en el
+        DOCX tenía un estilo de título de Word en vez de párrafo normal):
+        tiene que terminar en el mismo nivel que sus hermanos armados desde
+        <p> (regresión: bajaba a h4 igual que los encabezados del caso)."""
+        out = maquetar_actividad(
+            "<h2>Actividad obligatoria: Caso X</h2>"
+            "<h3>Pautas de presentación:</h3>")
+        assert "<h3>Pautas de presentación:</h3>" in out
+
+
+class TestRotuloEnLineaYDisclaimerDeIA:
+    def test_situacion_de_incertidumbre_se_destaca_sin_ser_encabezado(self):
+        out = maquetar_actividad(
+            "<p>Situación de incertidumbre: el presupuesto se reduce un "
+            "10 % durante la ejecución.</p>")
+        assert "<h3>" not in out
+        assert "<h4>" not in out
+        assert "<u><strong>Situación de incertidumbre:</strong></u>" in out
+        assert "el presupuesto se reduce" in out
+
+    def test_disclaimer_de_ia_va_en_recuadro_simple(self):
+        out = maquetar_actividad(
+            "<p>Se recomienda que el aporte de la IA no exceda el 30 % del "
+            "trabajo, que su uso esté correctamente citado.</p>")
+        assert "dp-callout" in out
+        assert "aporte de la IA" in out
+
+
 class TestJerarquiaDeSubtitulos:
     """Textos tomados de los comentarios reales del curso de prueba.
 
