@@ -150,7 +150,7 @@ def resaltado_atencion(body_html: str, titulo: str = "No pases de largo") -> str
 </div>"""
 
 
-def resaltado_ejemplo(body_html: str, titulo: str = "Ejemplo que iluminan") -> str:
+def resaltado_ejemplo(body_html: str, titulo: str = "Ejemplos que iluminan") -> str:
     return f"""<div class="dp-callout dp-callout-placeholder card dp-callout-position-default dp-callout-color-dp-primary dp-callout-type-info">
 <div class="dp-callout-side-emphasis"><i class="fas fa-copy dp-default-icon">​</i></div>
 <div class="card-body">
@@ -244,7 +244,7 @@ def _clasificar_recuadro(etiqueta: str, texto_completo: str) -> tuple:
     if "atencion" in n or "importante" in n:
         return "atencion", "No pases de largo"
     if "ejemplo" in n:
-        return "ejemplo", "Ejemplo que iluminan"
+        return "ejemplo", "Ejemplos que iluminan"
     return "simple", ""
 
 
@@ -1355,6 +1355,14 @@ def procesar_contenido(html: str, tema: str = "") -> str:
         if not a.get("href") and not a.get_text(strip=True) and not a.find("img"):
             a.unwrap() if a.contents else a.decompose()
 
+    # 0.2 Encabezados vacíos: un "Título 3" de Word que solo queda como
+    #     marcador de posición (sin texto, apenas el ancla que el paso
+    #     anterior ya sacó) se convierte en un <h3></h3> hueco que se ve como
+    #     un salto de línea/aire raro en medio del contenido.
+    for h in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
+        if not h.get_text(strip=True) and not h.find("img"):
+            h.decompose()
+
     # 0.4 Carátula de la plantilla del DOCX (título + tabla de metadatos): es
     #     el formulario, no el contenido.
     quitar_encabezado_plantilla(soup)
@@ -1536,6 +1544,11 @@ def procesar_contenido(html: str, tema: str = "") -> str:
     # 3.6 Cita/mención + link suelto (no epígrafe, no párrafo-solo-link) →
     #     CTA 'Descubrí leyendo' con 'Acceso al documento' en vez de la URL.
     _procesar_citas_con_link(soup)
+    # Este recuadro se arma DESPUÉS del paso 3 (_espaciar_recuadros): sin este
+    # segundo pasaje se quedaba sin el aire de párrafo completo que llevan
+    # todos los recuadros con título (pasaba en Bibliografía, con el "Descubrí
+    # leyendo" pegado a las referencias antes y después).
+    _espaciar_recuadros(soup)
 
     # 4. Epígrafes (Figura N. / Nota.) → centrados, tamaño 10pt
     for p in soup.find_all("p"):
