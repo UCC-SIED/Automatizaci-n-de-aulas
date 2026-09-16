@@ -1603,16 +1603,14 @@ def procesar_contenido(html: str, tema: str = "") -> str:
 
     # Marcador de video suelto ("VIDEO 2") que no quedó pegado a ninguna
     # invitación: señala que ahí va un video de Canvas Studio. Se convierte en
-    # el bloque vacío, nunca se publica como texto.
+    # el bloque vacío, nunca se publica como texto. Si en la página YA hay un
+    # bloque de video más arriba (en cualquier parte, no solo el hermano
+    # inmediato) es un segundo marcador del mismo video que quedó duplicado
+    # por error en el DOCX — se saca, no se arma un segundo hueco vacío.
     for p in list(soup.find_all("p")):
         if not _PAT_MARCADOR_VIDEO.match(p.get_text(" ", strip=True)):
             continue
-        previo = p.find_previous_sibling()
-        while previo is not None and _es_espaciador(previo):
-            previo = previo.find_previous_sibling()
-        ya_hay_bloque = (previo is not None
-                         and getattr(previo, "get", None) is not None
-                         and previo.get("data-title") == "Video")
+        ya_hay_bloque = p.find_previous(attrs={"data-title": "Video"}) is not None
         if ya_hay_bloque:
             p.decompose()
         else:

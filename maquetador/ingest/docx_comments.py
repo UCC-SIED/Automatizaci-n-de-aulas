@@ -23,19 +23,24 @@ import xml.etree.ElementTree as ET
 from bs4 import BeautifulSoup
 
 from maquetador.ingest.folder_scanner import normalizar
-from maquetador.build.snippets import resaltado_simple, cta_titulo, ICONOS
+from maquetador.build.snippets import (resaltado_simple, cta_titulo, ICONOS,
+                                       bloque_recurso_incrustado,
+                                       _PAT_GENIALLY_URL)
 from maquetador.build.componentes_asesor import (
     extraer_pares, construir_panels, construir_flipcards,
     construir_tooltip, disparador_tooltip, aplicar_cita,
 )
 
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_W14 = "{http://schemas.microsoft.com/office/word/2010/wordml}"
+_W15 = "{http://schemas.microsoft.com/office/word/2012/wordml}"
 
 # Acciones que se aplican solas vs. las que solo se avisan.
 # "quitar" NO se automatiza: a veces es un micro-pedido ("quitar los dos puntos")
 # y borrar el párrafo entero sería un error; se avisa para hacerlo a mano.
 _AUTO = {"subtitulo", "subsubtitulo", "recuadro_simple", "lectura", "video",
-         "podcast", "sin_recuadro", "otra_pagina", "enlace_descargable"}
+         "podcast", "sin_recuadro", "otra_pagina", "enlace_descargable",
+         "genially_listo"}
 
 # Nivel de encabezado por acción, según la política de jerarquía de la UCC:
 # H2 es el título de la página, H3 el subtítulo y H4 el sub-subtítulo.
@@ -161,6 +166,41 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     return None
 
 
+def _respuestas_por_cid(croot, ext_xml: bytes) -> dict:
+    """{cid_padre: [texto_respuesta, ...]} para los comentarios que tienen
+    respuestas de otra persona (p.ej. el diseñador responde un "Para diseño:
+    Genially…" con el div/iframe ya armado). La liga entre un comentario y
+    su respuesta es por w14:paraId (del <w:p> adentro de <w:comment>), no por
+    el w:id del comentario — Word guarda esa relación en
+    word/commentsExtended.xml (w15:paraIdParent → w15:paraId del padre)."""
+    respuestas = {}
+    if not ext_xml:
+        return respuestas
+    paraid_a_cid = {}
+    textos_por_cid = {}
+    for c in croot.findall(f"{_W}comment"):
+        cid = c.get(f"{_W}id")
+        textos_por_cid[cid] = " ".join(t.text or "" for t in c.iter(f"{_W}t")).strip()
+        for p in c.findall(f"{_W}p"):
+            pid = p.get(f"{_W14}paraId")
+            if pid:
+                paraid_a_cid[pid] = cid
+    try:
+        eroot = ET.fromstring(ext_xml)
+    except ET.ParseError:
+        return respuestas
+    for ce in eroot:
+        pid_hijo = ce.get(f"{_W15}paraId")
+        pid_padre = ce.get(f"{_W15}paraIdParent")
+        if not pid_hijo or not pid_padre:
+            continue
+        cid_hijo = paraid_a_cid.get(pid_hijo)
+        cid_padre = paraid_a_cid.get(pid_padre)
+        if cid_hijo and cid_padre and cid_hijo != cid_padre:
+            respuestas.setdefault(cid_padre, []).append(textos_por_cid.get(cid_hijo, ""))
+    return respuestas
+
+
 def extraer_comentarios(docx_path) -> list:
     """[{instruccion, anclado, accion, autor}] de un DOCX. [] si no tiene."""
     try:
@@ -169,6 +209,8 @@ def extraer_comentarios(docx_path) -> list:
                 return []
             comments_xml = z.read("word/comments.xml")
             document_xml = z.read("word/document.xml")
+            ext_xml = (z.read("word/commentsExtended.xml")
+                      if "word/commentsExtended.xml" in z.namelist() else b"")
     except Exception:
         return []
 
@@ -178,6 +220,7 @@ def extraer_comentarios(docx_path) -> list:
         cid = c.get(f"{_W}id")
         textos[cid] = " ".join(t.text or "" for t in c.iter(f"{_W}t")).strip()
         autores[cid] = c.get(f"{_W}author", "")
+    respuestas = _respuestas_por_cid(croot, ext_xml)
 
     # Texto anclado: lo que está entre commentRangeStart/End (en orden de doc).
     droot = ET.fromstring(document_xml)
@@ -228,6 +271,23 @@ def extraer_comentarios(docx_path) -> list:
         anc = "".join(anclado.get(cid, [])).strip()
         accion = _clasificar(instr, anc)
         if not accion:
+            # "Para diseño: … Genially …" no es un pedido de maquetación en
+            # sí (se excluye arriba, en _clasificar), pero si el diseñador
+            # ya respondió con el div/iframe armado, ESO sí hay que usarlo:
+            # el texto anclado (el brief para el diseñador) se reemplaza por
+            # el embed real en vez de quedar publicado como si fuera
+            # contenido de la página.
+            html_listo = next(
+                (r for r in respuestas.get(cid, [])
+                 if _PAT_GENIALLY_URL.search(r)), None)
+            if html_listo:
+                out.append({
+                    "instruccion": re.sub(r"\s+", " ", instr).strip(),
+                    "anclado": _ancla(cid),
+                    "accion": "genially_listo",
+                    "autor": autores.get(cid, ""),
+                    "_html_genially": html_listo,
+                })
             continue   # charla interna / confirmación, no es instrucción
         out.append({
             "instruccion": re.sub(r"\s+", " ", instr).strip(),
@@ -330,6 +390,23 @@ def _buscar_elemento_final(soup, anclado: str):
     return resultado
 
 
+def _tramo_hasta(el, hasta) -> list:
+    """[el, …, hasta] recorriendo hermanos de flujo desde `el`. `hasta`
+    puede ser el propio hermano o un descendiente suyo (p.ej. el último
+    <li> de una lista, ver pares_de_secciones). Si no se llega a `hasta`
+    (o es None), devuelve solo [el] — más vale no tocar de más."""
+    if hasta is None:
+        return [el]
+    tramo, actual = [el], el
+    while actual is not None:
+        if actual is hasta or any(a is actual for a in hasta.parents):
+            return tramo
+        actual = actual.find_next_sibling()
+        if actual is not None:
+            tramo.append(actual)
+    return [el]
+
+
 def _texto_tooltip(instruccion: str) -> str:
     """Saca el contenido del popover del comentario: lo que va después de
     'emerja:'/'aparezca:'/'tooltip-->'. Si no hay marcador claro, '' (→ fallback)."""
@@ -366,7 +443,7 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
     # bibliografía).
     grupos_textos = {}
     for c in comentarios:
-        if c["accion"] in _VARIANTE_PANEL:
+        if c["accion"] in _VARIANTE_PANEL or c["accion"] == "genially_listo":
             grupos_textos.setdefault(
                 (c["accion"], normalizar(c["instruccion"])), []).append(c)
     # Un ancla corta ("ISO 14001") es una simple etiqueta de arranque, no una
@@ -554,3 +631,16 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
                     a.insert_before(antes)
                 if despues:
                     a.insert_after(despues)
+        elif accion == "genially_listo":
+            # El brief para el diseñador ("Para diseño: … Genially …") no va
+            # como contenido de la página: se reemplaza entero —desde el
+            # ancla hasta donde termina el tramo marcado por el comentario—
+            # por el embed real que el diseñador ya dejó armado en su
+            # respuesta.
+            iframe = BeautifulSoup(
+                c.get("_html_genially", ""), "html.parser").find("iframe")
+            tramo = _tramo_hasta(el, grupos_fin.get(grupo))
+            nuevo = bloque_recurso_incrustado(str(iframe) if iframe else "")
+            tramo[0].replace_with(BeautifulSoup(nuevo, "html.parser"))
+            for extra in tramo[1:]:
+                extra.decompose()

@@ -129,3 +129,66 @@ class TestEnlaceDescargable:
         assert "deberá adjuntar el" in out
         assert "completo." in out
         assert coment[0].get("_aplicado") is True
+
+
+class TestGeniallyConRespuestaDelDisenador:
+    """"Para diseño: … Genially …" no es un pedido de maquetación (se
+    excluye en _clasificar), pero si el diseñador YA respondió el comentario
+    con el div/iframe armado (word/commentsExtended.xml liga la respuesta al
+    comentario original por w14:paraId, ver _respuestas_por_cid), ese embed
+    real reemplaza el brief completo —desde el ancla hasta donde el propio
+    comentario marca el final— en vez de quedar publicado como texto."""
+
+    def test_liga_la_respuesta_por_paraid(self):
+        from maquetador.ingest.docx_comments import _respuestas_por_cid
+        import xml.etree.ElementTree as ET
+        W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        W14 = "{http://schemas.microsoft.com/office/word/2010/wordml}"
+        W15 = "{http://schemas.microsoft.com/office/word/2012/wordml}"
+        comments_xml = f"""<w:comments xmlns:w="{W[1:-1]}" xmlns:w14="{W14[1:-1]}">
+<w:comment w:id="1" w:author="Julieta">
+<w:p w14:paraId="AAA"><w:r><w:t>Para diseño: Genially</w:t></w:r></w:p>
+</w:comment>
+<w:comment w:id="2" w:author="Lucas">
+<w:p w14:paraId="BBB"><w:r><w:t>&lt;iframe src="https://view.genially.com/xyz"&gt;&lt;/iframe&gt;</w:t></w:r></w:p>
+</w:comment>
+</w:comments>"""
+        ext_xml = f"""<w15:commentsEx xmlns:w15="{W15[1:-1]}">
+<w15:commentEx w15:paraId="BBB" w15:paraIdParent="AAA"/>
+</w15:commentsEx>"""
+        croot = ET.fromstring(comments_xml)
+        respuestas = _respuestas_por_cid(croot, ext_xml.encode("utf-8"))
+        assert "1" in respuestas
+        assert "view.genially.com" in respuestas["1"][0]
+
+    def test_reemplaza_el_brief_por_el_embed_real(self):
+        from bs4 import BeautifulSoup
+        from maquetador.ingest.docx_comments import aplicar_comentarios
+        soup = BeautifulSoup(
+            "<div><p>Texto previo de la página.</p>"
+            "<p>a) Implementación de una línea de envasado.</p>"
+            "<p>Descripción general del proyecto: una empresa decide "
+            "ejecutar un proyecto de envasado automatizado.</p>"
+            "<p>b) Alcance del proyecto: fin del brief.</p>"
+            "<h3>Siguiente sección</h3></div>", "html.parser")
+        coment = [{
+            "instruccion": "Para diseño: M1 RI1 --> Genially Pantalla "
+                          "principal con 7 botones con popup",
+            "anclado": "a) Implementación de una línea de envasado. "
+                      "Descripción general del proyecto: una empresa "
+                      "decide ejecutar un proyecto de envasado "
+                      "automatizado. b) Alcance del proyecto: fin del "
+                      "brief.",
+            "accion": "genially_listo", "autor": "",
+            "_html_genially": '<iframe src="https://view.genially.com/xyz">'
+                              '</iframe>',
+        }]
+        aplicar_comentarios(soup, coment)
+        out = str(soup)
+        assert "Implementación de una línea de envasado" not in out
+        assert "fin del brief" not in out
+        assert "https://view.genially.com/xyz" in out
+        assert "dp-embed-wrapper" in out
+        assert "Texto previo de la página" in out
+        assert "<h3>Siguiente sección</h3>" in out
+        assert coment[0].get("_aplicado") is True
