@@ -160,6 +160,26 @@ def resaltado_ejemplo(body_html: str, titulo: str = "Ejemplos que iluminan") -> 
 </div>"""
 
 
+def resaltado_laboratorio_ideas(body_html: str,
+                                titulo: str = "Laboratorio de ideas") -> str:
+    """Desafío personal sin entrega — "Lecture Hook" con forma de flecha,
+    ícono de matraz. Catálogo UCC, ver docs/referencia-designplus-cidilabs-
+    ucc.md."""
+    return f"""<div class="dp-content-block" style="margin-left: 0 !important; padding-left: 0 !important;" data-title="Lecture Hook" data-category="Interactions">
+<div class="dp-column-container container-fluid" style="font-size: 16px; width: 100%; border-radius: 16px; overflow: hidden; padding-left: 0 !important; margin-left: 0 !important;">
+<div class="row" style="margin-left: 0; margin-right: 0;">
+<div class="col-lg-1 col-md-1 col-sm-2 dp-bg dp-shape-peak-r cp-bg-dp-primary dp-mask-grd-md-h dp-wcag-aa align-items-center justify-content-center" style="padding-right: 0px;">
+<p class="text-center"><strong><i class="dp-icon fas fa-flask" style="font-size: 25px;" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i></strong></p>
+</div>
+<div class="dp-bg dp-shape-tri-cut-l cp-bg-light col-lg-11 col-md-11 col-sm-10 dp-padding-direction-tblr" style="padding-right: 75px; padding-left: 25px; background-color: #f4f6f8;">
+<h3 class="dp-ignore-theme" style="padding-left: 40px;"><strong>{titulo}</strong></h3>
+{body_html}
+</div>
+</div>
+</div>
+</div>"""
+
+
 #  Frase corta dentro de un recuadro simple: el equipo la centra.
 _LARGO_FRASE_CORTA = 220
 
@@ -245,6 +265,8 @@ def _clasificar_recuadro(etiqueta: str, texto_completo: str) -> tuple:
         return "atencion", "No pases de largo"
     if "ejemplo" in n:
         return "ejemplo", "Ejemplos que iluminan"
+    if "laboratorio de ideas" in n:
+        return "laboratorio_ideas", "Laboratorio de ideas"
     return "simple", ""
 
 
@@ -335,6 +357,8 @@ def _tabla_a_recuadro(tabla) -> str:
         return resaltado_atencion(body, titulo)
     if tipo == "ejemplo":
         return resaltado_ejemplo(body, titulo)
+    if tipo == "laboratorio_ideas":
+        return resaltado_laboratorio_ideas(body, titulo)
     return resaltado_simple(body)
 
 
@@ -1140,6 +1164,16 @@ def _espaciar_recuadros(soup):
         else:
             _aire_antes(caja, soup)
             _aire_despues(caja, soup)
+
+    # "Laboratorio de ideas" no es un dp-callout (es un dp-content-block, el
+    # mismo molde que el "Lecture Hook"), pero siempre lleva título: le
+    # corresponde el mismo aire de párrafo entero que a un recuadro con
+    # título, no el espaciado corto del simple.
+    for caja in soup.find_all("div", attrs={"data-title": "Lecture Hook"}):
+        if caja.parent is None:
+            continue
+        _aire_antes(caja, soup)
+        _aire_despues(caja, soup)
 
 
 def _espaciar_destacados(soup):

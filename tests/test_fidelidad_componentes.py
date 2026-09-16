@@ -526,6 +526,36 @@ class TestBusquedaDeElementoEsEspecifica:
         assert el.get_text(strip=True) == "Foro"
 
 
+class TestHastaAdentroDeUnaLista:
+    """El límite `hasta` de pares_de_secciones() puede caer en un <li>
+    adentro de un <ul>/<ol> (el ancla final del comentario terminó en un
+    ítem de lista, no en un párrafo suelto): ese <li> nunca es un hermano de
+    nivel superior que el recorrido visite directo, así que el corte tiene
+    que reconocer cuándo `hasta` es DESCENDIENTE del elemento que sí se
+    visita (regresión real: un expander de módulo 2 se comía toda una
+    sección extra — "No conformidades y acciones de mejora" — porque el
+    límite real terminaba en un <li> de una lista de viñetas)."""
+
+    def test_se_detiene_en_el_li_final_sin_comerse_lo_que_sigue(self):
+        from maquetador.build.componentes_asesor import pares_de_secciones
+        soup = BeautifulSoup(
+            "<div>"
+            "<p><u>Título uno</u></p><p>Cuerpo uno.</p>"
+            "<p><u>Título dos</u></p>"
+            "<p>Antes de la lista.</p>"
+            "<ul><li>Primer punto</li><li>Último punto</li></ul>"
+            "<p>Esto no debería entrar al componente.</p>"
+            "</div>", "html.parser")
+        el = soup.find("p")
+        hasta = soup.find_all("li")[-1]
+        pares, consumidos = pares_de_secciones(el, modo="subrayado", hasta=hasta)
+        assert len(pares) == 2
+        cuerpo_total = "".join(c for _, c in pares)
+        assert "Último punto" in cuerpo_total
+        assert "Esto no debería entrar" not in cuerpo_total
+        assert all("Esto no debería entrar" not in str(c) for c in consumidos)
+
+
 class TestAcordeonSeDetieneEnSuAncla:
     """Un acordeón de un solo globo también tiene un final: el texto anclado
     completo (no solo el arranque) marca hasta dónde llega el componente."""

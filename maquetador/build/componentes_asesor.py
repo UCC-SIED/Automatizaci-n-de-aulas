@@ -170,7 +170,14 @@ def pares_de_secciones(el, modo: str = "auto", hasta=None) -> tuple:
     elementos, actual = [], el
     while actual is not None and getattr(actual, "name", None) in _TAGS_FLUJO:
         elementos.append(actual)
-        if hasta is not None and actual is hasta:
+        # `hasta` puede ser un <li> adentro de un <ul>/<ol> (el ancla final
+        # cayó en un ítem de lista, no en un párrafo suelto): el propio <li>
+        # nunca es un hermano de nivel superior que este recorrido visite
+        # directo, así que hay que mirar también si es DESCENDIENTE de
+        # `actual` — si no, el corte nunca se cumple y el armado se sigue de
+        # largo por el resto de la página.
+        if hasta is not None and (actual is hasta
+                                  or any(a is actual for a in hasta.parents)):
             break
         actual = actual.find_next_sibling()
 

@@ -33,7 +33,14 @@ logger = logging.getLogger("segmenter")
 # mapeo por defecto: sin esta regla, el párrafo queda como <p> suelto (sin
 # negrita, sin marca alguna) y el resto del pipeline no tiene forma de
 # reconocerlo como encabezado.
-_MAMMOTH_STYLE_MAP = "p[style-name='Subtitle'] => h3:fresh"
+#
+# Mammoth tampoco preserva el subrayado por defecto (lo considera una
+# elección de estilo sin significado semántico): un asesor que marca los
+# títulos de un expander/acordeón subrayándolos ("Para maquetación: expander
+# (títulos subrayados)") los pierde del todo — quedan como <p> sueltos,
+# indistinguibles del resto del texto, y _es_encabezado_de_seccion() nunca
+# los reconoce como encabezado.
+_MAMMOTH_STYLE_MAP = "p[style-name='Subtitle'] => h3:fresh\nu => u"
 
 _PAT_NUM = re.compile(r"^(\d+(?:\.\d+)+)\.?\s*")
 

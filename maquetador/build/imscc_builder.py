@@ -1702,6 +1702,7 @@ class GeneradorAula:
         "ejemplos que iluminan", "descubri leyendo", "auriculares on",
         "miralo con lupa", "voces que construyen",
         "¿como vengo hasta aca?", "caja de herramientas para usar",
+        "laboratorio de ideas",
     }
 
     def _avisar_contenido_duplicado(self):

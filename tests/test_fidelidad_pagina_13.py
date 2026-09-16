@@ -2,7 +2,8 @@
 """Correcciones de la revisión del aula en Canvas: página 1.3/1.4 y
 bibliografía, módulos 1 y 2."""
 
-from maquetador.build.snippets import procesar_contenido, resaltado_ejemplo
+from maquetador.build.snippets import (procesar_contenido, resaltado_ejemplo,
+                                       resaltado_laboratorio_ideas)
 
 
 class TestTituloDeEjemplos:
@@ -73,3 +74,33 @@ class TestEspaciadoDelCTADeBibliografia:
         out = procesar_contenido(html)
         assert "Descubrí leyendo" in out
         assert out.count("<p>\xa0</p>") >= 2
+
+
+class TestLaboratorioDeIdeas:
+    """'Laboratorio de ideas' (tabla de 1 columna, catálogo UCC — desafío
+    personal sin entrega, "Lecture Hook") no tenía mapeo en _clasificar_
+    recuadro(): caía al recuadro simple sin título, y encima el título de la
+    tabla ("Laboratorio de ideas") se descartaba del todo al armar el
+    recuadro, sin dejar ni rastro (regresión real: módulo 2, '¡Momento de
+    ensayar!')."""
+
+    def test_tabla_con_etiqueta_arma_el_lecture_hook(self):
+        html = ("<table><tr><td>Laboratorio de ideas</td></tr>"
+                "<tr><td>¡Momento de ensayar! Pensá en un proyecto que "
+                "conozcas.</td></tr></table>")
+        out = procesar_contenido(html)
+        assert "Lecture Hook" in out
+        assert "<strong>Laboratorio de ideas</strong>" in out
+        assert "Momento de ensayar" in out
+
+    def test_lleva_parrafo_de_espaciado_arriba_y_abajo(self):
+        html = ("<p>Texto previo.</p>"
+                "<table><tr><td>Laboratorio de ideas</td></tr>"
+                "<tr><td>¡Momento de ensayar!</td></tr></table>"
+                "<p>Texto posterior.</p>")
+        out = procesar_contenido(html)
+        assert out.count("<p>\xa0</p>") >= 2
+
+    def test_resaltado_laboratorio_ideas_usa_el_titulo_del_catalogo(self):
+        assert "<strong>Laboratorio de ideas</strong>" in \
+            resaltado_laboratorio_ideas("<p>cuerpo</p>")
