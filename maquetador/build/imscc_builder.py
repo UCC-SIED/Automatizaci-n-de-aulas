@@ -540,12 +540,30 @@ class GeneradorAula:
                 else _elegir_foto_docente(
                     getattr(self.spec, "fotos_docente", []) or [], nombre))
         if foto and foto.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"):
-            destino_rel = f"web_resources/Multimedia cargada/{foto.name}"
             (self.working / "web_resources" / "Multimedia cargada").mkdir(
                 parents=True, exist_ok=True)
-            shutil.copy2(foto, self.working / destino_rel)
+            # Recorte cuadrado centrado en el rostro (como hace el equipo a
+            # mano con la herramienta de recorte circular de Fotor): el
+            # círculo final lo sigue poniendo el CSS de abajo, pero sin la
+            # foto centrada en la cara el object-fit la dejaba descentrada o
+            # "estirada" según el encuadre original. Si el recorte falla por
+            # cualquier motivo (foto corrupta, sin OpenCV, etc.) se sigue con
+            # la foto original: no bloquea la generación del paquete.
+            nombre_final = foto.name
+            try:
+                from maquetador.build.imagenes import recortar_rostro_circular
+                recorte = (self.working / "web_resources" / "Multimedia cargada"
+                          / f"{foto.stem}_circular.png")
+                recortar_rostro_circular(foto, recorte)
+                nombre_final = recorte.name
+            except Exception as e:
+                logger.warning(f"  No pude recortar la foto del docente "
+                               f"centrada en el rostro ({e}): uso la original.")
+                shutil.copy2(foto, self.working / "web_resources"
+                            / "Multimedia cargada" / foto.name)
+            destino_rel = f"web_resources/Multimedia cargada/{nombre_final}"
             self.recursos_nuevos.append((_gen_id(), destino_rel))
-            url = "$IMS-CC-FILEBASE$/Multimedia%20cargada/" + quote(foto.name)
+            url = "$IMS-CC-FILEBASE$/Multimedia%20cargada/" + quote(nombre_final)
             html, n = re.subn(
                 r'(<img[^>]*alt="Avatar docente"[^>]*src=")[^"]*(")',
                 lambda m: m.group(1) + url + m.group(2), html)
@@ -560,10 +578,10 @@ class GeneradorAula:
                     html = html.replace(
                         'alt="Avatar docente"',
                         f'alt="Fotografía del docente {xml_escape(nombre)}"')
-                # La foto del docente va en círculo. El recorte real se hace a
-                # mano antes de subirla; acá se fuerza por CSS para que salga
-                # redonda igual, y object-fit evita que se deforme si la foto
-                # no es cuadrada.
+                # La foto del docente va en círculo: el border-radius la
+                # redondea y object-fit evita que se deforme si el recorte de
+                # arriba no llegó a dejarla perfectamente cuadrada (o si se
+                # usó la original sin recortar, por algún error).
                 html = re.sub(
                     r'(<img[^>]*alt="Fotograf[íi]a del docente[^"]*")',
                     r'\1 style="border-radius: 50%; object-fit: cover; '

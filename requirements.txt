@@ -4,6 +4,9 @@
 python-docx>=1.1.0       # Lectura de archivos .docx
 openpyxl>=3.1.0           # Lectura de archivos .xlsx
 Pillow>=10.0.0            # Procesamiento de imágenes
+opencv-python-headless==4.10.0.84  # Detección de rostro (foto del docente en círculo).
+                                    # Fijo en 4.x: la serie 5.x no trae los
+                                    # haarcascades/*.xml empaquetados en cv2.data.
 Jinja2>=3.1.0             # Motor de plantillas HTML
 lxml>=5.0.0               # Procesamiento XML avanzado
 mammoth>=1.8.0            # Conversión DOCX → HTML limpio
