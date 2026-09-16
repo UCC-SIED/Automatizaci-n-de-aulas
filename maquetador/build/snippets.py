@@ -1174,18 +1174,63 @@ def _aire_corto_antes(el):
     previo.append(BeautifulSoup("<br>", "html.parser"))
 
 
+def _aire_corto_despues(el):
+    """Espaciado chico DESPUÉS: un salto de línea al principio del párrafo
+    siguiente (la mitad "después" de _aire_corto_antes)."""
+    sig = el.next_sibling
+    while isinstance(sig, NavigableString) and not sig.strip():
+        sig = sig.next_sibling
+    if sig is None or getattr(sig, "name", None) != "p":
+        return
+    if _es_espaciador(sig):
+        return
+    hijos = [h for h in sig.children if getattr(h, "name", None) or str(h).strip()]
+    if hijos and getattr(hijos[0], "name", None) == "br":
+        return
+    sig.insert(0, BeautifulSoup("<br>", "html.parser"))
+
+
+def _vecino_real(el, atras: bool):
+    """Vecino no-vacío (salteando texto en blanco y párrafos de aire) hacia
+    atrás o hacia adelante."""
+    vecino = el.previous_sibling if atras else el.next_sibling
+    while isinstance(vecino, NavigableString) and not vecino.strip():
+        vecino = vecino.previous_sibling if atras else vecino.next_sibling
+    while vecino is not None and _es_espaciador(vecino):
+        vecino = vecino.previous_sibling if atras else vecino.next_sibling
+    return vecino
+
+
+def _encerrado_entre_texto(caja) -> bool:
+    """¿El recuadro interrumpe un tramo de texto corrido —un párrafo/lista
+    ANTES y otro DESPUÉS, sin que abra ni cierre una sección (encabezado) ni
+    esté pegado a otro componente armado? Ahí el párrafo entero de aire se ve
+    exagerado: lleva el mismo espaciado corto que el recuadro simple.
+    """
+    def _es_texto(vecino):
+        return vecino is not None and getattr(vecino, "name", None) in ("p", "ul", "ol")
+    return _es_texto(_vecino_real(caja, atras=True)) \
+        and _es_texto(_vecino_real(caja, atras=False))
+
+
 def _espaciar_recuadros(soup):
     """Aire alrededor de los recuadros.
 
     El recuadro con título (Profundización, Atención, Ejemplos…) se separa con
-    un párrafo entero. El simple lleva un espaciado MENOR —el shift+enter del
-    equipo—, para que no quede tan despegado del texto que lo rodea.
+    un párrafo entero — salvo que quede encerrado entre texto corrido (ver
+    _encerrado_entre_texto), donde ese aire se ve exagerado y lleva el mismo
+    espaciado corto que el recuadro simple. El simple SIEMPRE lleva el
+    espaciado menor —el shift+enter del equipo—, para que no quede tan
+    despegado del texto que lo rodea.
     """
     for caja in soup.find_all("div", class_="dp-callout"):
         if caja.parent is None or caja.find_parent(class_="dp-callout"):
             continue
         if _es_recuadro_simple(caja):
             _aire_corto_antes(caja)
+        elif _encerrado_entre_texto(caja):
+            _aire_corto_antes(caja)
+            _aire_corto_despues(caja)
         else:
             _aire_antes(caja, soup)
             _aire_despues(caja, soup)

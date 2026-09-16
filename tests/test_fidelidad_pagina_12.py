@@ -90,13 +90,28 @@ class TestRecuadroDuplicado:
 
 
 class TestEspaciadoDeRecuadros:
-    def test_el_recuadro_con_titulo_lleva_parrafo_entero(self):
+    def test_el_recuadro_con_titulo_lleva_parrafo_entero_si_no_esta_encerrado(self):
+        """Un recuadro con título que ABRE o CIERRA una sección (acá, pegado
+        a un h3) lleva el aire de párrafo entero — no está "encerrado entre
+        texto", así que no aplica el espaciado corto."""
+        html = ("<h3>Un tema</h3>"
+                "<table><tr><td>Reflexiona</td></tr>"
+                "<tr><td>¿Qué pensás de esto?</td></tr></table>"
+                "<p>Texto posterior.</p>")
+        out = procesar_contenido(html)
+        assert out.count("<p>\xa0</p>") >= 1
+
+    def test_el_recuadro_con_titulo_encerrado_entre_texto_lleva_espaciado_corto(self):
+        """Un recuadro con título que interrumpe un tramo de texto corrido
+        (párrafo antes Y después, sin abrir/cerrar sección) se ve exagerado
+        con el párrafo entero: lleva el mismo aire corto que el simple."""
         html = ("<p>Texto previo.</p>"
                 "<table><tr><td>Reflexiona</td></tr>"
                 "<tr><td>¿Qué pensás de esto?</td></tr></table>"
                 "<p>Texto posterior.</p>")
         out = procesar_contenido(html)
-        assert out.count("<p>\xa0</p>") >= 2
+        assert out.count("<p>\xa0</p>") == 0
+        assert "<br/>" in out or "<br>" in out
 
     def test_el_recuadro_simple_lleva_espaciado_corto(self):
         """'los recuadros simples llevan un espaciado menor… shift enter'."""

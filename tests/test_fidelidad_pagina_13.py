@@ -62,9 +62,11 @@ class TestEspaciadoDelCTADeBibliografia:
     espaciado, el CTA quedaba pegado a las referencias de bibliografía que lo
     rodean, arriba y abajo (regresión real: 'Deming, W. E. (2000)…' y
     'Garvin, D. A. (1988)…', pegadas al CTA armado desde la referencia de
-    Evans y Lindsay, en el medio)."""
+    Evans y Lindsay, en el medio). Al estar encerrado entre dos referencias
+    de texto corrido (sin abrir/cerrar sección), el aire que le corresponde
+    es el corto, no el párrafo entero — ver _encerrado_entre_texto."""
 
-    def test_el_cta_de_cita_con_link_lleva_parrafo_arriba_y_abajo(self):
+    def test_el_cta_de_cita_con_link_lleva_espaciado_arriba_y_abajo(self):
         html = ("<p>Deming, W. E. (2000). Out of the crisis. Penguin Random "
                 "House.</p>"
                 "<p>Evans, J. R., Lindsay, W. M. (2020). Administración y "
@@ -73,7 +75,7 @@ class TestEspaciadoDelCTADeBibliografia:
                 "<p>Garvin, D. A. (1988). Managing quality. Free Press</p>")
         out = procesar_contenido(html)
         assert "Descubrí leyendo" in out
-        assert out.count("<p>\xa0</p>") >= 2
+        assert "<br/>" in out or "<br>" in out
 
 
 class TestLaboratorioDeIdeas:
