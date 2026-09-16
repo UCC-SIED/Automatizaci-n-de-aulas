@@ -35,7 +35,7 @@ _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 # "quitar" NO se automatiza: a veces es un micro-pedido ("quitar los dos puntos")
 # y borrar el párrafo entero sería un error; se avisa para hacerlo a mano.
 _AUTO = {"subtitulo", "subsubtitulo", "recuadro_simple", "lectura", "video",
-         "podcast", "sin_recuadro", "otra_pagina"}
+         "podcast", "sin_recuadro", "otra_pagina", "enlace_descargable"}
 
 # Nivel de encabezado por acción, según la política de jerarquía de la UCC:
 # H2 es el título de la página, H3 el subtítulo y H4 el sub-subtítulo.
@@ -80,6 +80,11 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     if re.match(r"^\s*(?:para\s+(?:maquetacion|el\s+maquetado)\s*:\s*)?"
                 r"(?:nota\s*[\.:]|texto\s+alt)", n):
         return None
+    # El asesor deja el link real de un documento (a veces sin ningún otro
+    # texto que "debe ser descargable"): el texto anclado tiene que quedar
+    # como link a ese documento, no perderse como charla interna.
+    if re.search(r"https?://\S+", instruccion) and "descargable" in n:
+        return "enlace_descargable"
     # "Para diseño: …" es un encargo para el diseñador (el Genially, por
     # ejemplo), no una instrucción de maquetación.
     if n.startswith(("para diseno", "para diseño")):
@@ -529,3 +534,23 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
             else:
                 c["_contenido_extraido"] = inner
                 el.decompose()
+        elif accion == "enlace_descargable":
+            # El asesor deja el link real en el comentario (a veces sin más
+            # texto que "debe ser descargable"): el texto anclado pasa a ser
+            # el link a ese documento.
+            url_m = re.search(r"https?://\S+", c["instruccion"])
+            texto_link = (c["anclado"] or "").strip()
+            nodo = (el.find(string=lambda s: bool(s) and texto_link in s)
+                    if url_m and texto_link else None)
+            if nodo is not None:
+                url = url_m.group(0).rstrip(".,;)")
+                a = soup.new_tag("a", href=url)
+                a["class"] = "inline_disabled dp-ext-ignore"
+                a["target"] = "_blank"
+                a.string = texto_link
+                antes, _, despues = nodo.partition(texto_link)
+                nodo.replace_with(a)
+                if antes:
+                    a.insert_before(antes)
+                if despues:
+                    a.insert_after(despues)

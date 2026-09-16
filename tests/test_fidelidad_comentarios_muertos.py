@@ -92,3 +92,40 @@ class TestOtraPagina:
         assert "Reflexioná sobre el rol" not in out
         assert "Sigue el resto de la página" in out
         assert coment[0].get("_aplicado") is True
+
+
+class TestEnlaceDescargable:
+    """El asesor a veces deja el link real de un documento en el comentario
+    mismo (sin más texto que la URL y 'debe ser descargable'): el texto
+    anclado en el cuerpo pasa a ser el link a ese documento. Caso real: el
+    "protocolo de transparencia" de una actividad obligatoria, anclado sobre
+    esas palabras dentro del párrafo, con la URL de Google Drive en el
+    comentario."""
+
+    def test_se_reconoce_la_instruccion(self):
+        from maquetador.ingest.docx_comments import _clasificar
+        assert _clasificar(
+            "https://docs.google.com/spreadsheets/d/abc123/edit "
+            "debe ser descargable") == "enlace_descargable"
+
+    def test_el_texto_anclado_se_vuelve_link(self):
+        from bs4 import BeautifulSoup
+        from maquetador.ingest.docx_comments import aplicar_comentarios
+        soup = BeautifulSoup(
+            "<div><p>En el caso de utilizar IA, deberá adjuntar el "
+            "protocolo de transparencia completo.</p></div>", "html.parser")
+        coment = [{
+            "instruccion": "https://docs.google.com/spreadsheets/d/abc123/"
+                          "edit debe ser descargable",
+            "anclado": "protocolo de transparencia",
+            "accion": "enlace_descargable", "autor": "",
+        }]
+        aplicar_comentarios(soup, coment)
+        out = str(soup)
+        a = soup.find("a")
+        assert a is not None
+        assert a["href"] == "https://docs.google.com/spreadsheets/d/abc123/edit"
+        assert a.get_text(strip=True) == "protocolo de transparencia"
+        assert "deberá adjuntar el" in out
+        assert "completo." in out
+        assert coment[0].get("_aplicado") is True

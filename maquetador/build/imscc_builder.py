@@ -47,6 +47,7 @@ from maquetador.build.snippets import (separar_consignas, procesar_contenido,
 from maquetador.build.bibliography import construir_bibliografia
 from maquetador.extract.segmenter import ImagenInline, _MAMMOTH_STYLE_MAP
 from maquetador.ingest.folder_scanner import normalizar
+from maquetador.ingest.docx_comments import extraer_comentarios, aplicar_comentarios
 from processors.cidilabs_builder import DP_WRAPPER_CLASSES
 
 logger = logging.getLogger("imscc_builder")
@@ -885,6 +886,13 @@ class GeneradorAula:
         primeros = soup.find_all(recursive=False)
         if primeros and primeros[0].name == "table":
             primeros[0].decompose()   # tabla de metadatos de la plantilla
+        # Pedidos de maquetación del asesor (comentarios del DOCX): igual que
+        # en las páginas de contenido, un foro/actividad puede traer un link
+        # real en un comentario (p.ej. el protocolo de transparencia) u otro
+        # pedido anclado a texto del documento.
+        comentarios = extraer_comentarios(path)
+        if comentarios:
+            aplicar_comentarios(soup, comentarios)
         for nombre, data, ctype in img.imagenes:
             self.media[f"{prefijo}_{nombre}"] = (data, ctype)
         html = str(soup).replace("__MEDIA__/", f"__MEDIA__/{prefijo}_")

@@ -19,7 +19,7 @@ from maquetador.ingest.docx_comments import _clasificar, _VARIANTE_PANEL, \
 from maquetador.build.componentes_asesor import (construir_panels,
                                                  pares_de_secciones,
                                                  extraer_pares)
-from maquetador.build.snippets import maquetar_actividad
+from maquetador.build.snippets import maquetar_actividad, procesar_contenido
 
 
 class TestVariantesDePanel:
@@ -211,11 +211,12 @@ class TestNivelDeEncabezadosDelCaso:
         """'Pautas de presentación:' puede llegar ya como <h3> (si en el
         DOCX tenía un estilo de título de Word en vez de párrafo normal):
         tiene que terminar en el mismo nivel que sus hermanos armados desde
-        <p> (regresión: bajaba a h4 igual que los encabezados del caso)."""
+        <p> (regresión: bajaba a h4 igual que los encabezados del caso), y
+        se le saca igual el ':' que le sobra."""
         out = maquetar_actividad(
             "<h2>Actividad obligatoria: Caso X</h2>"
             "<h3>Pautas de presentación:</h3>")
-        assert "<h3>Pautas de presentación:</h3>" in out
+        assert "<h3>Pautas de presentación</h3>" in out
 
 
 class TestRotuloEnLineaYDisclaimerDeIA:
@@ -234,6 +235,47 @@ class TestRotuloEnLineaYDisclaimerDeIA:
             "trabajo, que su uso esté correctamente citado.</p>")
         assert "dp-callout" in out
         assert "aporte de la IA" in out
+
+
+class TestEspaciadoYDosPuntosDeRotulosDeSeccion:
+    """Los rótulos de sección (Objetivo, Consigna, Criterios de evaluación,
+    Pautas de presentación, Anexo) llevan aire arriba, igual que cualquier
+    encabezado — antes no lo llevaban, quedaban pegados a lo anterior. Y si
+    llegan ya como encabezado nativo del DOCX (no como <p>"Rótulo: …") con
+    los dos puntos incluidos en el propio texto del título, también hay que
+    sacárselos: el bucle que arma el <h3> desde <p> ya lo hacía, pero el que
+    solo baja de nivel un <h3> nativo no."""
+
+    def test_lleva_aire_arriba(self):
+        out = maquetar_actividad(
+            "<h2>Actividad: Caso X</h2>"
+            "<p>Cuerpo del caso.</p>"
+            "<p>Consigna: Resolvé el caso.</p>")
+        assert "<p>\xa0</p><h3>Consigna</h3>" in out
+
+    def test_encabezado_nativo_pierde_los_dos_puntos(self):
+        out = maquetar_actividad(
+            "<h2>Actividad: Caso X</h2>"
+            "<h3>Pautas de presentación:</h3>")
+        assert "<h3>Pautas de presentación</h3>" in out
+        assert "Pautas de presentación:" not in out
+
+
+class TestCeldaDeTablaEnNegritaNoEsEncabezado:
+    """Una celda de tabla en negrita es un encabezado de COLUMNA, no un
+    subtítulo de la página: no debe promoverse a <h3>/<h4> solo por estar en
+    negrita y tener el largo típico de un subtítulo (regresión real: 'Tipo
+    de inconveniente', encabezado de una tabla de datos en una actividad
+    obligatoria, terminaba como <h4> adentro de su propia celda)."""
+
+    def test_no_se_promueve_a_encabezado(self):
+        html = ("<table><tr><th><p><strong>Tipo de inconveniente</strong></p>"
+                "</th><th><p><strong>Cantidad</strong></p></th></tr>"
+                "<tr><td><p>Climatización</p></td><td><p>42</p></td></tr>"
+                "</table>")
+        out = procesar_contenido(html)
+        assert "<h3>" not in out and "<h4>" not in out
+        assert "<strong>Tipo de inconveniente</strong>" in out
 
 
 class TestJerarquiaDeSubtitulos:

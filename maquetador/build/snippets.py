@@ -882,8 +882,12 @@ def maquetar_actividad(html: str, tema: str = "") -> str:
     # procesar_contenido ya lo bajó a h3 antes de llegar acá) se deja: tiene
     # que terminar en el mismo nivel que sus hermanos armados desde <p>.
     for h3 in soup.find_all("h3"):
-        etiqueta = _norm(re.sub(r"[:\s]+$", "", h3.get_text(" ", strip=True)))
-        if etiqueta in _SECCIONES_ACTIVIDAD:
+        texto_sin_dp = re.sub(r"[:\s]+$", "", h3.get_text(" ", strip=True))
+        if _norm(texto_sin_dp) in _SECCIONES_ACTIVIDAD:
+            # Rótulo de sección ya nativo (no pasa por el bucle de <p> de más
+            # abajo, que es el que le saca los dos puntos a los que arrancan
+            # como párrafo): se los saca acá también.
+            h3.string = texto_sin_dp
             continue
         h3.name = "h4"
 
@@ -913,6 +917,13 @@ def maquetar_actividad(html: str, tema: str = "") -> str:
             nuevo = soup.new_tag("p")
             nuevo.string = resto
             h3.insert_after(nuevo)
+
+    # Los rótulos de sección llevan aire arriba, tanto si vinieron de un
+    # <p> "Consigna: …" como si ya eran un encabezado nativo del DOCX
+    # ("Pautas de presentación").
+    for h3 in soup.find_all("h3"):
+        if _norm(h3.get_text(" ", strip=True)) in _SECCIONES_ACTIVIDAD:
+            _aire_antes(h3, soup)
 
     return str(soup)
 
@@ -1558,6 +1569,11 @@ def procesar_contenido(html: str, tema: str = "") -> str:
     for p in soup.find_all("p"):
         if p.find_parent(class_=("dp-callout", "dp-panels-wrapper",
                                   "dp-flip-card-deck")):
+            continue
+        if p.find_parent(["td", "th"]):
+            # Una celda de tabla en negrita es un encabezado de columna, no
+            # un subtítulo de la página (pasaba con "Tipo de inconveniente",
+            # que terminaba de <h3>/<h4> adentro de la propia celda).
             continue
         strongs = p.find_all("strong")
         if not strongs:
