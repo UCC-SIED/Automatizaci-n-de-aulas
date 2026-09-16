@@ -166,7 +166,13 @@ def _es_encabezado_de_seccion(el, modo: str = "auto") -> bool:
         return True
     if len(texto) > 90:
         return False
-    if _cubre(el.find_all("u")):
+    # El subrayado solo cuenta en modo "auto"/"subrayado": en "negrita" el
+    # asesor marcó los títulos con negrita a propósito, y un párrafo
+    # subrayado por otro motivo (p.ej. "Aplicación en proyectos"/"Caso
+    # aplicado:", subtítulos DENTRO de cada tab) no debe abrir una sección
+    # propia — pasaba con "Principio N.° 1: Enfoque al cliente", que
+    # terminaba con 3 tabs por principio en vez de 1.
+    if modo != "negrita" and _cubre(el.find_all("u")):
         return True
     if modo == "subrayado":
         return False
@@ -296,7 +302,14 @@ def extraer_pares(el, instruccion: str = "", hasta=None):
     elif "negrita" in plano:
         modos = ("negrita",)
     else:
-        modos = ("auto", "negrita")
+        # "negrita" primero: es la marca más deliberada (un prefijo en
+        # negrita puntual, como "Principio N.° 1: Enfoque al cliente") y no
+        # debería perder frente a "auto", que también matchea cualquier
+        # párrafo TOTALMENTE subrayado —un subtítulo suelto dentro del
+        # cuerpo, como "Aplicación en proyectos"/"Caso aplicado:", puede
+        # colar antes y armar un tab por cada subtítulo interno en vez de
+        # uno por "Principio".
+        modos = ("negrita", "auto")
     for modo in modos:
         pares, consumidos = pares_de_secciones(el, modo=modo, hasta=hasta)
         if len(pares) >= 2:

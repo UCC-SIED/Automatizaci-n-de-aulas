@@ -103,6 +103,58 @@ class TestPanelDesdeSubtitulos:
         assert 'dp-panel-heading">El diagrama de Ishikawa</h3>' not in out
 
 
+class TestPrefijoEnNegritaLeGanaAlSubrayadoSuelto:
+    """Cuando el comentario no dice "subrayado" ni "negrita" explícitamente
+    (p.ej. "TABS horizontal. Aclaración: si no entra el título completo
+    poner Principio 1 / Principio 2 / etc y el título dentro del TAB"), y el
+    tramo tiene AMBAS marcas —un prefijo en negrita que abre cada sección
+    real ("Principio N.° 1: Enfoque al cliente") Y subtítulos internos
+    totalmente subrayados que NO deberían abrir una sección propia
+    ("Aplicación en proyectos", "Caso aplicado:")— el modo "negrita" debe
+    probarse ANTES que "auto": si "auto" gana primero (matchea por el
+    subrayado completo), arma un tab por cada subtítulo interno en vez de
+    uno por "Principio" (regresión real: 8 tabs "Aplicación en
+    proyectos"/"Caso aplicado" en vez de 4 "Principio N.° 1".."4")."""
+
+    HTML = (
+        "<div>"
+        "<p>A continuación, se desarrollan los principales principios.</p>"
+        "<p><strong><u>Principio N.° 1</u></strong>: Enfoque al cliente</p>"
+        "<p>La alineación hacia la satisfacción de necesidades.</p>"
+        "<p><u>Aplicación en proyectos</u></p>"
+        "<ul><li>Identificación de stakeholders clave</li></ul>"
+        "<p><u>Caso aplicado</u>:</p>"
+        "<p>Una empresa desarrolla un proyecto para su plataforma.</p>"
+        "<p><strong><u>Principio N.° 2</u></strong>: Liderazgo</p>"
+        "<p>El liderazgo implica establecer una dirección clara.</p>"
+        "<p><u>Aplicación en proyectos</u></p>"
+        "<ul><li>Definición de estándares de calidad</li></ul>"
+        "</div>")
+    INSTR = ("Para maquetación: TABS horizontal Aclaración: si no entra el "
+            "título completo poner Principio 1 / Principio 2 / etc y el "
+            "título dentro del TAB")
+
+    def _aplicar(self):
+        soup = BeautifulSoup(self.HTML, "html.parser")
+        coment = [{"instruccion": self.INSTR,
+                   "anclado": "Principio N.° 1: Enfoque al cliente",
+                   "accion": "tabs", "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        return BeautifulSoup(str(soup), "html.parser")
+
+    def test_un_tab_por_principio_no_por_subtitulo_interno(self):
+        soup = self._aplicar()
+        titulos = [h.get_text(strip=True)
+                   for h in soup.find_all(class_="dp-panel-heading")]
+        assert titulos == ["Principio N.° 1", "Principio N.° 2"]
+
+    def test_los_subtitulos_internos_quedan_como_contenido(self):
+        soup = self._aplicar()
+        wrapper = soup.find(class_="dp-panels-wrapper")
+        assert "Aplicación en proyectos" in str(wrapper)
+        assert "Caso aplicado" in str(wrapper)
+
+
 class TestNoRompeLoQueYaAndaba:
     def test_sigue_armando_desde_nombre_contenido(self):
         soup = BeautifulSoup(
