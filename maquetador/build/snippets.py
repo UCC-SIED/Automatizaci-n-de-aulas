@@ -24,7 +24,8 @@ import re
 import unicodedata
 
 from bs4 import BeautifulSoup, NavigableString
-from maquetador.build.componentes_asesor import construir_flipcards, construir_panels
+from maquetador.build.componentes_asesor import (construir_flipcards,
+                                                   construir_panels, aplicar_cita)
 
 # Acento institucional por aula base. Los snippets se arman con el de posgrado
 # y al final se repintan según el tema del curso (ver aplicar_acento_del_tema):
@@ -405,6 +406,18 @@ def indexar_figuras_diseno(archivos: list) -> dict:
     return indice
 
 
+def _figura_diseno_es_expandible(p) -> bool:
+    """¿La 'Nota'/'Texto alternativo' que sigue al epígrafe describe una
+    figura densa en texto (tipo tabla), o el asesor pidió expandirla? Mismos
+    marcadores que _figura_es_expandible, mirando los párrafos siguientes
+    (donde suelen ir esa nota y el texto alternativo)."""
+    trozos = [p.get_text(" ", strip=True)]
+    for vecino in list(p.find_next_siblings())[:3]:
+        trozos.append(vecino.get_text(" ", strip=True))
+    texto = _norm(" ".join(t for t in trozos if t))
+    return any(kw in texto for kw in _FIG_EXPANDIBLE_KW)
+
+
 def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
                               usadas: set) -> str:
     """Donde hay un epígrafe 'Figura N.' con una imagen embebida al lado,
@@ -469,9 +482,12 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
             vecino["src"] = f"__DISENO__/{path.name}"
             usadas.add(path)
         elif clase == "table":
+            expandible = _figura_diseno_es_expandible(p)
+            clase_img = _FIG_CLASES_EXPANDIBLE if expandible else _FIG_CLASES_ESTATICA
+            ancho = 700 if expandible else 600
             nueva = BeautifulSoup(
-                f'<p style="text-align: center;"><img class="{_FIG_CLASES_ESTATICA}" '
-                f'style="width: 600px; height: auto;" '
+                f'<p style="text-align: center;"><img class="{clase_img}" '
+                f'style="width: {ancho}px; height: auto;" '
                 f'src="__DISENO__/{path.name}" alt="{texto[:120]}" '
                 f'loading="lazy"></p>', "html.parser")
             vecino.replace_with(nueva)
@@ -485,6 +501,9 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
             #
             # El epígrafe va ARRIBA de la imagen ("Estándares para Recursos
             # Visuales y Datos" y las aulas a mano); salía invertido.
+            expandible = _figura_diseno_es_expandible(p)
+            clase_img = _FIG_CLASES_EXPANDIBLE if expandible else _FIG_CLASES_ESTATICA
+            ancho = 700 if expandible else 600
             resto = texto[m.end():].strip(" .:–—-")
             img_html = ""
             if resto:
@@ -493,8 +512,8 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
                     f'<span style="font-size: 10pt;"><strong>{texto}</strong>'
                     '</span></p>')
             img_html += (
-                f'<p style="text-align: center;"><img class="{_FIG_CLASES_ESTATICA}" '
-                f'style="width: 600px; height: auto;" '
+                f'<p style="text-align: center;"><img class="{clase_img}" '
+                f'style="width: {ancho}px; height: auto;" '
                 f'src="__DISENO__/{path.name}" alt="{texto[:120]}" '
                 f'loading="lazy"></p>')
             p.replace_with(BeautifulSoup(img_html, "html.parser"))
@@ -616,6 +635,31 @@ _PAT_URL_VIDEO = re.compile(r"youtu\.?be|youtube\.com|vimeo\.com", re.I)
 _PAT_INTRO_CITA = re.compile(
     r"\b(dice|dicen|señala|senala|sostiene|afirma|plantea|expresa|define|"
     r"menciona|agrega|explica|describe|resume)\b[^:]{0,80}:$")
+
+# Cita APA al final de un párrafo: "(Autor, 2021)" / "(Instituto…, 2021a)".
+_PAT_APA_YEAR_FINAL = re.compile(r"\([^()]*,\s*\d{4}[a-z]?\)\.?\s*$")
+
+
+def _definiciones_citadas_tras_pregunta(soup):
+    """Párrafo que define un término, citado en formato APA, justo debajo de
+    un encabezado en forma de pregunta ("¿Qué es…?"): es una cita textual
+    aunque no traiga una frase introductoria con verbo de decir (no hay
+    "define:" antes, el encabezado ya cumple ese rol). Sangría doble, como
+    cualquier otra cita — pedido explícito del usuario, no viene marcado por
+    un comentario del asesor."""
+    for h in soup.find_all(["h2", "h3", "h4", "h5", "h6"]):
+        titulo = h.get_text(" ", strip=True)
+        if not titulo.startswith("¿"):
+            continue
+        p = h.find_next_sibling()
+        while p is not None and _es_espaciador(p):
+            p = p.find_next_sibling()
+        if p is None or getattr(p, "name", None) != "p":
+            continue
+        texto = p.get_text(" ", strip=True)
+        if len(texto) < 150 or not _PAT_APA_YEAR_FINAL.search(texto):
+            continue
+        aplicar_cita(p)
 
 
 def _detectar_cue(texto_norm: str) -> str:
@@ -1082,9 +1126,12 @@ def _procesar_genially(soup):
 _PAT_ALT_PARRAFO = re.compile(
     r"^texto\s*(?:alternativo|alt)\s*[:\.]\s*(.+)$", re.I | re.S)
 
-# Marcadores con los que el asesor pide que la figura se pueda ampliar.
+# Marcadores con los que el asesor pide que la figura se pueda ampliar, o que
+# describen una figura densa en texto (tipo tabla): en ambos casos hace falta
+# poder ampliarla para leerla, la haya pedido el asesor o no.
 _FIG_EXPANDIBLE_KW = ("expandible", "expandida", "ampliable",
-                      "clic para ampliar", "click para ampliar")
+                      "clic para ampliar", "click para ampliar",
+                      "resumen", "sintesis")
 
 
 def _es_espaciador(el) -> bool:
@@ -1160,13 +1207,19 @@ def _aire_corto_antes(el):
     """Espaciado chico: un salto de línea al final del párrafo anterior.
 
     Es el shift+enter que hace el equipo: separa menos que un párrafo vacío.
+    Si el vecino no es un <p> (p.ej. una lista), no hay adentro de qué
+    colgar el <br>: se inserta como su propio párrafo corto, en vez de
+    quedar sin aire.
     """
     previo = el.previous_sibling
     while isinstance(previo, NavigableString) and not previo.strip():
         previo = previo.previous_sibling
-    if previo is None or getattr(previo, "name", None) != "p":
+    if previo is None:
         return
     if _es_espaciador(previo):
+        return
+    if getattr(previo, "name", None) != "p":
+        el.insert_before(BeautifulSoup("<p><br></p>", "html.parser"))
         return
     hijos = [h for h in previo.children if getattr(h, "name", None) or str(h).strip()]
     if hijos and getattr(hijos[-1], "name", None) == "br":
@@ -1180,9 +1233,12 @@ def _aire_corto_despues(el):
     sig = el.next_sibling
     while isinstance(sig, NavigableString) and not sig.strip():
         sig = sig.next_sibling
-    if sig is None or getattr(sig, "name", None) != "p":
+    if sig is None:
         return
     if _es_espaciador(sig):
+        return
+    if getattr(sig, "name", None) != "p":
+        el.insert_after(BeautifulSoup("<p><br></p>", "html.parser"))
         return
     hijos = [h for h in sig.children if getattr(h, "name", None) or str(h).strip()]
     if hijos and getattr(hijos[0], "name", None) == "br":
@@ -1228,6 +1284,7 @@ def _espaciar_recuadros(soup):
             continue
         if _es_recuadro_simple(caja):
             _aire_corto_antes(caja)
+            _aire_corto_despues(caja)
         elif _encerrado_entre_texto(caja):
             _aire_corto_antes(caja)
             _aire_corto_despues(caja)
@@ -1338,7 +1395,8 @@ def _nota_a_figcaption(soup):
         # lo de adentro, no el <figure>, que es un bloque de ancho fijo.
         fig["class"] = (["mx-auto", "d-block"]
                         + (clases or _FIG_CLASES_ESTATICA.split()))
-        fig["style"] = "width: 700px; height: auto; text-align: center;"
+        ancho = 700 if "dp-popup-image" in clases else 600
+        fig["style"] = f"width: {ancho}px; height: auto; text-align: center;"
 
         cap = soup.new_tag("figcaption")
         interior = BeautifulSoup(
@@ -1563,6 +1621,10 @@ def procesar_contenido(html: str, tema: str = "") -> str:
         if inner:
             bq.replace_with(BeautifulSoup(resaltado_simple(inner), "html.parser"))
 
+    # 1.55 Definición citada (APA) justo debajo de un encabezado-pregunta
+    #      ("¿Qué es…?"): cita textual con sangría doble, sin caja.
+    _definiciones_citadas_tras_pregunta(soup)
+
     # 1.6 Párrafos con frases-señal → recuadros (Lectura / Video / Atención)
     _procesar_cues_parrafo(soup)
 
@@ -1608,12 +1670,17 @@ def procesar_contenido(html: str, tema: str = "") -> str:
 
     # 2. Subtítulos en negrita → <h3> (el dp-wrapper los estiliza). Solo
     # texto SUELTO del flujo principal — no el cuerpo de un componente que
-    # otro paso ya armó (recuadro/acordeón/flip-card): ahí "en negrita y
-    # corto" puede ser contenido legítimo (p.ej. el placeholder de Genially),
-    # no un subtítulo, y convertirlo duplicaba el título del recuadro.
+    # otro paso ya armó (recuadro/flip-card): ahí "en negrita y corto" puede
+    # ser contenido legítimo (p.ej. el placeholder de Genially), no un
+    # subtítulo, y convertirlo duplicaba el título del recuadro.
+    # Dentro de un acordeón/tabs (dp-panels-wrapper) el mismo patrón SÍ es un
+    # sub-subtítulo real (p.ej. "Gestión ambiental" abriendo el panel de ISO
+    # 14001), pero nunca se promueve a <h3>: compite con el propio título del
+    # panel (dp-panel-heading). Ahí queda "lead" + negrita, más grande pero
+    # sin asumir la categoría de encabezado — como el resto del catálogo.
     for p in soup.find_all("p"):
-        if p.find_parent(class_=("dp-callout", "dp-panels-wrapper",
-                                  "dp-flip-card-deck")):
+        en_panel = p.find_parent(class_="dp-panels-wrapper") is not None
+        if p.find_parent(class_=("dp-callout", "dp-flip-card-deck")):
             continue
         if p.find_parent(["td", "th"]):
             # Una celda de tabla en negrita es un encabezado de columna, no
@@ -1628,11 +1695,12 @@ def procesar_contenido(html: str, tema: str = "") -> str:
         if (texto and texto == texto_strong and 10 <= len(texto) <= 90
                 and not texto.endswith(":") and not _NO_H3.match(texto)
                 and not p.find("img")):
-            if _introducido_por_dos_puntos(p):
-                # El párrafo anterior termina en ":": esto es lo que estaba
-                # introduciendo, no un subtítulo nuevo. Queda como párrafo
-                # destacado (estilo lead, en negrita), que es como lo maqueta
-                # el equipo a mano.
+            if en_panel or _introducido_por_dos_puntos(p):
+                # El párrafo anterior termina en ":" (esto es lo que estaba
+                # introduciendo, no un subtítulo nuevo) o el párrafo vive
+                # dentro de un panel (nunca se promueve a heading ahí): queda
+                # como párrafo destacado (estilo lead, en negrita), que es
+                # como lo maqueta el equipo a mano.
                 p["class"] = (p.get("class") or []) + ["lead", "dp-text-bold"]
                 continue
             h3 = soup.new_tag("h3")
@@ -1668,10 +1736,12 @@ def procesar_contenido(html: str, tema: str = "") -> str:
         ya_estilada = any(c == "dp-popup-image" or c.startswith("dp-image-")
                           for c in clases)
         if not ya_estilada:
-            img["class"] = (_FIG_CLASES_EXPANDIBLE if _figura_es_expandible(img)
+            expandible = _figura_es_expandible(img)
+            img["class"] = (_FIG_CLASES_EXPANDIBLE if expandible
                             else _FIG_CLASES_ESTATICA)
             if not img.get("style"):
-                img["style"] = "width: 600px; height: auto;"
+                ancho = 700 if expandible else 600
+                img["style"] = f"width: {ancho}px; height: auto;"
         # Centrar el párrafo contenedor aunque Word haya envuelto la imagen en
         # <strong>/<span>: hay que subir hasta el <p>, no mirar el padre directo.
         contenedor = img.find_parent("p")

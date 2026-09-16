@@ -153,7 +153,27 @@ class TestFiguraDeDisenoDesdeMarcador:
         out = self._generar()
         assert out.index("Cláusulas del sistema") < out.index("<img")
 
-    def test_usa_el_borde_estatico(self):
+    def test_es_expandible_por_el_texto_alternativo_resumen(self):
+        """'Breve resumen de las cláusulas…' describe una figura densa en
+        texto (tipo tabla, difícil de leer en miniatura): se puede ampliar
+        con clic (sombreada), aunque el asesor no lo haya pedido con la
+        palabra 'expandible'. Pedido explícito del usuario ('Figura 5')."""
         out = self._generar()
         assert "dp-image-bordered" in out
+        assert "dp-popup-image" in out
+        assert "dp-image-shadow" in out
+        assert "width: 700px" in out
+
+    def test_sin_palabra_clave_de_densidad_queda_estatica_en_600(self):
+        """Una figura común (sin 'resumen'/'síntesis'/'expandible' en el
+        epígrafe ni en el texto alternativo) no se vuelve expandible: solo
+        las figuras densas en texto lo piden."""
+        from pathlib import Path
+        from maquetador.build.snippets import reemplazar_figuras_diseno
+        html = ('<p>Figura 1. Evolución de la gestión de calidad</p>'
+                '<p>Texto alternativo: Línea de tiempo de la evolución '
+                'histórica.</p>')
+        out = reemplazar_figuras_diseno(
+            html, 1, {(1, "figura", 1): Path("M_1 fig 1.jpg")}, set())
         assert "dp-popup-image" not in out
+        assert "width: 600px" in out

@@ -423,6 +423,12 @@ def construir_popover(palabra: str, contenido: str, n: int) -> tuple:
 
 
 def aplicar_cita(el) -> None:
-    """Sangra el párrafo anclado (sin caja, pedido del usuario)."""
+    """Sangra el párrafo anclado (sin caja, pedido del usuario).
+
+    Doble sangría (izquierda Y derecha), como la cita textual larga en
+    formato APA: sangrar solo de un lado no alcanza, se ve como un párrafo
+    corrido con un margen cualquiera, no como una cita.
+    """
     estilo = el.get("style", "").rstrip("; ")
-    el["style"] = (estilo + "; " if estilo else "") + "margin-left: 40px;"
+    el["style"] = ((estilo + "; " if estilo else "")
+                   + "margin-left: 40px; margin-right: 40px;")

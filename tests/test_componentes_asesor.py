@@ -98,10 +98,11 @@ class TestConstruirPopover:
 
 
 class TestAplicarCita:
-    def test_agrega_sangria(self):
+    def test_agrega_sangria_doble(self):
         el = BeautifulSoup("<p>Una cita textual.</p>", "html.parser").find("p")
         aplicar_cita(el)
         assert "margin-left: 40px" in el.get("style", "")
+        assert "margin-right: 40px" in el.get("style", "")
 
 
 class TestCableado:

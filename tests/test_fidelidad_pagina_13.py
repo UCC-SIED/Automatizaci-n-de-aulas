@@ -78,6 +78,88 @@ class TestEspaciadoDelCTADeBibliografia:
         assert "<br/>" in out or "<br>" in out
 
 
+class TestCitaDeDefinicionTrasPregunta:
+    """La definición de SGC, citada en formato APA narrativo ("(Instituto
+    Argentino de Normalización y Certificación, 2015a)"), va justo debajo del
+    encabezado pregunta "¿Qué es un sistema de gestión de calidad?" y no
+    tenía NINGÚN estilo: quedaba como párrafo corrido en vez de cita con
+    sangría doble. No hay comentario del asesor que la marque como cita (se
+    verificó contra el DOCX real) — el pedido es explícito del usuario, así
+    que se detecta por el patrón encabezado-pregunta + cita APA al final."""
+
+    def test_definicion_citada_lleva_sangria_doble(self):
+        html = ("<h4>¿Qué es un sistema de gestión de calidad?</h4>"
+                "<p>Un Sistema de Gestión de la Calidad (SGC) es un conjunto "
+                "de políticas, procesos, procedimientos de trabajo y recursos "
+                "interrelacionados que una organización establece para "
+                "asegurar que sus productos o servicios cumplen con los "
+                "requisitos definidos y promueven la mejora continua. "
+                "(Instituto Argentino de Normalización y Certificación, "
+                "2015a)</p>"
+                "<p>En otras palabras, un sistema de gestión de calidad "
+                "tiene por propósito organizar.</p>")
+        out = procesar_contenido(html)
+        assert "margin-left: 40px; margin-right: 40px;" in out
+
+    def test_no_marca_un_parrafo_corto_tras_la_pregunta(self):
+        """Sin cita APA de verdad al final (o muy corto), no es una
+        definición citada: no hay que sangrar cualquier párrafo que siga a
+        un encabezado-pregunta."""
+        html = ("<h4>¿Cómo se vincula un sistema de gestión de calidad a la "
+                "gestión de proyectos?</h4>"
+                "<p>Desde la perspectiva de gestión de proyectos, un SGC no "
+                "es solo un marco documental.</p>")
+        out = procesar_contenido(html)
+        assert "margin-left: 40px" not in out
+
+
+class TestSubSubtituloDentroDeUnPanel:
+    """'Gestión ambiental' y 'Seguridad y salud ocupacional' (ISO 14001/45001)
+    abren cada panel del acordeón como un párrafo TODO en negrita: quedaban
+    sin ningún estilo (ni h3 —no correspondía, competía con el propio título
+    del panel— ni el 'lead' que sí lleva cualquier otro subtítulo en negrita
+    del catálogo). El pedido del usuario es exactamente ese: más grande y en
+    negrita, pero sin asumir la categoría de heading."""
+
+    def test_parrafo_en_negrita_al_abrir_un_panel_es_lead(self):
+        html = ('<div class="dp-panels-wrapper dp-accordion-default">'
+                '<div class="dp-panel-group">'
+                '<h3 class="dp-panel-heading">ISO 14001</h3>'
+                '<div class="dp-panel-content">'
+                '<p><strong>Gestión ambiental</strong></p>'
+                '<p>La norma ISO 14001 establece los requisitos para un '
+                'sistema de gestión ambiental.</p>'
+                '</div></div></div>')
+        out = procesar_contenido(html)
+        assert '<p class="lead dp-text-bold"><strong>Gestión ambiental' in out
+        assert "<h3>Gestión ambiental</h3>" not in out
+
+
+class TestEspaciadoDeRecuadroTrasUnaLista:
+    """'Ejemplos que iluminan' (ISO 9001, aplicación logística) quedaba SIN
+    aire arriba cuando lo precedía una <ul> en vez de un <p>: _aire_corto_
+    antes solo sabía colgar el <br> del final de un <p>, y con cualquier otro
+    vecino (una lista) simplemente no hacía nada — ni corto ni entero."""
+
+    def test_recuadro_encerrado_tras_una_lista_lleva_aire_corto_arriba(self):
+        html = ("<ul><li>Planificar objetivos y metas</li>"
+                "<li>Asegurar la satisfacción del cliente</li></ul>"
+                '<div class="dp-callout dp-callout-placeholder card '
+                'dp-callout-position-default dp-callout-color-dp-primary '
+                'dp-callout-type-info">'
+                '<div class="dp-callout-side-emphasis"></div>'
+                '<div class="card-body">'
+                '<h3 class="card-title">Ejemplos que iluminan</h3>'
+                '<p>En un proyecto logístico, aplicar ISO 9001 implica '
+                'definir indicadores.</p>'
+                '</div></div>'
+                '<p>La norma ISO 9001:2015 se estructura bajo el modelo de '
+                'alto nivel.</p>')
+        out = procesar_contenido(html)
+        assert "</ul><p><br/></p><div" in out
+        assert "Ejemplos que iluminan" in out
+
+
 class TestLaboratorioDeIdeas:
     """'Laboratorio de ideas' (tabla de 1 columna, catálogo UCC — desafío
     personal sin entrega, "Lecture Hook") no tenía mapeo en _clasificar_

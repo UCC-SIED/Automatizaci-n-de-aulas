@@ -61,3 +61,22 @@ class TestFraseCortaCentrada:
     def test_envuelve_el_contenido_suelto(self):
         html = resaltado_simple(f"<em>{FRASE}</em>")
         assert '<p class="card-text" style="text-align: center;">' in html
+
+
+class TestEspaciadoDelRecuadroSimple:
+    """El recuadro simple (sin título) llevaba el aire corto solo ARRIBA:
+    _espaciar_recuadros nunca llamaba a _aire_corto_despues en esa rama.
+    Regresión real: '¿Estamos creando las condiciones para que el entregable
+    sea correcto, útil y aceptado?' (1.1/1.2) quedaba pegado al párrafo
+    siguiente. El pedido explícito es aire arriba Y abajo, el espaciado
+    chico."""
+
+    def test_lleva_aire_corto_arriba_y_abajo(self):
+        html = ('<p>En términos prácticos, esto significa pasar de preguntar '
+                'también:</p>'
+                f'{resaltado_simple(f"<p><em>{FRASE}</em></p>")}'
+                '<p>Esta diferencia es central para la dirección de '
+                'proyectos.</p>')
+        out = procesar_contenido(html)
+        assert "<br/></p><div" in out
+        assert "</div>\n</div><p><br/>" in out
