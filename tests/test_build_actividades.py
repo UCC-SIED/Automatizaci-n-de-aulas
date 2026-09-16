@@ -281,3 +281,30 @@ def test_cuerpo_topic_con_diseno_deja_aire_al_final():
         None, base_body, "<p>¡Bienvenidos!</p>")
     assert resultado.rstrip().endswith("<p>\xa0</p></div></div>")
     assert "¡Bienvenidos!" in resultado
+
+
+def test_cuerpo_topic_con_diseno_encuentra_el_bloque_sin_la_clase_bare():
+    """El aula base NO siempre marca el bloque de contenido real con la
+    clase bare "content-block" (la variante que trae 'Foro de apertura'):
+    los foros obligatorios de módulo, por ejemplo, solo traen "kl_lectures2"
+    junto a "dp-content-block" (la única clase universal). Buscar solo por
+    "content-block" nunca encontraba ese bloque — el foro se armaba con el
+    wrapper mínimo, sin banner ni navegación del aula base, como si el
+    diseño no tuviera la estructura esperada."""
+    from maquetador.build.imscc_builder import GeneradorAula
+
+    base_body = (
+        '<div id="dp-wrapper">'
+        '<div class="dp-banner-image"><img src="banner.png"></div>'
+        '<div class="dp-content-block kl_introduction">'
+        '<p class="lead dp-progress-placeholder">placeholder oculto</p>'
+        '</div>'
+        '<div class="dp-content-block kl_lectures2">'
+        '<h2 class="dp-has-icon"></h2>'
+        '<p>&nbsp;</p><p>&nbsp;</p>'
+        '</div></div>')
+    resultado = GeneradorAula._cuerpo_topic_con_diseno(
+        None, base_body, "<p>Consigna del foro.</p>")
+    assert resultado is not None
+    assert "dp-banner-image" in resultado
+    assert "Consigna del foro." in resultado

@@ -934,7 +934,12 @@ class GeneradorAula:
         placeholder. Devuelve None si el cuerpo base no tiene la estructura."""
         soup = BeautifulSoup(base_body, "html.parser")
         cont_div, h2 = None, None
-        for cb in soup.find_all("div", class_="content-block"):
+        # "dp-content-block" es la clase universal (todo bloque la tiene);
+        # la bare "content-block" es solo una variante que traen ALGUNOS
+        # topics (p.ej. "Foro de apertura") — otros, como los foros
+        # obligatorios de módulo ("kl_lectures2"), no la tienen y quedaban
+        # sin encontrar nunca su bloque de contenido real.
+        for cb in soup.find_all("div", class_="dp-content-block"):
             if cb.find("h2"):
                 cont_div, h2 = cb, cb.find("h2")
                 break
