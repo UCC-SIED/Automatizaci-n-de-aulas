@@ -1368,6 +1368,25 @@ def _figura_vecina(p):
 _PAT_NOTA_FIGURA = re.compile(r"^nota\s*[\.:]\s*(.+)$", re.I | re.S)
 
 
+def _nota_suelta_en_negrita(soup):
+    """Una 'Nota:' que no es el pie de una figura (_nota_a_figcaption ya se
+    llevó esas) es contenido válido tal cual está, en el cuerpo de la
+    página — solo en negrita, sin centrar ni encuadrar: pedido explícito del
+    usuario ("está bien que esté dentro del contenido")."""
+    for p in soup.find_all("p"):
+        if p.find_parent(class_=("dp-callout", "dp-panels-wrapper")):
+            continue
+        if p.find("strong") or p.find("img"):
+            continue
+        texto = p.get_text(" ", strip=True)
+        if not _PAT_NOTA_FIGURA.match(texto):
+            continue
+        strong = soup.new_tag("strong")
+        for hijo in list(p.children):
+            strong.append(hijo)
+        p.append(strong)
+
+
 def _nota_a_figcaption(soup):
     """Imagen + 'Nota. …' → <figure> con <figcaption>.
 
@@ -1751,6 +1770,7 @@ def procesar_contenido(html: str, tema: str = "") -> str:
     # Con las figuras ya estiladas: el pie de fuente pasa a <figcaption> y las
     # clases se mudan al <figure> (la imagen queda limpia, como a mano).
     _nota_a_figcaption(soup)
+    _nota_suelta_en_negrita(soup)
     _espaciar_figuras(soup)
     _espaciar_recuadros(soup)
     _espaciar_destacados(soup)
@@ -1781,10 +1801,14 @@ def procesar_contenido(html: str, tema: str = "") -> str:
     # leyendo" pegado a las referencias antes y después).
     _espaciar_recuadros(soup)
 
-    # 4. Epígrafes (Figura N. / Nota.) → centrados, tamaño 10pt
+    # 4. Epígrafes (Figura N.) → centrados, tamaño 10pt. Una "Nota:" que NO
+    # es el pie de una figura (esas ya se consumieron en _nota_a_figcaption,
+    # que las decompone) es contenido normal, no un epígrafe — ya la dejó
+    # en negrita _nota_suelta_en_negrita más arriba; centrarla y encajarla
+    # como epígrafe encima de eso duplicaba el estilo y la descuadraba.
     for p in soup.find_all("p"):
         texto = p.get_text(" ", strip=True)
-        if _PAT_CAPTION.match(texto) or re.match(r"^nota\s*[\.:]", texto, re.I):
+        if _PAT_CAPTION.match(texto):
             p["class"] = "dp-heading-ignore"
             p["style"] = "text-align: center;"
             inner = f'<span style="font-size: 10pt;"><strong>{texto}</strong></span>'

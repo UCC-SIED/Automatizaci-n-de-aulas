@@ -38,7 +38,35 @@ class TestNotaAFigcaption:
     def test_le_saca_la_palabra_nota(self):
         out = procesar_contenido(BLOQUE)
         assert "Nota" not in out
-        assert "Figura elaborada con base en" in out
+
+
+class TestNotaSueltaSinFigura:
+    """Una 'Nota:' que NO tiene una figura al lado es contenido normal del
+    cuerpo de la página (un comentario/aclaración del docente), no el pie de
+    una figura: va en negrita, sin centrar ni encuadrar. Antes caía en el
+    mismo tratamiento de epígrafe centrado que 'Nota. Figura elaborada…',
+    aunque no hubiera ninguna figura cerca — quedaba centrada como si fuera
+    el pie de una imagen inexistente."""
+
+    HTML = ('<p>Contenido previo sobre las normas ISO 14001 y 45001.</p>'
+            '<p>Nota: Las normas o estándares integrables son más diversas '
+            'que lo mencionado. ISO 14001 e ISO 45001 son los estándares '
+            'más comunes pero no los únicos.</p>')
+
+    def test_queda_en_negrita(self):
+        out = procesar_contenido(self.HTML)
+        assert "<strong>Nota: Las normas" in out
+
+    def test_no_queda_centrada_ni_como_epigrafe(self):
+        out = procesar_contenido(self.HTML)
+        idx = out.index("Las normas")
+        entorno = out[max(0, idx - 200):idx]
+        assert "text-align: center" not in entorno
+        assert "dp-heading-ignore" not in entorno
+
+    def test_no_queda_en_un_recuadro(self):
+        out = procesar_contenido(self.HTML)
+        assert "dp-callout" not in out
 
     def test_la_fuente_no_queda_suelta_como_parrafo(self):
         soup = BeautifulSoup(procesar_contenido(BLOQUE), "html.parser")
