@@ -15,7 +15,7 @@ import pytest
 
 from maquetador.build.imscc_builder import GeneradorAula
 from maquetador.models import (CourseSpec, ItemCurso, FuenteContenido,
-                               TipoItem, Severidad)
+                               ModuloCurso, TipoItem, Severidad)
 
 
 def _generador(tmp_path, nombre_archivo=None):
@@ -50,6 +50,10 @@ class TestBloqueEsquema:
         assert "dp-image-rounded-10" in html and "dp-image-bordered" in html
         assert "dp-popup-image" not in html
 
+    def test_la_imagen_tiene_width_600_para_no_quedar_estirada(self, tmp_path):
+        html = _generador(tmp_path, "M_Esquema.jpg")._bloque_esquema()
+        assert "width: 600px; height: auto;" in html
+
     def test_tiene_texto_alternativo(self, tmp_path):
         html = _generador(tmp_path, "M_Esquema.jpg")._bloque_esquema()
         assert 'alt="Esquema de la asignatura"' in html
@@ -77,3 +81,59 @@ class TestBloqueEsquema:
         g.spec.items_inicio = []
         assert g._bloque_esquema() == ""
         assert g.spec.issues == []
+
+
+class TestIndiceDeContenidosAcordeon:
+    """El acordeón 'Contenido' del programa (Bloque 2 de _construir_syllabus)
+    debe traer las TRES clases de color (normal/activo/hover), igual que
+    cualquier otro acordeón del curso: si le falta dp-panel-hover-color-*
+    el tema pinta el hover con un color por defecto que queda invertido
+    respecto al resto de los desplegables del aula."""
+
+    def test_el_wrapper_trae_las_tres_clases_de_color(self, tmp_path):
+        g = GeneradorAula.__new__(GeneradorAula)
+        g.spec = CourseSpec(nombre="Gestión de la Calidad")
+        g.working = tmp_path / "working"
+        (g.working / "course_settings").mkdir(parents=True)
+        g.recursos_nuevos = []
+        g.paginas_por_modulo = {1: [("pid1", "1.1. Página uno")]}
+        modulo = ModuloCurso(numero=1, titulo="Introducción")
+        g.spec.modulos = [modulo]
+        g.spec.items_inicio = []
+        syl_path = g.working / "course_settings" / "syllabus.html"
+        syl_path.write_text(
+            '<div class="dp-content-block kl_custom_block_1">x</div>'
+            '<div class="dp-content-block kl_custom_block_2">x</div>'
+            '<div class="dp-content-block kl_custom_block_3">x</div>',
+            encoding="utf-8")
+        g._construir_syllabus()
+        html = syl_path.read_text(encoding="utf-8")
+        assert "dp-panel-color-dp-primary" in html
+        assert "dp-panel-active-color-dp-secondary" in html
+        assert "dp-panel-hover-color-dp-secondary" in html
+
+
+class TestBibliografiaConsolidada:
+    def _generador(self, tmp_path):
+        g = GeneradorAula.__new__(GeneradorAula)
+        g.spec = CourseSpec(nombre="Gestión de la Calidad")
+        g.working = tmp_path / "working"
+        g.working.mkdir()
+        g.recursos_nuevos = []
+        g.figuras_usadas = []
+        modulo = ModuloCurso(numero=1, titulo="Introducción")
+        modulo.extras = {"referencias":
+            "<p>Autor, A. (2020). Un libro. Obligatoria</p>"
+            "<p>Obligatoria</p>"
+            "<p>Autor, A. (2020). Un libro cualquiera. https://ejemplo.com</p>"}
+        g.spec.modulos = [modulo]
+        return g
+
+    def test_hay_aire_entre_el_titulo_de_modulo_y_obligatoria(self, tmp_path):
+        g = self._generador(tmp_path)
+        html = g._construir_bibliografia_consolidada("")
+        assert "<strong><span" in html
+        # el <p>&nbsp;</p> de aire va justo antes del cuerpo con "Obligatoria"
+        idx_spacer = html.index("<p>&nbsp;</p>")
+        idx_obligatoria = html.index("Obligatoria</h4>")
+        assert idx_spacer < idx_obligatoria

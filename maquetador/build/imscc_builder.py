@@ -700,7 +700,8 @@ class GeneradorAula:
                 '<span class="dp-icon-content" style="display: none;">&nbsp;</span>'
                 '</i> Contenido</h2>\n'
                 '<div class="dp-panels-wrapper dp-expander-default '
-                'dp-panel-color-dp-primary dp-panel-active-color-dp-secondary" '
+                'dp-panel-color-dp-primary dp-panel-active-color-dp-secondary '
+                'dp-panel-hover-color-dp-secondary" '
                 'title="contenido insertado">\n' + "\n".join(grupos)
                 + '\n</div>\n</div>')
             nuevo = self._reemplazar_bloque_div(html, "kl_custom_block_2", bloque2)
@@ -790,7 +791,8 @@ class GeneradorAula:
             'aria-hidden="true"><span class="dp-icon-content" '
             'style="display: none;">&nbsp;</span></i>Visión General</h2>\n'
             '<p style="text-align: center;">'
-            f'<img class="{_FIG_CLASES_ESTATICA}" src="{url}" '
+            f'<img class="{_FIG_CLASES_ESTATICA}" style="width: 600px; height: auto;" '
+            f'src="{url}" '
             'alt="Esquema de la asignatura" loading="lazy"></p>\n</div>')
 
     def _construir_bibliografia_consolidada(self, syl_html: str) -> str:
@@ -822,7 +824,7 @@ class GeneradorAula:
                 '<h3 class="dp-ignore-theme" '
                 'style="border-top: 0px; text-align: left;">'
                 f'<strong><span style="font-size: 18pt;">{titulo_mod}</span>'
-                f'</strong></h3>\n{cuerpo}')
+                f'</strong></h3>\n<p>&nbsp;</p>\n{cuerpo}')
         if not secciones:
             return ""
         return ('<div class="dp-content-block kl_custom_block_3">\n'
@@ -923,6 +925,10 @@ class GeneradorAula:
         for sib in list(h2.find_next_siblings()):
             sib.decompose()                 # quita los <p>&nbsp;</p> placeholder
         cont_div.append(BeautifulSoup(contenido, "html.parser"))
+        # El aula base siempre cierra el bloque con aire abajo (los placeholder
+        # que acabamos de quitar lo tenían): sin esto el foro queda pegado al
+        # borde del content-block, el contenido pierda el margen inferior.
+        cont_div.append(BeautifulSoup("<p>&nbsp;</p>", "html.parser"))
         return str(soup)
 
     def _escribir_topic(self, rid: str, body_html: str, ctx: str) -> bool:

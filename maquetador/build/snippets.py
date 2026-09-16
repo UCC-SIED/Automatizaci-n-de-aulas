@@ -471,7 +471,7 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
         elif clase == "table":
             nueva = BeautifulSoup(
                 f'<p style="text-align: center;"><img class="{_FIG_CLASES_ESTATICA}" '
-                f'style="width: 700px; height: auto;" '
+                f'style="width: 600px; height: auto;" '
                 f'src="__DISENO__/{path.name}" alt="{texto[:120]}" '
                 f'loading="lazy"></p>', "html.parser")
             vecino.replace_with(nueva)
@@ -494,7 +494,7 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
                     '</span></p>')
             img_html += (
                 f'<p style="text-align: center;"><img class="{_FIG_CLASES_ESTATICA}" '
-                f'style="width: 700px; height: auto;" '
+                f'style="width: 600px; height: auto;" '
                 f'src="__DISENO__/{path.name}" alt="{texto[:120]}" '
                 f'loading="lazy"></p>')
             p.replace_with(BeautifulSoup(img_html, "html.parser"))
@@ -1671,7 +1671,7 @@ def procesar_contenido(html: str, tema: str = "") -> str:
             img["class"] = (_FIG_CLASES_EXPANDIBLE if _figura_es_expandible(img)
                             else _FIG_CLASES_ESTATICA)
             if not img.get("style"):
-                img["style"] = "width: 700px; height: auto;"
+                img["style"] = "width: 600px; height: auto;"
         # Centrar el párrafo contenedor aunque Word haya envuelto la imagen en
         # <strong>/<span>: hay que subir hasta el <p>, no mirar el padre directo.
         contenedor = img.find_parent("p")

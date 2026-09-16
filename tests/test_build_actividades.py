@@ -263,3 +263,21 @@ def test_foro_introductorio_carga_como_apertura(tmp_path):
     assert len(texto) > 300, (
         f"El Foro de apertura quedó con el placeholder ({len(texto)} chars): "
         "no cargó el 'Foro Introductorio.docx'.")
+
+
+def test_cuerpo_topic_con_diseno_deja_aire_al_final():
+    """El aula base cierra cada topic con un <p>&nbsp;</p> de aire debajo del
+    contenido; _cuerpo_topic_con_diseno lo quita (junto al resto de los
+    placeholders) para insertar el contenido real, pero tiene que devolverlo:
+    si no, el foro queda con el último párrafo pegado al borde del bloque."""
+    from maquetador.build.imscc_builder import GeneradorAula
+
+    base_body = (
+        '<div id="dp-wrapper"><div class="dp-content-block content-block">'
+        '<h2>Título</h2>'
+        '<p>&nbsp;</p><p>&nbsp;</p>'
+        '</div></div>')
+    resultado = GeneradorAula._cuerpo_topic_con_diseno(
+        None, base_body, "<p>¡Bienvenidos!</p>")
+    assert resultado.rstrip().endswith("<p>\xa0</p></div></div>")
+    assert "¡Bienvenidos!" in resultado
