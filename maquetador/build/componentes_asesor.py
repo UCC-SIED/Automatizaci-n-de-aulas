@@ -188,15 +188,18 @@ def pares_de_secciones(el, modo: str = "auto", hasta=None) -> tuple:
         return [], []
 
     pares, consumidos, titulo, cuerpo = [], [], None, []
-    titulo_es_marcador_lista = False
+    titulo_es_marcador_corto = False
     for e in elementos[idx:]:
         abre = _es_encabezado_de_seccion(e, modo)
-        # Un "<ul><li><strong>…</strong></li></ul>" (ver _es_encabezado_de_
-        # seccion) suele venir seguido, en el propio DOCX, de un <p> también
-        # todo en negrita que es su bajada ("ISO 14001" → "Gestión
-        # ambiental"): esa bajada es parte del MISMO título, no abre una
-        # sección nueva.
-        if abre and titulo_es_marcador_lista and not cuerpo:
+        # Un título "marcador corto" —un "<ul><li><strong>…</strong></li>
+        # </ul>" (ver _es_encabezado_de_seccion) o un <hN> nativo de Word
+        # (estilo "Subtitle"/"Título N", que mammoth ya volcó a <hN> antes de
+        # que este código corra)— suele venir seguido, en el propio DOCX, de
+        # un párrafo TAMBIÉN con pinta de encabezado que es su bajada
+        # ("ISO 14001" → "Gestión ambiental"; "Calidad Total" → "La calidad
+        # como responsabilidad de toda la organización"): esa bajada es
+        # parte del MISMO título, no abre una sección nueva.
+        if abre and titulo_es_marcador_corto and not cuerpo:
             abre = False
         if abre:
             if titulo is not None:
@@ -209,7 +212,8 @@ def pares_de_secciones(el, modo: str = "auto", hasta=None) -> tuple:
                 titulo, cuerpo = prefijo, [resto]
             else:
                 titulo, cuerpo = e.get_text(" ", strip=True), []
-            titulo_es_marcador_lista = getattr(e, "name", None) in ("ul", "ol")
+            titulo_es_marcador_corto = getattr(e, "name", None) in (
+                "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6")
         else:
             cuerpo.append(str(e))
         consumidos.append(e)

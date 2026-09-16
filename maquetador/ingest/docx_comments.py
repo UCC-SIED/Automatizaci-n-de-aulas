@@ -239,8 +239,19 @@ def _squash(texto: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", normalizar(texto))
 
 
+_TAGS_BUSCABLES = ["p", "li", "h1", "h2", "h3", "h4", "h5", "h6"]
+
+
 def _buscar_elemento(soup, anclado: str):
-    """Encuentra el <p>/<li> cuyo texto corresponde al texto anclado.
+    """Encuentra el <p>/<li>/<hN> cuyo texto corresponde al texto anclado.
+
+    Incluye encabezados (<h1>..<h6>) porque un párrafo con estilo Word
+    "Subtitle" o "Título N" ya llegó convertido a <hN> (mammoth lo hace en la
+    conversión inicial, antes de que este código corra): si solo se buscara
+    entre <p>/<li>, un comentario anclado sobre ese texto ("Calidad Total",
+    "Costos de la calidad"…) nunca encontraba su elemento y el pedido
+    fallaba en silencio — pasaba con un "TABS horizontal" cuyos 3 títulos
+    (Calidad Total/Lean/Six Sigma) eran todos estilo "Subtitle".
 
     Se queda con el candidato MÁS ESPECÍFICO (mayor solapamiento con el
     ancla), no el primero que coincide: un párrafo real puede empezar con la
@@ -256,13 +267,13 @@ def _buscar_elemento(soup, anclado: str):
         # Ancla muy corta ("Foro"): con tan poco texto, cualquier coincidencia
         # por prefijo/substring es puro azar — solo vale una coincidencia
         # EXACTA (el párrafo entero es, ni más ni menos, ese texto).
-        for el in soup.find_all(["p", "li"]):
+        for el in soup.find_all(_TAGS_BUSCABLES):
             if _squash(el.get_text(" ", strip=True)) == objetivo:
                 return _lista_de_un_item(el)
         return None
     clave = objetivo[:40]
     mejor, mejor_score = None, 0
-    for el in soup.find_all(["p", "li"]):
+    for el in soup.find_all(_TAGS_BUSCABLES):
         t = _squash(el.get_text(" ", strip=True))
         if not t:
             continue
@@ -307,7 +318,7 @@ def _buscar_elemento_final(soup, anclado: str):
         return None
     clave = objetivo[-40:]
     resultado = None
-    for el in soup.find_all(["p", "li"]):
+    for el in soup.find_all(_TAGS_BUSCABLES):
         t = _squash(el.get_text(" ", strip=True))
         if t and (t.endswith(clave) or clave.endswith(t)):
             resultado = el

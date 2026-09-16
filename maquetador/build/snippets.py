@@ -1110,6 +1110,20 @@ def _espaciar_figuras(soup):
         img = p.find("img")
         if img is not None and _es_figura(img) and p.find_parent("figure") is None:
             bloques.append(p)
+    # Una "figura" a veces es en realidad una tabla de datos (el epígrafe
+    # dice "Figura N." pero el contenido es una tabla, no una imagen): recibe
+    # el mismo aire, siempre que tenga encima el epígrafe que la identifica
+    # como tal — así no se airean tablas de datos sueltas sin esa marca.
+    for tabla in soup.find_all("table"):
+        contenedor = tabla.find_parent(class_="dp-table-scroll") or tabla
+        if contenedor.parent is None or contenedor in bloques:
+            continue
+        previo = contenedor.previous_sibling
+        while isinstance(previo, NavigableString) and not previo.strip():
+            previo = previo.previous_sibling
+        if previo is not None and getattr(previo, "name", None) == "p" \
+                and _PAT_CAPTION.match(previo.get_text(" ", strip=True)):
+            bloques.append(contenedor)
     for bloque in bloques:
         if bloque.parent is None:
             continue

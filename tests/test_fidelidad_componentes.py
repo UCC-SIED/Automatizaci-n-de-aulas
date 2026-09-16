@@ -468,6 +468,56 @@ class TestSubtituloEnvueltoEnLista:
         assert "Nota: hay más normas" in str(soup)
 
 
+class TestSubtituloYaConvertidoAEncabezadoNativo:
+    """Un título de tabs/expander con estilo Word "Subtitle" ya llegó
+    convertido a <hN> (mammoth, vía _MAMMOTH_STYLE_MAP) ANTES de que
+    aplicar_comentarios corra: _buscar_elemento solo miraba <p>/<li>, así que
+    nunca encontraba el ancla y el componente entero fallaba en silencio.
+    Caso real: "TABS horizontal (palabras en negrita)" sobre "Calidad Total"
+    (estilo Subtitle → <h3>), seguido de su bajada también con pinta de
+    encabezado ("La calidad como responsabilidad de toda la organización",
+    todo subrayado) — que debe quedar como CONTENIDO del panel "Calidad
+    Total", no abrir un panel propio.
+    """
+
+    HTML = (
+        "<div>"
+        "<p>Entre los enfoques más reconocidos se encuentran varios.</p>"
+        "<h3>Calidad Total</h3>"
+        "<p><u>La calidad como responsabilidad de toda la organización</u></p>"
+        "<p>La Calidad Total integra la calidad en todas las actividades.</p>"
+        "<h3>Lean</h3>"
+        "<p><u>Eliminar actividades que no generan valor</u></p>"
+        "<p>Lean se enfoca en eliminar desperdicios.</p>"
+        "<p>Una pausa para reflexionar.</p>"
+        "</div>")
+    INSTR = "Para maquetación: TABS horizontal (palabras en negrita)"
+
+    def _aplicar(self):
+        # Ancla corta a propósito (sin el resto del tramo): el límite `hasta`
+        # solo se calcula para anclas largas (ver TestAcordeonSeDetieneEnSu
+        # Ancla) — lo que este test quiere aislar es la resolución del
+        # elemento y el colapso de la bajada subrayada, no ese mecanismo.
+        soup = BeautifulSoup(self.HTML, "html.parser")
+        coment = [{"instruccion": self.INSTR, "anclado": "Calidad Total",
+                   "accion": "tabs", "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        return BeautifulSoup(str(soup), "html.parser"), coment
+
+    def test_encuentra_el_titulo_ya_convertido_a_h3(self):
+        soup, coment = self._aplicar()
+        assert coment[0].get("_aplicado") is True
+        titulos = [h.get_text(strip=True)
+                   for h in soup.find_all(class_="dp-panel-heading")]
+        assert titulos == ["Calidad Total", "Lean"]
+
+    def test_la_bajada_subrayada_no_abre_panel_propio(self):
+        soup, _ = self._aplicar()
+        assert len(soup.find_all(class_="dp-panel-group")) == 2
+        wrapper = soup.find(class_="dp-panels-wrapper")
+        assert "La calidad como responsabilidad" in str(wrapper)
+
+
 class TestBusquedaDeElementoEsEspecifica:
     """_buscar_elemento se queda con el candidato más específico: una celda
     de tabla corta ('Planificación') que por casualidad es prefijo del texto

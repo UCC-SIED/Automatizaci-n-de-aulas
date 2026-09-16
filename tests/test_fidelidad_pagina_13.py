@@ -104,3 +104,32 @@ class TestLaboratorioDeIdeas:
     def test_resaltado_laboratorio_ideas_usa_el_titulo_del_catalogo(self):
         assert "<strong>Laboratorio de ideas</strong>" in \
             resaltado_laboratorio_ideas("<p>cuerpo</p>")
+
+
+class TestEspaciadoDeFiguraQueEsTabla:
+    """Una "figura" a veces es en realidad una tabla de datos (el epígrafe
+    dice "Figura N." pero el contenido es una tabla, no una imagen, p.ej.
+    una síntesis comparativa): _espaciar_figuras solo miraba <figure>/<img>,
+    así que esta tabla no llevaba el aire de párrafo que sí lleva cualquier
+    otra figura (regresión real: módulo 2, "Figura 5. Síntesis de
+    enfoques")."""
+
+    HTML = ("<table><thead><tr><th><p>Enfoque</p></th>"
+            "<th><p>Descripción</p></th></tr></thead>"
+            "<tr><td><p>Lean</p></td><td><p>Eliminar desperdicios</p></td></tr>"
+            "</table>")
+
+    def test_lleva_espaciado_arriba_y_abajo(self):
+        html = ("<p>Texto previo.</p>"
+                "<p><strong>Figura 5. Síntesis de enfoques</strong></p>"
+                f"{self.HTML}"
+                "<p>Texto posterior.</p>")
+        out = procesar_contenido(html)
+        assert out.count("<p>\xa0</p>") >= 2
+
+    def test_no_airea_una_tabla_de_datos_sin_epigrafe(self):
+        """Una tabla de datos normal, SIN "Figura N."/"Tabla N." encima, no
+        se toca: solo se airean las que tienen ese epígrafe."""
+        html = f"<p>Texto previo.</p>{self.HTML}<p>Texto posterior.</p>"
+        out = procesar_contenido(html)
+        assert out.count("<p>\xa0</p>") == 0
