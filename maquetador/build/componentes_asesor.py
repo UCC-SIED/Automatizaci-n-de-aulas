@@ -46,14 +46,31 @@ def pares_de_tabla(tabla) -> list:
         # Fila 0 = rótulos cortos; fila 1 = descripciones, claramente más largas.
         fila_titulos = all(_es_titulo_corto(t) for t, _ in filas[0])
         fila_desc = _largo_medio(filas[1]) > _largo_medio(filas[0]) * 1.5
-        if fila_titulos and fila_desc:
+        # No alcanza con que el PROMEDIO de la fila crezca: eso también lo
+        # cumple una tabla de datos común (encabezados de columna cortos +
+        # una sola columna de texto largo), donde la columna que solo trae
+        # un código/número corto en cada fila en realidad se ACHICA de la
+        # fila 0 a la 1 ("Cláusula" → "4"). En una grilla título/descripción
+        # de verdad, CADA columna crece de su título a su descripción.
+        crece_por_columna = all(
+            len(desc) >= len(titulo)
+            for (titulo, _), (desc, _) in zip(filas[0], filas[1]))
+        if fila_titulos and fila_desc and crece_por_columna:
             pares = []
             for r in range(0, len(filas), 2):
                 for c in range(ncols):
                     pares.append((filas[r][c][0], filas[r + 1][c][1] or "&nbsp;"))
             return pares
+        # No es una grilla título/descripción real: es una tabla de datos
+        # común (encabezados de columna + filas de registros), que el "caso
+        # clásico" de abajo tampoco sabe interpretar (asume 1 columna, y
+        # aplanar una grilla de N columnas por ese camino empareja celdas de
+        # columnas distintas sin ninguna relación entre sí). No hay pares
+        # válidos que sacar de acá.
+        return []
 
-    # Caso clásico: celdas en orden, alternando título / contenido.
+    # Caso clásico: celdas en orden, alternando título / contenido (asume
+    # la geometría de 1 columna documentada arriba).
     plano = [c for f in filas for c in f]
     return [(plano[i][0], plano[i + 1][1] or "&nbsp;")
             for i in range(0, len(plano) - 1, 2)]

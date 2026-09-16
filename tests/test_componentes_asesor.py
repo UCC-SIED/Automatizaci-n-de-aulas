@@ -228,3 +228,36 @@ class TestParesDeTablaGrilla:
         assert "Nombre del puesto" in d["1. Identificación"]
         assert "2. Propósito" in d
         assert "existe el puesto" in d["2. Propósito"]
+
+
+class TestParesDeTablaNoConfundeUnaTablaDeDatosConUnaGrilla:
+    """Una tabla de datos común (encabezados de columna cortos + filas de
+    registros) puede colar por el mismo filtro que la grilla título/
+    descripción: fila 0 corta, y el PROMEDIO de la fila 1 más largo (alcanza
+    con que UNA columna traiga texto largo). Pero la columna que solo trae
+    un código/número corto en cada fila en realidad se ACHICA de la fila 0 a
+    la 1 ("Cláusula" → "4"), a diferencia de una grilla real, donde CADA
+    columna crece de su título a su descripción (regresión real: una tabla
+    de 3 columnas — Cláusula/Requisito/Descripción, 7 filas de datos —
+    terminaba armando un acordeón roto con las celdas sueltas)."""
+
+    def test_no_arma_pares_de_una_tabla_de_datos(self):
+        html = (
+            "<table>"
+            "<tr><td><p>Cláusula</p></td><td><p>Requisito</p></td>"
+            "<td><p>Descripción</p></td></tr>"
+            "<tr><td><p>4</p></td><td><p>Contexto de la organización</p></td>"
+            "<td><p>La organización debe comprender su entorno interno y "
+            "externo, así como las necesidades de las partes "
+            "interesadas.</p></td></tr>"
+            "<tr><td><p>5</p></td><td><p>Liderazgo</p></td>"
+            "<td><p>La alta dirección debe demostrar compromiso con el "
+            "sistema de gestión, estableciendo la política de "
+            "calidad.</p></td></tr>"
+            "<tr><td><p>6</p></td><td><p>Planificación</p></td>"
+            "<td><p>Se deben identificar riesgos y oportunidades, y "
+            "establecer objetivos de calidad junto con planes para "
+            "alcanzarlos.</p></td></tr>"
+            "</table>")
+        tabla = _soup(html).find("table")
+        assert pares_de_tabla(tabla) == []
