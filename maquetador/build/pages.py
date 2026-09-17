@@ -12,7 +12,8 @@ import unicodedata
 from processors.cidilabs_builder import (DP_WRAPPER_CLASSES, DP_WRAPPER_ATTRS,
                                          _attrs_str)
 from maquetador.build.snippets import (procesar_contenido, limpiar_anclas_vacias,
-                                       sanear_lista_objetivos)
+                                       sanear_lista_objetivos,
+                                       separar_bloque_de_video)
 from maquetador.build.bibliography import construir_bibliografia
 
 
@@ -80,6 +81,11 @@ def pagina_intro(titulo: str, intro_html: str, objetivos_html: str,
 def pagina_contenido(titulo: str, body_html: str, banner_src: str,
                      identifier: str, tema: str = "") -> str:
     """Página de contenido (1.1, 1.2, …)."""
+    # El bloque "Video" (cuando el asesor invita a ver un video propio y
+    # ese bloque queda abierto absorbiendo el resto de la página) no va
+    # anidado dentro del content-block de lectura: es su propio bloque,
+    # hermano al mismo nivel — como lo arma el equipo a mano.
+    resto, bloque_video = separar_bloque_de_video(procesar_contenido(body_html, tema))
     return f"""{_cabecera(titulo, identifier)}
 <div id="dp-wrapper" class="{DP_WRAPPER_CLASSES}" {_attrs_str(DP_WRAPPER_ATTRS)}>
 {_banner(banner_src, titulo)}
@@ -88,9 +94,10 @@ def pagina_contenido(titulo: str, body_html: str, banner_src: str,
 </div>
 <div class="dp-content-block kl_readings2" style="background-color: #ffffff; color: #000000;">
 <h2 class="dp-has-icon"><i class="fa-book fas" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i></h2>
-{procesar_contenido(body_html, tema)}
+{resto}
 <p>&nbsp;</p>
 </div>
+{bloque_video}
 </div>
 </body>
 </html>"""

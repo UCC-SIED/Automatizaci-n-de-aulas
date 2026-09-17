@@ -122,3 +122,51 @@ class TestElBloqueDeVideoQuedaAbierto:
         out = procesar_contenido(html)
         assert 'data-title="Video"' not in out
         assert "<h3>Otro tema</h3>" in out
+
+
+class TestElBloqueDeVideoEsUnBloqueAparteEnLaPagina:
+    """El bloque "Video" no va ANIDADO dentro del content-block de lectura
+    (kl_readings2) de la página: el equipo a mano cierra ese div y abre uno
+    nuevo, propio, para el video — hermano al mismo nivel, no metido
+    adentro. procesar_contenido no puede devolver eso solo (su salida
+    entera queda embebida en UN content-block por la plantilla de la
+    página): pagina_contenido tiene que separarlo."""
+
+    HTML = (PROPIO +
+            '<h3>Comprender los problemas antes de actuar</h3>'
+            '<p>Antes de aplicar cualquier herramienta…</p>')
+
+    def test_video_es_hermano_de_kl_readings2_no_esta_adentro(self):
+        from bs4 import BeautifulSoup
+        from maquetador.build.pages import pagina_contenido
+        out = pagina_contenido("1.4. Título", self.HTML, "b.png", "id")
+        soup = BeautifulSoup(out, "html.parser")
+        wrapper = soup.find("div", id="dp-wrapper")
+        hijos_directos = wrapper.find_all("div", recursive=False)
+        clases = [h.get("class") for h in hijos_directos]
+        assert ["dp-content-block", "kl_readings2"] in clases
+        video = soup.find("div", attrs={"data-title": "Video"})
+        assert video is not None
+        assert video in hijos_directos
+        assert video.find_parent(class_="kl_readings2") is None
+
+    def test_el_contenido_previo_al_video_queda_en_kl_readings2(self):
+        from bs4 import BeautifulSoup
+        from maquetador.build.pages import pagina_contenido
+        html = "<h3>Antes del video</h3><p>Contenido previo.</p>" + self.HTML
+        out = pagina_contenido("1.4. Título", html, "b.png", "id")
+        soup = BeautifulSoup(out, "html.parser")
+        readings = soup.find("div", class_="kl_readings2")
+        video = soup.find("div", attrs={"data-title": "Video"})
+        assert "Antes del video" in readings.get_text()
+        assert "Comprender los problemas" in video.get_text()
+        assert "Antes del video" not in video.get_text()
+        assert "Comprender los problemas" not in readings.get_text()
+
+    def test_sin_video_no_hay_bloque_aparte(self):
+        from bs4 import BeautifulSoup
+        from maquetador.build.pages import pagina_contenido
+        out = pagina_contenido("1.1. Título", "<p>Contenido común.</p>",
+                               "b.png", "id")
+        soup = BeautifulSoup(out, "html.parser")
+        assert soup.find("div", attrs={"data-title": "Video"}) is None

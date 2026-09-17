@@ -1970,3 +1970,22 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
             hx.insert_before(BeautifulSoup("<p>&nbsp;</p>", "html.parser"))
 
     return aplicar_acento_del_tema(str(soup), tema)
+
+
+def separar_bloque_de_video(html: str) -> tuple:
+    """El bloque "Video" (bloque_video_studio, cuando queda abierto y
+    absorbe el resto de la página — ver _procesar_cues_parrafo) NO va
+    anidado dentro del content-block de lectura de la página: el equipo a
+    mano cierra ese div y abre uno NUEVO y propio para el video, como
+    hermano al mismo nivel, no metido adentro. procesar_contenido no puede
+    devolver eso directamente (su salida entera queda embebida dentro de UN
+    solo content-block en la plantilla de la página) — se lo separa acá.
+
+    Devuelve (resto_del_contenido, bloque_de_video_o_cadena_vacia).
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    bloque = soup.find("div", attrs={"data-title": "Video"}, recursive=False)
+    if bloque is None:
+        return html, ""
+    bloque_html = str(bloque.extract())
+    return str(soup), bloque_html
