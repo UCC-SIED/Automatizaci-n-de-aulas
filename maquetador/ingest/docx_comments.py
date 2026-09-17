@@ -42,11 +42,21 @@ _AUTO = {"subtitulo", "subsubtitulo", "recuadro_simple", "lectura", "video",
          "podcast", "sin_recuadro", "otra_pagina", "enlace_descargable",
          "genially_listo", "no_maquetar", "foro_en_lectura",
          "foro_lectura_y_espacio", "figura_expandible", "enlazar_actividad",
-         "destacar_tramo"}
+         "destacar_tramo", "componente_en_el_texto"}
 
 # Nivel de encabezado por acción, según la política de jerarquía de la UCC:
 # H2 es el título de la página, H3 el subtítulo y H4 el sub-subtítulo.
 _NIVEL_ENCABEZADO = {"subtitulo": "h3", "subsubtitulo": "h4"}
+
+# Componente pedido desde el TEXTO MARCADO y no desde el globo: el asesor
+# escribe su nombre como primera línea de la caja y comenta solo "Maquetación".
+_COMPONENTE_POR_ANCLA = (
+    ("tabs", "tabs"), ("solapas", "tabs"), ("pestanas", "tabs"),
+    ("flip card", "flip_card"), ("flips card", "flip_card"),
+    ("flipcard", "flip_card"), ("flipscard", "flip_card"),
+    ("expander", "expander"), ("expandible", "expander"),
+    ("acordeon", "acordeon"), ("desplegable", "expander"),
+)
 
 _COMPONENTES = {"acordeon", "tabs", "tabs_vertical", "expander", "flip_card",
                 "tooltip", "cita"}
@@ -209,6 +219,15 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
         return "faltante"
     if n.startswith(("para maquetacion", "para el maquetado", "para diseno",
                      "para diseño", "maquetacion")):
+        # El globo dice solo "Maquetación" y lo marcado es el nombre del
+        # componente, que el asesor escribió como primera línea de la caja
+        # ("Expander", "Tabs (uno al lado del otro)"). El componente ya se arma
+        # desde la caja, en procesar_contenido: el comentario solo lo señala y
+        # no hay nada para avisar. (No se enruta al armador por comentario: el
+        # que sale de la caja entiende mejor esta escritura — listas y tablas
+        # adentro de cada panel, epígrafes que no abren panel.)
+        if any(na.startswith(k) for k, _a in _COMPONENTE_POR_ANCLA):
+            return "componente_en_el_texto"
         return "revisar"
     return None
 
@@ -650,6 +669,12 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
         if c.get("_aplicado"):
             continue
         if accion not in _AUTO and accion not in _COMPONENTES:
+            continue
+        if accion == "componente_en_el_texto":
+            # El globo solo señala el nombre del componente que el asesor ya
+            # escribió como primera línea de la caja: lo arma procesar_contenido
+            # desde la caja misma. No hay nada que hacer acá ni que avisar.
+            c["_aplicado"] = True
             continue
         grupo = (accion, normalizar(c["instruccion"]))
         es_componente = accion in _VARIANTE_PANEL or accion == "flip_card"

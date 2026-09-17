@@ -307,3 +307,37 @@ class TestAnchoRealDeLaTabla:
         out = procesar_contenido(html)
         assert "dp-callout" in out
         assert out.count('class="ic-Table') == 1
+
+
+class TestElGloboSoloSenalaElComponente:
+    """Con este asesor el globo dice solo "Maquetación": el pedido está en el
+    texto marcado, que es el nombre del componente escrito como primera línea
+    de la caja. Esos comentarios llenaban el informe de avisos "revisar
+    pedido" aunque el componente ya saliera bien."""
+
+    def test_no_queda_como_pedido_pendiente(self):
+        from maquetador.ingest.docx_comments import _clasificar
+        for ancla in ("Expander", "Tabs (uno al lado del otro)",
+                      "Tabs verticales; al hacer clic en cada zona",
+                      "Flips cards (una al lado de la otra)"):
+            assert _clasificar("Maquetación", ancla) == "componente_en_el_texto", ancla
+
+    def test_un_pedido_de_verdad_sigue_avisando(self):
+        from maquetador.ingest.docx_comments import _clasificar
+        assert _clasificar("Maquetación: plantilla descargable",
+                           "La herramienta más adecuada es la más simple") \
+            == "revisar"
+
+    def test_el_componente_lo_sigue_armando_la_caja(self):
+        """No se enruta al armador por comentario a propósito: el que sale de
+        la caja entiende listas y tablas adentro de cada panel."""
+        from bs4 import BeautifulSoup
+        from maquetador.ingest.docx_comments import aplicar_comentarios
+        soup = BeautifulSoup(EXPANDER_CON_LISTAS, "html.parser")
+        coment = [{"instruccion": "Maquetación", "anclado": "Expander",
+                   "accion": "componente_en_el_texto", "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        assert coment[0]["_aplicado"] is True
+        assert soup.find("table") is not None     # la caja llega intacta
+        assert _paneles(procesar_contenido(str(soup))) == [
+            "Frente a las amenazas", "Frente a las oportunidades"]
