@@ -401,6 +401,28 @@ class TestSiglaPropiaDelAsesorEnLaCarpetaDeActividades:
         inv = escanear(self._curso(tmp_path))
         assert [p.name for _n, p in inv.foros] == ["Foro de Apertura - GRyI.docx"]
 
+    def test_solo_cuenta_la_carpeta_inmediata(self, tmp_path):
+        """En Gestión de la Calidad los módulos viven en "Etapa 2_ Materiales
+        multimediales y actividades/Material Multimedia": mirar la RUTA entera
+        encontraba "actividades" en el nombre de la etapa y se llevaba los DOCX
+        de módulo a la pila de actividades, dejando el curso sin módulos."""
+        raiz = tmp_path / "06. Gestión de la Calidad"
+        multimedia = raiz / "Etapa 2_ Materiales multimediales y actividades" / \
+            "Material Multimedia"
+        multimedia.mkdir(parents=True)
+        (multimedia / "Módulo 1 (Gestión de la Calidad).docx").write_text(
+            "x", encoding="utf-8")
+        actividades = raiz / "Etapa 2_ Materiales multimediales y actividades" / \
+            "Actividades y AFI"
+        actividades.mkdir(parents=True)
+        (actividades / "AFI (Gestión de la Calidad).docx").write_text(
+            "x", encoding="utf-8")
+        inv = escanear(raiz)
+        assert {n: p.name for n, p in inv.docx_modulos.items()} == \
+            {1: "Módulo 1 (Gestión de la Calidad).docx"}
+        assert [p.name for _n, p in inv.actividades] == \
+            ["AFI (Gestión de la Calidad).docx"]
+
     def test_el_guion_de_video_se_reconoce_por_su_carpeta(self, tmp_path):
         """"GRyI - V_M1.docx" tampoco dice "video" ni "guion": lo dice la
         carpeta que lo contiene."""

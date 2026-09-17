@@ -169,6 +169,13 @@ def escanear(carpeta: Path) -> InventarioCurso:
 
         nombre = normalizar(path.name)
         carpeta_padre = normalizar(str(path.parent.relative_to(raiz)))
+        # Carpeta INMEDIATA, sin el prefijo de orden ("3. Actividades" →
+        # "actividades"). No sirve la ruta entera para decidir el rol: los
+        # nombres de etapa la contaminan ("Etapa 2_ Materiales multimediales y
+        # actividades/Material Multimedia" tiene "actividades" y mandaba los
+        # DOCX de módulo a la pila de actividades).
+        carpeta_inmediata = re.sub(r"^\s*\d+\s*[-._)]\s*", "",
+                                   normalizar(path.parent.name))
         ext = path.suffix.lower()
         num = _numero_modulo(path.name)
 
@@ -196,7 +203,8 @@ def escanear(carpeta: Path) -> InventarioCurso:
                 # multimedial real solo por orden alfabético.
                 inv.casos.append((num, path))
             elif "actividad" in nombre or re.search(r"(?<![a-z])afi(?![a-z])", nombre) \
-                    or ("actividad" in carpeta_padre and "plantilla" not in nombre
+                    or (carpeta_inmediata.startswith("actividad")
+                        and "plantilla" not in nombre
                         and "guion" not in nombre and "biograf" not in nombre):
                 # "afi" como palabra aislada. Se usa lookaround de LETRAS (no \b)
                 # porque '_' es carácter de palabra y \bafi\b no matchea "AFI_…"
@@ -207,7 +215,8 @@ def escanear(carpeta: Path) -> InventarioCurso:
                 # planilla sin fuente aunque nombrara el archivo exacto.
                 inv.actividades.append((num, path))
             elif "video" in nombre or "guion" in nombre or "audiovisual" in nombre \
-                    or (("grabaci" in carpeta_padre or "video" in carpeta_padre)
+                    or (("grabaci" in carpeta_padre
+                         or carpeta_inmediata.startswith("video"))
                         and "biograf" not in nombre):
                 inv.guiones_video.append((num, path))
             elif "biograf" in nombre or "biodata" in nombre \
