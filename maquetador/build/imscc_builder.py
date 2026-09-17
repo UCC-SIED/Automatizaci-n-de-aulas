@@ -223,6 +223,8 @@ class GeneradorAula:
         self.assignments_escritos = set()  # rids de actividades ya llenadas
         self._reorders_pendientes = []     # [(rid, pagina_titulo)] p/ organizations
         self.paginas_por_modulo = {}       # {n: [(page_id, titulo)]} para el syllabus
+        self.modulo_por_slug = {}          # {slug de la página: nº de módulo}
+        self.rid_por_archivo = {}          # {nombre del DOCX: rid del assignment}
         self.indice_diseno = indexar_figuras_diseno(
             getattr(spec, "imagenes_diseno", []))
         self.figuras_usadas = set()        # paths de DISEÑO aprovechados
@@ -253,6 +255,7 @@ class GeneradorAula:
         self._eliminar_encuesta_valoracion()
         self._limpiar_recursos_no_usados()
         self._inyectar_afi()
+        self._resolver_enlaces_de_actividad()
         self._avisar_recursos_vacios()
         self._personalizar_inicio()
         self._construir_syllabus()
@@ -456,6 +459,7 @@ class GeneradorAula:
                 banner_src=banner, identifier=page_id,
                 tema=self.spec.tema)
             _escribir(self.working / href, html)
+            self.modulo_por_slug[slug] = n
             nuevos.append((page_id, href, item.titulo))
         # Para el índice del programa (syllabus): páginas reales del módulo.
         self.paginas_por_modulo[n] = [(pid, t) for pid, _h, t in nuevos]
@@ -1272,6 +1276,11 @@ class GeneradorAula:
                     html = self._docx_a_html(archivo, f"act_sugerida_m{n}",
                                              es_actividad=True)
                     if self._escribir_assignment(rid_sug, html, ctx):
+                        # setdefault: el mismo DOCX puede alimentar la sugerida
+                        # de varios módulos (la entrega preparatoria va de M2 a
+                        # M3). El enlace tiene que llevar al primer buzón, no
+                        # al último que se clonó.
+                        self.rid_por_archivo.setdefault(archivo.name, rid_sug)
                         item.issues.append(Issue(Severidad.INFO,
                             f"Contenido de '{archivo.name}' cargado en un "
                             f"assignment nuevo 'Actividad sugerida M{n}' "
@@ -1286,6 +1295,7 @@ class GeneradorAula:
                 html = self._docx_a_html(archivo, f"act_m{n}", es_actividad=True)
                 if self._escribir_assignment(rid, html, ctx):
                     assignment_escrito = True
+                    self.rid_por_archivo.setdefault(archivo.name, rid)
                     item.issues.append(Issue(Severidad.INFO,
                         f"Contenido de '{archivo.name}' cargado en la "
                         f"Actividad obligatoria M{n}.", item.titulo))
@@ -1318,6 +1328,7 @@ class GeneradorAula:
             return
         html = self._docx_a_html(item.fuente.archivo, "afi", es_actividad=True)
         if self._escribir_assignment(rid, html, "AFI"):
+            self.rid_por_archivo[item.fuente.archivo.name] = rid
             item.issues.append(Issue(Severidad.INFO,
                 f"Contenido de '{item.fuente.archivo.name}' cargado en la "
                 "Actividad final integradora.", item.titulo))
@@ -1691,6 +1702,54 @@ class GeneradorAula:
             for f in wr.rglob("*"):
                 if f.is_file() and marca.search(f.name):
                     f.unlink()
+
+    def _resolver_enlaces_de_actividad(self):
+        """Completa los <a data-actividad="…"> que dejó el pedido "enlazar
+        actividad" del asesor.
+
+        Se hace al final y no al maquetar cada página: el destino puede ser la
+        actividad de OTRO módulo (la entrega preparatoria usa un solo buzón
+        para los módulos 2 y 3) y los assignments clonados recién existen
+        cuando todos los módulos pasaron."""
+        for archivo in sorted((self.working / "wiki_content").glob("*.html")):
+            html = _leer(archivo)
+            if "data-actividad=" not in html:
+                continue
+            modulo = self.modulo_por_slug.get(archivo.stem)
+
+            def _href(m, modulo=modulo, archivo=archivo):
+                nombre = m.group(2) or ""
+                clase, _, mod_pedido = m.group(1).partition(":")
+                n = int(mod_pedido) if mod_pedido else modulo
+                # Si el asesor nombró el módulo ("el buzón debe ser el mismo
+                # que se abrió en el módulo 2"), manda eso. Si no, manda el
+                # DOCX que anotó al pie del recuadro, que es el dato exacto.
+                rid = self._rid_de_actividad(clase, n) if mod_pedido else ""
+                if not rid:
+                    rid = self.rid_por_archivo.get(nombre, "")
+                if not rid and n:
+                    rid = self._rid_de_actividad(clase, n)
+                if not rid:
+                    self.spec.issues.append(Issue(Severidad.AVISO,
+                        f"El asesor pidió enlazar la actividad {clase} "
+                        f"({nombre or 'módulo ' + str(n or '?')}) en "
+                        f"'{archivo.stem}', pero no encontré ese recurso: "
+                        "enlazarlo a mano en Canvas.", "Enlaces a actividades"))
+                    return ' class="dp-course-link"'
+                return (' class="dp-course-link" href='
+                        f'"$CANVAS_OBJECT_REFERENCE$/assignments/{rid}"')
+
+            nuevo = re.sub(
+                r' class="dp-course-link" data-actividad="([^"]+)"'
+                r'(?: data-actividad-archivo="([^"]+)")?',
+                _href, html)
+            if nuevo != html:
+                _escribir(archivo, nuevo)
+
+    def _rid_de_actividad(self, clase: str, n: int) -> str:
+        """rid del assignment 'Actividad <clase> M<n>' del paquete ya armado."""
+        return self._rid_en_meta(
+            "Assignment", rf"[^<]*[Aa]ctividad {clase}[^<]*M{n}\b[^<]*")
 
     def _purgar_referencias_rotas(self):
         """Elimina <resource> cuyos archivos href ya no existen (p.ej. la

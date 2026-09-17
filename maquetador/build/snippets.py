@@ -98,6 +98,12 @@ def cta_descubri_leyendo(body_html: str) -> str:
 # Marcador que deja el asesor donde va un video propio ("VIDEO M2.", "VIDEO 2",
 # "VIDEO MÓDULO 1"). A veces es un párrafo suelto y a veces queda pegado al
 # final de la invitación.
+# Párrafo que es SOLO el nombre de un archivo: el asesor anota al pie de un
+# recuadro a qué entregable apunta ("EP - AFI.docx", "AEO 1 - GRyI.docx"). Es
+# una nota para maquetación, no contenido del aula.
+_PAT_SOLO_ARCHIVO = re.compile(
+    r"^[\w\s().,+&'’\-–—]{1,80}\.(docx?|pdf|xlsx?|pptx?)$", re.I)
+
 # "Embeber video: GRyI - V_M1" — el asesor marca dónde va un video PROPIO y
 # con qué archivo se corresponde. Es una indicación para maquetación, no
 # contenido del aula.
@@ -2015,6 +2021,19 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
     for inline in soup.find_all(["strong", "b", "em", "i", "u"]):
         if not inline.get_text(strip=True) and not inline.find("img"):
             inline.unwrap()
+
+    # 0.35 Nombre de archivo suelto ("EP - AFI.docx"): el asesor anota al pie
+    #      del recuadro a qué entregable apunta el enlace. Es una nota para
+    #      maquetación y se estaba publicando en la página del estudiante.
+    for p in list(soup.find_all(["p", "li"])):
+        if p.find("img") is not None \
+                or not _PAT_SOLO_ARCHIVO.match(p.get_text(" ", strip=True)):
+            continue
+        # Un archivo que SÍ se publica va enlazado al archivo subido al aula:
+        # ese no se toca. El del asesor apunta al Drive de asesoría.
+        if any("IMS-CC-FILEBASE" in (a.get("href") or "") for a in p.find_all("a")):
+            continue
+        p.decompose()
 
     # 0.4 Carátula de la plantilla del DOCX (título + tabla de metadatos): es
     #     el formulario, no el contenido.

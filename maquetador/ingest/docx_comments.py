@@ -25,7 +25,7 @@ from bs4 import BeautifulSoup
 from maquetador.ingest.folder_scanner import normalizar
 from maquetador.build.snippets import (resaltado_simple, cta_titulo, ICONOS,
                                        bloque_recurso_incrustado,
-                                       _PAT_GENIALLY_URL)
+                                       _PAT_GENIALLY_URL, _PAT_SOLO_ARCHIVO)
 from maquetador.build.componentes_asesor import (
     extraer_pares, construir_panels, construir_flipcards,
     construir_tooltip, disparador_tooltip, aplicar_cita,
@@ -41,7 +41,7 @@ _W15 = "{http://schemas.microsoft.com/office/word/2012/wordml}"
 _AUTO = {"subtitulo", "subsubtitulo", "recuadro_simple", "lectura", "video",
          "podcast", "sin_recuadro", "otra_pagina", "enlace_descargable",
          "genially_listo", "no_maquetar", "foro_en_lectura",
-         "foro_lectura_y_espacio", "figura_expandible"}
+         "foro_lectura_y_espacio", "figura_expandible", "enlazar_actividad"}
 
 # Nivel de encabezado por acción, según la política de jerarquía de la UCC:
 # H2 es el título de la página, H3 el subtítulo y H4 el sub-subtítulo.
@@ -137,6 +137,14 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
             return "otra_pagina"
         if en_lectura:
             return "foro_en_lectura"
+    # "Maquetación: enlazar actividad" — el asesor deja escrito "Para acceder a
+    # la consigna, hacé clic aquí" y marca que ese texto tiene que ser el link
+    # al assignment. Va antes que el resto: "enlazar actividad; el buzón debe
+    # ser el mismo que se abrió en el módulo 2" también menciona el módulo.
+    if re.search(r"\benlaz|\bvincul|\blinke?a", n) \
+            and ("actividad" in n or "consigna" in n or "buzon" in n
+                 or "entrega" in n):
+        return "enlazar_actividad"
     # "sub-subtítulo" contiene "subtítulo": hay que mirarlo primero.
     if re.search(r"sub\s*-?\s*sub\s*-?\s*titulo", n):
         return "subsubtitulo"
@@ -511,6 +519,70 @@ def _texto_tooltip(instruccion: str) -> str:
     return ""
 
 
+def _archivo_referenciado(el) -> str:
+    """Nombre del DOCX que el asesor anotó al pie del recuadro para decir a qué
+    actividad apunta el enlace ("EP - AFI.docx", "AEO 1 - GRyI.docx").
+
+    Es el dato exacto —mejor que adivinar por la prosa, que menciona tanto la
+    entrega preparatoria como la obligatoria en el mismo párrafo—. El párrafo
+    en sí es una nota para maquetación y no se publica (lo saca
+    procesar_contenido, ver _PAT_SOLO_ARCHIVO)."""
+    caja = el.find_parent("table") or el.parent
+    if caja is None:
+        return ""
+    for p in caja.find_all(["p", "li"]):
+        m = _PAT_SOLO_ARCHIVO.match(p.get_text(" ", strip=True))
+        if m:
+            return m.group(0).strip()
+    return ""
+
+
+def _destino_de_actividad(el, instruccion: str) -> str:
+    """Qué actividad hay que enlazar, leída del pedido y de su contexto.
+
+    Devuelve "obligatoria" o "sugerida", con el módulo pegado cuando el asesor
+    lo aclara ("el buzón debe ser el mismo que se abrió en el módulo 2" →
+    "sugerida:2"): el buzón de la entrega preparatoria es uno solo para los
+    módulos 2 y 3, y sin esa aclaración se abriría uno por módulo.
+    """
+    n = normalizar(instruccion)
+    contexto = normalizar(
+        (el.find_parent("table") or el).get_text(" ", strip=True))
+    # "preparatoria" primero: el párrafo que invita a la entrega preparatoria
+    # también nombra la obligatoria que vendrá después.
+    if any(k in contexto for k in ("preparatoria", "preparatorio")):
+        clase = "sugerida"
+    elif "obligatoria" in contexto or "obligatoria" in n:
+        clase = "obligatoria"
+    elif "sugerida" in contexto or "opcional" in contexto:
+        clase = "sugerida"
+    else:
+        clase = "obligatoria"
+    m = re.search(r"m[oó]dulo\s*(\d+)", n)
+    return f"{clase}:{m.group(1)}" if m else clase
+
+
+def _marcar_enlace_de_actividad(soup, el, instruccion: str) -> bool:
+    """Convierte el texto anclado en un <a> marcado con la actividad a la que
+    tiene que apuntar. El href lo completa el generador, que es quien conoce
+    los ids de los recursos de Canvas."""
+    if el.find("a") is not None:
+        return False
+    contenido = "".join(str(x) for x in el.children).strip()
+    if not contenido:
+        return False
+    atributos = {"class": "dp-course-link",
+                 "data-actividad": _destino_de_actividad(el, instruccion)}
+    archivo = _archivo_referenciado(el)
+    if archivo:
+        atributos["data-actividad-archivo"] = archivo
+    enlace = soup.new_tag("a", **atributos)
+    enlace.append(BeautifulSoup(contenido, "html.parser"))
+    el.clear()
+    el.append(enlace)
+    return True
+
+
 def aplicar_comentarios(soup, comentarios: list) -> None:
     """Aplica al soup las acciones automáticas cuyo texto anclado aparezca en
     él, y arma los componentes de pedido del asesor (acordeon/tabs/expander/
@@ -596,6 +668,16 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
             for elemento in _tramo_hasta(el, fin):
                 elemento.decompose()
             c["_aplicado"] = True
+            continue
+
+        # "Enlazar actividad": el asesor escribió "Para acceder a la consigna,
+        # hacé clic aquí" y pide que ESE texto sea el link al assignment. Acá
+        # todavía no existen los recursos de Canvas (ni sus ids), así que queda
+        # marcado con qué actividad hay que enlazarlo y el generador resuelve
+        # el href cuando el aula ya está armada.
+        if accion == "enlazar_actividad":
+            if _marcar_enlace_de_actividad(soup, el, c["instruccion"]):
+                c["_aplicado"] = True
             continue
 
         # Ya está dentro de un recuadro/componente armado: encuadrarlo otra vez
