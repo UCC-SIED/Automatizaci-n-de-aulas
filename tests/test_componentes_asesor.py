@@ -75,14 +75,65 @@ class TestConstruirPanels:
 
 
 class TestConstruirFlipcards:
+    """Snippet estándar UCC (grilla flex de 2 por fila): ver docs/referencia-
+    designplus-cidilabs-ucc.md. El molde viejo (dp-flip-card sin
+    dp-flip-card-fast, "row justify-content-center" en vez de la grilla
+    flex) no es el que usa el equipo a mano."""
+
     def test_estructura_cidilabs(self):
         html = construir_flipcards([("Frente1", "Dorso1"), ("Frente2", "Dorso2")])
-        assert 'class="row justify-content-center"' in html
-        assert html.count('class="dp-flip-card"') == 2
+        assert html.count('class="dp-flip-card dp-flip-card-fast"') == 2
         assert '<div class="dp-front-card">' in html
         assert '<div class="dp-back-card">' in html
         assert "<strong>Frente1</strong>" in html
         assert "Dorso1" in html
+
+    def test_lleva_aire_de_parrafo_completo_arriba_y_abajo(self):
+        html = construir_flipcards([("Frente1", "Dorso1")])
+        assert html.startswith("<p>&nbsp;</p>")
+        assert html.rstrip().endswith("<p>&nbsp;</p>")
+
+    def test_el_frente_no_se_confunde_con_un_subtitulo(self):
+        """El texto del frente (corto, todo en negrita) no debe quedar
+        vulnerable a la auto-detección de subtítulos de procesar_contenido:
+        lleva dp-heading-ignore Y vive dentro de dp-front-card, que
+        procesar_contenido excluye explícitamente."""
+        from maquetador.build.snippets import procesar_contenido
+        html = construir_flipcards([("Planificar (Plan)", "Identificar una "
+                                    "situación que se debe mejorar.")])
+        out = procesar_contenido(html)
+        assert "<h3>Planificar (Plan)</h3>" not in out
+        assert "Planificar (Plan)" in out
+
+    def test_saca_las_etiquetas_tarjeta_y_reverso_de_la_prosa(self):
+        """El asesor no siempre arma una tabla: a veces escribe el frente y
+        el dorso como convención dentro del propio párrafo ('Tarjeta 1:
+        Planificar (Plan)' en negrita, '. Reverso: descripción' en el
+        resto) — lo agarra _titulo_en_negrita_al_inicio, con el resto
+        envuelto en <p>…</p>. Ninguna de las dos etiquetas es contenido
+        real de la tarjeta. Caso real: PDCA en 2.1, módulo 2."""
+        html = construir_flipcards([
+            ("Tarjeta 1: Planificar (Plan)",
+             "<p>. Reverso: Identificar una situación que se debe mejorar, "
+             "analizar sus causas y definir acciones.</p>"),
+            ("Tarjeta 2: Hacer (Do)",
+             "<p>. Reverso: Implementar las acciones planificadas.</p>"),
+        ])
+        assert "Tarjeta" not in html
+        assert "Reverso" not in html
+        assert "<p><p>" not in html
+        assert "<strong>Planificar (Plan)</strong>" in html
+        assert ("Identificar una situación que se debe mejorar, analizar "
+               "sus causas y definir acciones.") in html
+
+    def test_sin_etiquetas_no_cambia_el_contenido(self):
+        """La limpieza de 'Tarjeta N:'/'Reverso:' es específica de esa
+        convención: un par común (de una tabla, sin esas etiquetas) pasa
+        sin tocarse."""
+        html = construir_flipcards([("Frente normal", "Dorso normal, sin "
+                                    "ninguna etiqueta especial.")])
+        assert "<strong>Frente normal</strong>" in html
+        assert "Dorso normal, sin ninguna etiqueta especial." in html
 
 
 class TestConstruirPopover:

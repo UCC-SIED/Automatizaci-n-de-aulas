@@ -347,19 +347,63 @@ def construir_panels(pares: list, variante: str = "dp-expander-default") -> str:
             f'{grupos}\n</div>')
 
 
+# El asesor a veces escribe frente/dorso como convención DENTRO de la propia
+# prosa, en vez de una tabla: "Tarjeta 1: Planificar (Plan)" en negrita al
+# inicio del párrafo (el prefijo lo agarra _titulo_en_negrita_al_inicio como
+# título), seguido de ". Reverso: descripción" en el resto del párrafo. Esas
+# etiquetas son la convención de escritura del asesor, no contenido real de
+# la tarjeta — se sacan antes de armar el HTML.
+_RE_TARJETA_PREFIJO = re.compile(r"^tarjeta\s*\d+\s*[:.\-–—]*\s*", re.I)
+_RE_REVERSO_PREFIJO = re.compile(r"^\.?\s*reverso\s*[:.]?\s*", re.I)
+
+
+def _limpiar_par_flipcard(titulo: str, contenido: str) -> tuple:
+    """(título, contenido) de extraer_pares → mismo par, sin las etiquetas
+    'Tarjeta N:'/'Reverso:' que a veces trae la prosa del asesor, y sin el
+    <p>…</p> de más que envuelve _titulo_en_negrita_al_inicio (si no se
+    saca, el molde de la tarjeta lo vuelve a envolver: <p><p>…</p></p>)."""
+    titulo = _RE_TARJETA_PREFIJO.sub("", titulo).strip()
+    contenido = contenido.strip()
+    m = re.match(r"^<p>(.*)</p>$", contenido, re.S)
+    interior = m.group(1) if m else contenido
+    interior = _RE_REVERSO_PREFIJO.sub("", interior.strip()).strip()
+    return titulo, (interior or "&nbsp;")
+
+
 def construir_flipcards(pares: list) -> str:
-    """Flip cards CidiLabs: frente = título (negrita), dorso = contenido."""
+    """Flip cards CidiLabs: frente = título (negrita, grande), dorso =
+    contenido. Snippet estándar UCC (grilla flex de 2 por fila, tarjetas de
+    altura pareja)."""
+    pares = [_limpiar_par_flipcard(t, c) for t, c in pares]
     cards = "\n".join(
-        '<div class="dp-flip-card">\n<div class="dp-flip-card-inner">\n'
-        '<div class="dp-front-card">'
-        '<div class="dp-card card h-100 dp-shadow-b3 text-center">'
-        f'<p><strong>{t}</strong></p></div></div>\n'
-        '<div class="dp-back-card">'
-        '<div class="dp-card card h-100 text-center dp-shadow-b3" style="padding: 16px;">'
-        f'<p style="text-align: left;">{c}</p></div></div>\n'
-        '</div>\n</div>'
+        '<div style="flex: 1 1 45%; min-width: 280px; max-width: 48%; '
+        'display: flex;">\n'
+        '<div class="dp-flip-card dp-flip-card-fast" style="width: 100%;">\n'
+        '<div class="dp-flip-card-inner">\n'
+        '<div class="dp-front-card">\n'
+        '<div class="dp-card card h-100 dp-shadow-b3" '
+        'style="min-height: 190px; display: flex; flex-direction: column;">\n'
+        '<div class="card-body" style="display: flex; align-items: center; '
+        'justify-content: center; min-height: 190px; text-align: center; '
+        'width: 100%; padding: 15px;">\n'
+        '<div style="width: 100%;">\n'
+        '<p class="card-text dp-heading-ignore" style="font-size: 1.1rem; '
+        f'margin: 0;"><span style="font-size: 18pt;"><strong>{t}</strong>'
+        '</span></p>\n</div>\n</div>\n</div>\n</div>\n'
+        '<div class="dp-back-card">\n'
+        '<div class="dp-card card h-100 dp-shadow-b3" '
+        'style="min-height: 190px; display: flex; flex-direction: column;">\n'
+        '<div class="card-body" style="display: flex; align-items: center; '
+        'justify-content: center; min-height: 190px; text-align: center; '
+        'width: 100%; padding: 15px;">\n'
+        '<div style="width: 100%;">\n'
+        f'<p class="card-text" style="margin: 0;">{c}</p>\n'
+        '</div>\n</div>\n</div>\n</div>\n'
+        '</div>\n</div>\n</div>'
         for t, c in pares)
-    return f'<div class="row justify-content-center">\n{cards}\n</div>'
+    return ('<p>&nbsp;</p>\n<div style="display: flex; flex-wrap: wrap; '
+            'justify-content: center; row-gap: 15px; column-gap: 15px; '
+            f'width: 100%; margin: 0 auto;">\n{cards}\n</div>\n<p>&nbsp;</p>')
 
 
 # Palabras que no aportan inicial a una sigla ("Sistema de Gestión de la

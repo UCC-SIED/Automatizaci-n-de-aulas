@@ -1755,7 +1755,8 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
     # sin asumir la categoría de encabezado — como el resto del catálogo.
     for p in soup.find_all("p"):
         en_panel = p.find_parent(class_="dp-panels-wrapper") is not None
-        if p.find_parent(class_=("dp-callout", "dp-flip-card-deck")):
+        if p.find_parent(class_=("dp-callout", "dp-flip-card-deck",
+                                  "dp-front-card", "dp-back-card")):
             continue
         if p.find_parent(["td", "th"]):
             # Una celda de tabla en negrita es un encabezado de columna, no
