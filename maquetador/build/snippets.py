@@ -1446,8 +1446,8 @@ def bloque_recurso_incrustado(iframe_html: str = "", titulo: str = "") -> str:
     hueco marca dónde va.
     """
     interior = iframe_html or (
-        f"<!-- Incrustar aquí el recurso{' — ' + titulo if titulo else ''}: "
-        "el diseñador entrega el div -->")
+        f"<!-- Incrustar aquí el {titulo} -->" if titulo else
+        "<!-- Incrustar aquí el recurso: el diseñador entrega el div -->")
     return ('<div style="width: 100%;" title="contenido insertado">\n'
             '<div style="position: relative; padding-bottom: 56.25%; '
             'padding-top: 0; height: 0;">\n'

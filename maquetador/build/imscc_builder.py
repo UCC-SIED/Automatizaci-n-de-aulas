@@ -43,6 +43,7 @@ from maquetador.build.snippets import (separar_consignas, procesar_contenido,
                                        indexar_figuras_diseno,
                                        reemplazar_figuras_diseno,
                                        maquetar_actividad,
+                                       bloque_recurso_incrustado,
                                        _FIG_CLASES_ESTATICA)
 from maquetador.build.bibliography import construir_bibliografia
 from maquetador.extract.segmenter import ImagenInline, _MAMMOTH_STYLE_MAP
@@ -101,6 +102,24 @@ def _elegir_foto_docente(candidatas: list, nombre: str):
             if any(p in stem for p in partes):
                 return path
     return candidatas[0]
+
+
+# Herramientas colaborativas externas: la planilla las nombra en la columna de
+# referencia en lugar de un DOCX ("Actividad sugerida | Padlet"). No hay archivo
+# que volcar, pero la actividad existe igual y necesita su lugar en Canvas.
+_HERRAMIENTAS_EXTERNAS = ("padlet", "mural", "miro", "jamboard", "wooclap",
+                          "mentimeter", "flipgrid", "genially")
+
+
+def _herramienta_externa(item) -> str:
+    """Nombre de la herramienta que la planilla puso como referencia, o ""."""
+    ref = normalizar(item.detalle.get("referencia", "") or "")
+    if not ref or len(ref) > 40:
+        return ""
+    for herramienta in _HERRAMIENTAS_EXTERNAS:
+        if herramienta in ref:
+            return herramienta.capitalize()
+    return ""
 
 
 def _leer(path: Path) -> str:
@@ -1026,6 +1045,62 @@ class GeneradorAula:
         return self._rid_en_meta(
             "Assignment", rf"[^<]*[Aa]ctividad[^<]*M{n}[^<]*"), f"Actividad obligatoria M{n}"
 
+    def _consigna_de_mural(self, modulo) -> str:
+        """Consigna del recuadro de mural colaborativo del módulo, si lo hay.
+
+        Cuando la actividad del módulo se resuelve en una herramienta externa,
+        la consigna no llega como DOCX: el asesor la escribe en el recuadro
+        "Voces que construyen (Mural colaborativo)" del propio multimedial.
+        """
+        fuentes = [getattr(i.fuente, "html", "") or "" for i in modulo.items]
+        # El recuadro suele ir al final del multimedial, después de la última
+        # sección numerada: ahí ya no pertenece a ningún ítem de la planilla,
+        # queda en el bloque de cierre del módulo.
+        fuentes += list(getattr(modulo, "extras", {}).values())
+        for html in fuentes:
+            if not html or ("mural" not in normalizar(html)
+                            and "voces que" not in normalizar(html)):
+                continue
+            soup = BeautifulSoup(html, "html.parser")
+            for tabla in soup.find_all("table"):
+                celdas = tabla.find_all(["td", "th"])
+                if not celdas:
+                    continue
+                etiqueta = normalizar(celdas[0].get_text(" ", strip=True))
+                if "mural" not in etiqueta and "voces que construyen" not in etiqueta:
+                    continue
+                cuerpo = "".join(
+                    "".join(str(x) for x in c.children) for c in celdas[1:])
+                if cuerpo.strip():
+                    return cuerpo
+        return ""
+
+    def _inyectar_actividad_con_herramienta(self, modulo, item, herramienta: str,
+                                            ctx: str):
+        """Actividad que se resuelve en una herramienta externa (Padlet, Mural,
+        Miro…): la planilla nombra la herramienta en vez de un DOCX, así que no
+        hay archivo que volcar. Se arma igual el assignment, con la consigna
+        que el asesor dejó en el multimedial y el contenedor listo para pegar
+        el embebido."""
+        n = modulo.numero
+        rid = self._clonar_actividad_sugerida(n)
+        if not rid:
+            item.issues.append(Issue(Severidad.AVISO,
+                f"La actividad del módulo {n} se resuelve en {herramienta} y no "
+                "pude clonar un assignment para ella: crearla a mano en Canvas.",
+                item.titulo))
+            return
+        consigna = self._consigna_de_mural(modulo)
+        cuerpo = (consigna + bloque_recurso_incrustado(titulo=herramienta)).strip()
+        if self._escribir_assignment(rid, self._rutear_media(cuerpo), ctx):
+            item.issues.append(Issue(Severidad.INFO,
+                f"'{item.titulo[:50]}' se resuelve en {herramienta}: creé el "
+                f"assignment 'Actividad sugerida M{n}' (Completo/Incompleto, no "
+                f"cuenta para la nota final) con el hueco para pegar el "
+                f"{herramienta}. La consigna sigue además en el multimedial.",
+                item.titulo))
+            logger.info(f"  [M{n}] Actividad sugerida (nueva) ← {herramienta}")
+
     def _inyectar_consigna_actividad(self, n: int, titulo: str, body: str,
                                      ctx: str):
         """Consigna de actividad embebida en el multimedial → assignment."""
@@ -1143,6 +1218,11 @@ class GeneradorAula:
         for item in modulo.items:
             archivo = item.fuente.archivo
             if not archivo or archivo.suffix.lower() != ".docx":
+                if item.tipo == TipoItem.TAREA and not archivo:
+                    herramienta = _herramienta_externa(item)
+                    if herramienta:
+                        self._inyectar_actividad_con_herramienta(
+                            modulo, item, herramienta, ctx)
                 continue
             if item.tipo in (TipoItem.FORO, TipoItem.TAREA) \
                     and item.fuente.confianza < 0.6:
@@ -1821,6 +1901,13 @@ class GeneradorAula:
             elif item.tipo == TipoItem.TAREA:
                 if "autoeval" in txt:
                     self._avisar_autoevaluacion_clasica(n, item.titulo)
+                elif "sugerida" in txt or "opcional" in txt:
+                    # La sugerida se arma clonando: no ocupa el slot de la
+                    # obligatoria del aula base. Si el módulo NO pide una
+                    # obligatoria (en Gestión del Riesgo, el módulo 1 solo
+                    # tiene una sugerida en Padlet), ese slot se queda vacío y
+                    # hay que borrarlo, no dejarlo con el placeholder.
+                    quedan.add(f"Actividad sugerida M{n}")
                 else:
                     quedan.add(f"Actividad obligatoria M{n}")
         return quedan
