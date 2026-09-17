@@ -341,9 +341,14 @@ def construir_panels(pares: list, variante: str = "dp-expander-default") -> str:
         f'<h3 class="dp-panel-heading">{t}</h3>\n'
         f'<div class="dp-panel-content">{c}</div>\n</div>'
         for t, c in pares)
+    # Las tabs horizontales SIEMPRE llevan "ancho completo" (catálogo UCC,
+    # docs/referencia-designplus-cidilabs-ucc.md): sin esta clase las
+    # solapas quedan angostas, del ancho del texto, en vez de repartirse
+    # todo el ancho disponible. Vertical/expander/acordeón no la llevan.
+    fill = " dp-panel-tab-width-fill" if variante == "dp-tabs-buttons" else ""
     return (f'<div class="dp-panels-wrapper {variante} '
             'dp-panel-color-dp-primary dp-panel-active-color-dp-secondary '
-            'dp-panel-hover-color-dp-secondary">\n'
+            f'dp-panel-hover-color-dp-secondary{fill}">\n'
             f'{grupos}\n</div>')
 
 

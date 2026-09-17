@@ -39,6 +39,20 @@ class TestCaratulaDePlantilla:
                 "<tr><td>Exactitud</td><td>Precisión del cálculo.</td></tr></table>")
         assert "<table" in procesar_contenido(html)
 
+    def test_reconoce_la_variante_nombre_de_la_carrera(self):
+        """La AFI usa "Nombre de la carrera"/"Nombre del módulo" en vez de
+        "Carrera" a secas: con esos rótulos no reconocidos, la carátula
+        nunca se sacaba (solo "Asignatura" hacía match, 1 de 3 — no
+        alcanzaba el piso de 2 rótulos)."""
+        html = ('<table><tr><th>Nombre de la carrera</th>'
+                '<th>Maestría en Dirección Estratégica de Proyectos</th></tr>'
+                '<tr><td>Asignatura</td><td>Gestión de la Calidad</td></tr>'
+                '<tr><td>Nombre del módulo</td><td>AFI</td></tr></table>'
+                '<p>Analizá situaciones reales</p>')
+        out = procesar_contenido(html)
+        assert "Nombre de la carrera" not in out
+        assert "Analizá situaciones reales" in out
+
 
 class TestTabsConTituloEnNegrita:
     """"TABS horizontal … poner Principio 1 / Principio 2 y el título dentro

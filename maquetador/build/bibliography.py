@@ -59,7 +59,11 @@ def _fila_referencia(ref_html: str, url: str) -> str:
     else:
         icono = (f'<img role="presentation" src="{ICONO_LECTURA}" alt="" '
                  f'loading="lazy">')
-        link_p = ""
+        # Sin URL, la fila queda dos líneas más corta que sus vecinas con
+        # link (texto + link + aire, contra solo texto + aire): sin este
+        # renglón de aire de más en su lugar, las referencias sin link
+        # quedan apelmazadas contra la siguiente.
+        link_p = '<p class="text-break" style="margin: 0; padding: 0;">&nbsp;</p>'
     return f"""<div class="row">
 <div class="col-md-1 col-xs-2">{icono}</div>
 <div class="col-md-11 col-xs-10">

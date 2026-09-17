@@ -45,6 +45,68 @@ class TestVariantesDePanel:
         assert "dp-panel-active-color-dp-secondary" in html
         assert "dp-panel-hover-color-dp-secondary" in html
 
+    def test_tabs_horizontal_lleva_ancho_completo(self):
+        """Catálogo UCC (docs/referencia-designplus-cidilabs-ucc.md): las
+        tabs horizontales SIEMPRE llevan dp-panel-tab-width-fill, si no
+        quedan angostas (del ancho del texto) en vez de ocupar toda la fila."""
+        html = construir_panels([("A", "<p>a</p>"), ("B", "<p>b</p>")],
+                                "dp-tabs-buttons")
+        assert "dp-panel-tab-width-fill" in html
+
+    def test_tabs_vertical_y_acordeon_no_llevan_ancho_completo(self):
+        """dp-panel-tab-width-fill es específico de las tabs horizontales:
+        vertical/expander/acordeón no lo necesitan (no tienen ese problema
+        de ancho)."""
+        assert "dp-panel-tab-width-fill" not in construir_panels(
+            [("A", "<p>a</p>"), ("B", "<p>b</p>")], "dp-tabs-buttons-vertical")
+        assert "dp-panel-tab-width-fill" not in construir_panels(
+            [("A", "<p>a</p>"), ("B", "<p>b</p>")], "dp-expander-default")
+        assert "dp-panel-tab-width-fill" not in construir_panels(
+            [("A", "<p>a</p>"), ("B", "<p>b</p>")], "dp-accordion-default")
+
+
+class TestEspaciadoYTipografiaDePaneles:
+    """Tabs/acordeón/expander (dp-panels-wrapper) llevan aire de párrafo
+    completo arriba y abajo, como cualquier componente con título propio —
+    y si el panel arranca con una bajada TODO subrayada (la bajada del
+    título del panel, p.ej. "La calidad como responsabilidad de toda la
+    organización" abriendo "Calidad Total"), esa línea lleva letra un poco
+    más grande (estilo "lead"), pero sigue siendo párrafo, no heading ni
+    negrita."""
+
+    def test_lleva_aire_arriba_y_abajo(self):
+        html = ("<p>Antes del panel.</p>"
+                + construir_panels([("A", "<p>Contenido A.</p>"),
+                                    ("B", "<p>Contenido B.</p>")],
+                                   "dp-tabs-buttons")
+                + "<p>Después del panel.</p>")
+        out = procesar_contenido(html)
+        assert "<p>Antes del panel.</p><p>\xa0</p><div" in out
+        assert "</div><p>\xa0</p><p>Después del panel.</p>" in out
+
+    def test_la_bajada_subrayada_del_panel_usa_lead(self):
+        html = construir_panels(
+            [("Calidad Total",
+              "<p><u>La calidad como responsabilidad de toda la "
+              "organización</u></p><p>La Calidad Total puede entenderse "
+              "como una filosofía de gestión.</p>"),
+             ("Lean", "<p>Contenido de Lean.</p>")],
+            "dp-tabs-buttons")
+        out = procesar_contenido(html)
+        assert ('<p class="lead"><u>La calidad como responsabilidad de '
+               'toda la organización</u></p>') in out
+
+    def test_un_parrafo_underline_parcial_no_se_agranda(self):
+        """Solo una bajada TOTALMENTE subrayada cuenta — un párrafo con
+        solo una palabra subrayada en el medio es contenido común."""
+        html = construir_panels(
+            [("A", "<p>Un párrafo con <u>una palabra</u> subrayada, nada "
+                   "más.</p><p>Más contenido.</p>"),
+             ("B", "<p>Contenido B.</p>")],
+            "dp-tabs-buttons")
+        out = procesar_contenido(html)
+        assert '<p class="lead">' not in out
+
 
 class TestPanelDesdeSubtitulos:
     """'expander (títulos subrayados)': el asesor no arma tabla, subraya los
@@ -678,6 +740,49 @@ class TestSubtituloYaConvertidoAEncabezadoNativo:
         assert len(soup.find_all(class_="dp-panel-group")) == 2
         wrapper = soup.find(class_="dp-panels-wrapper")
         assert "La calidad como responsabilidad" in str(wrapper)
+
+
+class TestPreguntaNumeradaNoEsEncabezado:
+    """Una pregunta de la consigna, numerada, a veces llega con estilo de
+    título de Word (el asesor la organiza así en el propio documento), pero
+    es un ítem de una lista de preguntas, no un sub-encabezado del caso: no
+    debe bajar a <h4> junto con los sub-encabezados reales ("Contexto del
+    proyecto", "Actores involucrados"…). Caso real: la Actividad final
+    integradora, 5 preguntas numeradas como Heading 3 en el DOCX."""
+
+    def test_no_se_convierte_en_h4(self):
+        out = maquetar_actividad(
+            "<h2>Actividad final integradora</h2>"
+            "<h3>Consigna</h3>"
+            "<p>Responda a los siguientes puntos:</p>"
+            "<h3>1. ¿Considera que el proyecto fue exitoso?</h3>"
+            "<h3>2. Identifique las prioridades de mejora.</h3>")
+        assert "<h4>" not in out
+        assert "<p>1. ¿Considera que el proyecto fue exitoso?</p>" in out
+        assert "<p>2. Identifique las prioridades de mejora.</p>" in out
+
+    def test_no_deja_aire_suelto_entre_las_preguntas(self):
+        """procesar_contenido le pone aire adelante cuando todavía es un
+        <h3> suelto (paso 5): al bajarla a párrafo ese aire ya no
+        corresponde — una lista de preguntas va corrida, sin separador
+        entre cada una."""
+        html = ("<h2>Actividad final integradora</h2>"
+                "<h3>Consigna</h3>"
+                "<p>Responda a los siguientes puntos:</p>"
+                "<h3>1. ¿Considera que el proyecto fue exitoso?</h3>"
+                "<h3>2. Identifique las prioridades de mejora.</h3>")
+        out = maquetar_actividad(procesar_contenido(html, "", bajar_h1_h2=False))
+        assert ("<p>1. ¿Considera que el proyecto fue exitoso?</p>"
+               "<p>2. Identifique las prioridades de mejora.</p>") in out
+
+    def test_un_subencabezado_real_del_caso_si_baja_a_h4(self):
+        """Sin número al inicio, sigue siendo un sub-encabezado real del
+        relato (no una pregunta de la consigna): baja a <h4> como antes."""
+        out = maquetar_actividad(
+            "<h2>Actividad obligatoria 1</h2>"
+            "<h3>Contexto del proyecto</h3>"
+            "<p>Descripción del contexto.</p>")
+        assert "<h4>Contexto del proyecto</h4>" in out
 
 
 class TestFlipCardSeDetieneEnSuPropioGrupo:

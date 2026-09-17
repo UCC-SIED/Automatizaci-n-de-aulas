@@ -899,6 +899,13 @@ _PAT_ROTULO_EN_LINEA = re.compile(
 # no como texto corrido.
 _PAT_DISCLAIMER_IA = re.compile(r"aporte de la ia", re.I)
 
+# Pregunta numerada de la consigna ("1. ¿Considera que…?"): el asesor a
+# veces le da estilo de título de Word adentro del propio documento (para
+# organizarse), pero es un ítem de una lista de preguntas, no un encabezado
+# de caso — no debe convertirse en <h4> junto con los sub-encabezados
+# reales del relato ("Contexto del proyecto", "Actores involucrados"…).
+_PAT_PREGUNTA_NUMERADA = re.compile(r"^\d+[.)]\s")
+
 
 def _limpiar_encabezado(h) -> None:
     """Un encabezado nativo del DOCX puede traer subrayado directo del autor
@@ -971,13 +978,30 @@ def maquetar_actividad(html: str, tema: str = "") -> str:
     # <p> ("Pautas de presentación:" es "Título 2" en este DOCX, y el bucle
     # de p→h3 de más abajo lo tocaría si viniera como <p>) se deja: tiene
     # que terminar en el mismo nivel que sus hermanos armados desde <p>.
-    for h3 in soup.find_all("h3"):
-        texto_sin_dp = re.sub(r"[:\s]+$", "", h3.get_text(" ", strip=True))
+    for h3 in list(soup.find_all("h3")):
+        texto_h3 = h3.get_text(" ", strip=True)
+        texto_sin_dp = re.sub(r"[:\s]+$", "", texto_h3)
         if _norm(texto_sin_dp) in _SECCIONES_ACTIVIDAD:
             # Rótulo de sección ya nativo (no pasa por el bucle de <p> de más
             # abajo, que es el que le saca los dos puntos a los que arrancan
             # como párrafo): se los saca acá también.
             h3.string = texto_sin_dp
+            continue
+        if _PAT_PREGUNTA_NUMERADA.match(texto_h3):
+            # Una consigna numerada ("1. ¿Considera que…?") a veces llega
+            # con estilo de título de Word (para organizarse en el propio
+            # documento), pero es un ítem de la lista de preguntas de la
+            # consigna, no un encabezado de caso: baja a párrafo común, no
+            # a <h4> como los sub-encabezados reales del relato. El aire
+            # que procesar_contenido le puso adelante (paso 5, cuando
+            # todavía era un <h3> "suelto") ya no corresponde: una lista de
+            # preguntas va corrida, sin separador entre cada una.
+            previo = h3.previous_sibling
+            while isinstance(previo, NavigableString) and not previo.strip():
+                previo = previo.previous_sibling
+            if _es_espaciador(previo):
+                previo.decompose()
+            h3.name = "p"
             continue
         _limpiar_encabezado(h3)
         h3.name = "h4"
@@ -1368,6 +1392,39 @@ def _espaciar_recuadros(soup):
         _aire_despues(caja, soup)
 
 
+def _espaciar_paneles(soup):
+    """Aire de párrafo completo arriba y abajo de tabs/acordeón/expander
+    (dp-panels-wrapper): son un componente grande, con título propio en cada
+    solapa/panel — igual que un recuadro con título, nunca les corresponde
+    el espaciado corto de un recuadro simple."""
+    for panel in soup.find_all("div", class_="dp-panels-wrapper"):
+        if panel.parent is None or panel.find_parent(class_="dp-panels-wrapper"):
+            continue
+        _aire_antes(panel, soup)
+        _aire_despues(panel, soup)
+
+
+def _agrandar_intro_subrayada_de_panel(soup):
+    """El primer párrafo de un panel, si está TODO subrayado, es la bajada
+    del título (p.ej. "La calidad como responsabilidad de toda la
+    organización" abriendo el panel "Calidad Total"): letra un poco más
+    grande que el resto del cuerpo, pero sigue siendo párrafo —no title,
+    no negrita— como pide el catálogo."""
+    for contenido in soup.find_all("div", class_="dp-panel-content"):
+        p = contenido.find("p", recursive=False)
+        if p is None:
+            continue
+        texto = p.get_text(" ", strip=True)
+        us = p.find_all("u")
+        if not texto or not us:
+            continue
+        if _norm(" ".join(u.get_text(" ", strip=True) for u in us)) != _norm(texto):
+            continue
+        clases = p.get("class") or []
+        if "lead" not in clases:
+            p["class"] = clases + ["lead"]
+
+
 def _espaciar_destacados(soup):
     """Aire arriba y abajo de la frase destacada (estilo lead)."""
     for p in soup.find_all("p", class_="lead"):
@@ -1536,8 +1593,9 @@ def _figura_es_expandible(img) -> bool:
 
 
 # Rótulos de la tabla de portada que traen las plantillas de los asesores.
-_ROTULOS_PLANTILLA = ("unidad academica", "carrera", "asignatura", "docente",
-                      "modalidad", "ciclo lectivo", "ano lectivo")
+_ROTULOS_PLANTILLA = ("unidad academica", "carrera", "nombre de la carrera",
+                      "asignatura", "docente", "modalidad", "ciclo lectivo",
+                      "ano lectivo", "nombre del modulo")
 
 
 def quitar_encabezado_plantilla(soup) -> bool:
@@ -1847,6 +1905,8 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
     _nota_suelta_en_negrita(soup)
     _espaciar_figuras(soup)
     _espaciar_recuadros(soup)
+    _agrandar_intro_subrayada_de_panel(soup)
+    _espaciar_paneles(soup)
     _espaciar_destacados(soup)
 
     # 3.5 Enlaces: URLs sueltas → <a>; todo enlace externo con el estilo
