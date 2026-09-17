@@ -680,6 +680,61 @@ class TestSubtituloYaConvertidoAEncabezadoNativo:
         assert "La calidad como responsabilidad" in str(wrapper)
 
 
+class TestFlipCardSeDetieneEnSuPropioGrupo:
+    """flip_card no calculaba un límite de fin (`hasta`) como sí hacen
+    acordeón/tabs/expander (`grupos_fin`, vía `_VARIANTE_PANEL`): el barrido
+    de pares_de_secciones (modo "negrita", desde la primera tarjeta) seguía
+    de largo más allá de la última tarjeta y se tragaba cualquier encabezado
+    nativo que encontrara después como si fuera una tarjeta más. Caso real:
+    el flip card del ciclo PDCA (4 tarjetas "Tarjeta N: … . Reverso: …")
+    seguía de largo y sumaba dos subtítulos NO relacionados que venían
+    después en el documento ("¿Cómo influye…?"/"La mejora continua…") como
+    tarjetas 5 y 6."""
+
+    HTML = (
+        "<div>"
+        "<p>Su nombre surge de las iniciales de cuatro etapas:</p>"
+        "<p><strong>Tarjeta 1: Planificar (Plan)</strong>. Reverso: "
+        "Identificar una situación que se debe mejorar.</p>"
+        "<p><strong>Tarjeta 2: Actuar (Act)</strong>. Reverso: "
+        "Consolidar la mejora antes de iniciar un nuevo ciclo.</p>"
+        "<h4>¿Cómo influye el ciclo PDCA sobre la toma de decisiones?</h4>"
+        "<p>La mejora continua no solo permite optimizar procesos.</p>"
+        "<h3>La mejora continua como parte de la gestión de proyectos</h3>"
+        "<p>En proyectos, el ciclo PDCA puede aplicarse a diferentes niveles.</p>"
+        "</div>")
+
+    def _aplicar(self):
+        soup = BeautifulSoup(self.HTML, "html.parser")
+        coment = [
+            {"instruccion": "Para maquetación: flipcards",
+             "anclado": "Planificar (Plan). Reverso: Identificar una "
+                        "situación que se debe mejorar.",
+             "accion": "flip_card", "autor": ""},
+            {"instruccion": "Para maquetación: flipcards",
+             "anclado": "Actuar (Act). Reverso: Consolidar la mejora antes "
+                        "de iniciar un nuevo ciclo.",
+             "accion": "flip_card", "autor": ""},
+        ]
+        aplicar_comentarios(soup, coment)
+        return soup
+
+    def test_el_deck_tiene_solo_las_tarjetas_pedidas(self):
+        soup = self._aplicar()
+        titulos = [t.get_text(strip=True) for t in
+                   soup.find_all(class_="card-text dp-heading-ignore")]
+        assert titulos == ["Planificar (Plan)", "Actuar (Act)"]
+
+    def test_los_encabezados_posteriores_no_relacionados_sobreviven(self):
+        soup = self._aplicar()
+        assert soup.find(
+            "h4", string="¿Cómo influye el ciclo PDCA sobre la toma de "
+                         "decisiones?") is not None
+        assert soup.find(
+            "h3", string="La mejora continua como parte de la gestión de "
+                         "proyectos") is not None
+
+
 class TestBusquedaDeElementoEsEspecifica:
     """_buscar_elemento se queda con el candidato más específico: una celda
     de tabla corta ('Planificación') que por casualidad es prefijo del texto

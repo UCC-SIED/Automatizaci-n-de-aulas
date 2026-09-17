@@ -735,6 +735,23 @@ def _procesar_cues_parrafo(soup):
                 nuevo = bloque_video_studio("\n".join(
                     _sin_marcador_video(str(x)) for x in grupo
                     if not _PAT_MARCADOR_VIDEO.match(x.get_text(" ", strip=True))))
+                fragmento = BeautifulSoup(nuevo, "html.parser")
+                bloque_video = fragmento.find(
+                    "div", attrs={"data-title": "Video"})
+                p.replace_with(fragmento)
+                # El bloque "Video" NO se cierra después del video: el
+                # equipo a mano lo deja abierto y ahí adentro sigue el
+                # resto de la página completa (herramientas, reflexión,
+                # cierre…) — se mueve todo lo que sigue adentro, así no
+                # queda como un segundo bloque separado.
+                sig = bloque_video.find_next_sibling()
+                while sig is not None:
+                    proximo = sig.find_next_sibling()
+                    bloque_video.append(sig.extract())
+                    sig = proximo
+                for x in grupo[1:]:
+                    x.decompose()
+                continue
         elif tipo == "imagen":
             nuevo = cta_titulo("Miralo con lupa", body, ICONOS["imagen"])
         else:

@@ -443,7 +443,8 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
     # bibliografía).
     grupos_textos = {}
     for c in comentarios:
-        if c["accion"] in _VARIANTE_PANEL or c["accion"] == "genially_listo":
+        if c["accion"] in _VARIANTE_PANEL or c["accion"] == "genially_listo" \
+                or c["accion"] == "flip_card":
             grupos_textos.setdefault(
                 (c["accion"], normalizar(c["instruccion"])), []).append(c)
     # Un ancla corta ("ISO 14001") es una simple etiqueta de arranque, no una
@@ -521,7 +522,7 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
                 grupos_armados.add(grupo)
             continue
         if accion == "flip_card":
-            pares, consumidos = extraer_pares(el)
+            pares, consumidos = extraer_pares(el, hasta=grupos_fin.get(grupo))
             if len(pares) >= 2:
                 html = construir_flipcards(pares)
                 consumidos[0].replace_with(BeautifulSoup(html, "html.parser"))

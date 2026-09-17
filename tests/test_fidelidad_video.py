@@ -87,3 +87,38 @@ class TestBloqueSuelto:
         html = bloque_video_studio()
         assert "dp-embed-wrapper" in html
         assert '<h2 class="dp-has-icon">' in html
+
+
+class TestElBloqueDeVideoQuedaAbierto:
+    """El equipo a mano NO cierra el bloque "Video" después del video: todo
+    el resto de la página (herramientas, reflexión, cierre…) queda adentro
+    del mismo <div data-title="Video">, no como un segundo bloque aparte.
+    Regresión real: 2.2 armaba el bloque de video bien pero lo cerraba
+    justo después, y el resto del contenido de la página (el acordeón de
+    Ishikawa/5 porqués/Pareto, "No conformidades", la reflexión y el
+    cierre) quedaba afuera, en el content-block genérico de arriba."""
+
+    HTML = (PROPIO +
+            '<h3>Comprender los problemas antes de actuar</h3>'
+            '<p>Antes de aplicar cualquier herramienta…</p>')
+
+    def test_el_resto_de_la_pagina_queda_adentro_del_bloque_de_video(self):
+        from bs4 import BeautifulSoup
+        out = procesar_contenido(self.HTML)
+        soup = BeautifulSoup(out, "html.parser")
+        bloque = soup.find("div", attrs={"data-title": "Video"})
+        assert bloque is not None
+        assert bloque.find("h3") is not None
+        assert "Comprender los problemas" in bloque.get_text()
+
+    def test_un_solo_bloque_de_video_con_todo_adentro(self):
+        out = procesar_contenido(self.HTML)
+        assert out.count('data-title="Video"') == 1
+
+    def test_video_externo_no_se_ve_afectado(self):
+        """El CTA a YouTube/Vimeo (con URL) no arma bloque "Video": no hay
+        nada que dejar abierto, el resto de la página sigue como siempre."""
+        html = EXTERNO + "<h3>Otro tema</h3><p>Más contenido.</p>"
+        out = procesar_contenido(html)
+        assert 'data-title="Video"' not in out
+        assert "<h3>Otro tema</h3>" in out
