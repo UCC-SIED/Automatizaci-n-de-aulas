@@ -840,6 +840,96 @@ class TestFlipCardSeDetieneEnSuPropioGrupo:
                          "proyectos") is not None
 
 
+class TestNoMaquetarBorraElTramo:
+    """"NO MAQUETAR" saca TODO el tramo anclado, no solo el párrafo donde
+    arranca: el asesor marca de una una sección entera (las "Indicaciones
+    para el tutor" al cierre de una AFI). Borrar solo el primero dejaría el
+    resto publicado."""
+
+    HTML = ("<div>"
+            "<h3>Criterios de evaluación</h3><p>Se evalúa X.</p>"
+            "<h3>Indicaciones para el tutor</h3>"
+            "<p>Esta sección es para el equipo docente.</p>"
+            "<h4>Sobre la corrección</h4><p>Aplicar la rúbrica.</p>"
+            "</div>")
+
+    def _aplicar(self):
+        soup = BeautifulSoup(self.HTML, "html.parser")
+        coment = [{"instruccion": "NO MAQUETAR",
+                   "anclado": "Indicaciones para el tutor Esta sección es para "
+                              "el equipo docente. Sobre la corrección "
+                              "Aplicar la rúbrica.",
+                   "accion": "no_maquetar", "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        return soup, coment
+
+    def test_saca_toda_la_seccion(self):
+        soup, _ = self._aplicar()
+        texto = soup.get_text()
+        assert "Indicaciones para el tutor" not in texto
+        assert "Sobre la corrección" not in texto
+        assert "Aplicar la rúbrica" not in texto
+
+    def test_no_toca_lo_que_va_antes(self):
+        soup, _ = self._aplicar()
+        assert "Criterios de evaluación" in soup.get_text()
+        assert "Se evalúa X." in soup.get_text()
+
+    def test_queda_marcado_como_aplicado(self):
+        _soup, coment = self._aplicar()
+        assert coment[0].get("_aplicado") is True
+
+
+class TestRecuadroDeForoSegunDestino:
+    """El recuadro del foro escrito en la lectura va a la página, al espacio
+    del foro, o a los dos, según lo que aclare el asesor."""
+
+    def _caja(self, rotulo="Foro del módulo 1"):
+        return ("<div><p>Texto previo.</p>"
+                f"<table><tr><td><p>{rotulo}</p></td></tr>"
+                "<tr><td><p>Compartí tu experiencia.</p></td></tr></table></div>")
+
+    def _aplicar(self, instruccion, accion):
+        soup = BeautifulSoup(self._caja(), "html.parser")
+        coment = [{"instruccion": instruccion, "anclado": "Foro del módulo 1",
+                   "accion": accion, "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        return soup, coment
+
+    def test_espacio_del_foro_lo_saca_de_la_pagina(self):
+        soup, coment = self._aplicar("Para maquetación, para el espacio del foro.",
+                                     "otra_pagina")
+        assert "Compartí tu experiencia." not in soup.get_text()
+        assert "Compartí tu experiencia." in coment[0]["_contenido_extraido"]
+
+    def test_en_los_dos_lados_lo_copia_y_lo_deja(self):
+        soup, coment = self._aplicar(
+            "Para maquetación, es el mismo contenido para la lectura y para "
+            "el espacio del foro.", "foro_lectura_y_espacio")
+        assert "Compartí tu experiencia." in soup.get_text()
+        assert "Compartí tu experiencia." in coment[0]["_contenido_extraido"]
+
+    def test_solo_en_la_lectura_no_toca_nada(self):
+        soup, coment = self._aplicar("Para maquetación, para dejar en la lectura.",
+                                     "foro_en_lectura")
+        assert "Compartí tu experiencia." in soup.get_text()
+        assert coment[0].get("_aplicado") is True
+
+    def test_recuadro_de_una_sola_celda_tambien_da_su_cuerpo(self):
+        """En algunos módulos el rótulo y el cuerpo son párrafos de la MISMA
+        celda: mirando solo tr[1:] el foro quedaba sin consigna."""
+        soup = BeautifulSoup(
+            "<div><table><tr><td><p>Foro del módulo 3</p>"
+            "<p>Esta actividad es optativa.</p></td></tr></table></div>",
+            "html.parser")
+        coment = [{"instruccion": "Para maquetación, para el espacio del foro.",
+                   "anclado": "Foro del módulo 3", "accion": "otra_pagina",
+                   "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        assert "Esta actividad es optativa." in coment[0]["_contenido_extraido"]
+        assert "Foro del módulo 3" not in coment[0]["_contenido_extraido"]
+
+
 class TestBusquedaDeElementoEsEspecifica:
     """_buscar_elemento se queda con el candidato más específico: una celda
     de tabla corta ('Planificación') que por casualidad es prefijo del texto

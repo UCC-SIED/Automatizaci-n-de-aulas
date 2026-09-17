@@ -401,6 +401,27 @@ class TestFichaDeCasoNoEsElDesarrolloDelModulo:
         assert nombres == ["Modulo 1 - Caso_Cirque_du_Soleil.docx",
                            "Modulo 1 - Ficha_Caso_Disney.docx"]
 
+    def test_el_pdf_de_la_ficha_tambien_va_a_casos(self, tmp_path):
+        """El PDF que sale de diseño es la versión publicable del caso."""
+        raiz = tmp_path / "Curso"
+        (raiz / "Diseño").mkdir(parents=True)
+        (raiz / "Diseño" / "Modulo 1 - Ficha_Caso_Disney.docx.pdf").write_text("x", encoding="utf-8")
+        inv = escanear(raiz)
+        assert [p.name for _n, p in inv.casos] == ["Modulo 1 - Ficha_Caso_Disney.docx.pdf"]
+
+    def test_descarta_los_informes_internos_de_similitud_y_uso_de_ia(self, tmp_path):
+        """Turnitin y la declaración GAIDeT acompañan al material pero son
+        control interno de la cátedra: no se publican ni cuentan como caso."""
+        raiz = tmp_path / "Curso"
+        (raiz / "Módulos" / "Módulo 1").mkdir(parents=True)
+        d = raiz / "Módulos" / "Módulo 1"
+        (d / "Modulo 1 - Ficha_Caso_Disney - Similitud.pdf").write_text("x", encoding="utf-8")
+        (d / "Modulo 1 - Ficha_Caso_Disney - Uso de IA.pdf").write_text("x", encoding="utf-8")
+        (d / "Modulo 1 - Desarrollo - Informe de uso de IA.pdf").write_text("x", encoding="utf-8")
+        (d / "Modulo 1 - Ficha_Caso_Disney.docx").write_text("x", encoding="utf-8")
+        inv = escanear(raiz)
+        assert [p.name for _n, p in inv.casos] == ["Modulo 1 - Ficha_Caso_Disney.docx"]
+
     def test_un_titulo_que_solo_empieza_con_caso_sigue_siendo_contenido(self, tmp_path):
         """'Casos de estudio'/'Caso práctico' pueden ser el desarrollo del
         módulo: solo la forma de ficha ("Ficha_Caso…"/"Caso_…") es anexo."""

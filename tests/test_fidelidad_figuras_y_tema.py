@@ -160,6 +160,59 @@ class TestIndiceDeFigurasDeDiseno:
         assert indice[("esquema",)].name == "M_Esquema.jpg"
 
 
+class TestTablaQueSoloEnvuelveLaFigura:
+    """El docente a veces mete la figura en una tabla de 1 columna sin
+    bordes, junto con su epígrafe y su nota. Eso NO es un recuadro: al
+    encuadrarla, la imagen queda adentro de un dp-callout y _es_figura la
+    descarta — la figura se publicaba sin ancho, sin borde y sin poder
+    ampliarse. Caso real: la Figura 1 del módulo 1 de Creación de Valor."""
+
+    HTML = ('<table>'
+            '<tr><td><p>Figura 1. La progresión del valor económico</p></td></tr>'
+            '<tr><td><p><img src="__MEDIA__/M_1 fig 1.jpg"></p></td></tr>'
+            '<tr><td><p>Nota. Figura creada con ChatGPT.</p></td></tr>'
+            '</table>')
+
+    def test_no_queda_encuadrada_como_recuadro(self):
+        out = procesar_contenido(self.HTML)
+        assert "dp-callout" not in out
+
+    def test_la_figura_conserva_su_estilo(self):
+        out = procesar_contenido(self.HTML)
+        assert "dp-image-bordered" in out
+        assert "width: 600px" in out
+
+    def test_un_recuadro_de_verdad_con_imagen_sigue_encuadrado(self):
+        """Una caja del catálogo que además trae una imagen adentro sigue
+        siendo caja: lo que la distingue es el rótulo, no la imagen."""
+        html = ('<table>'
+                '<tr><td><p>Ejemplos que iluminan</p></td></tr>'
+                '<tr><td><p>Un caso con su gráfico.</p>'
+                '<p><img src="__MEDIA__/x.jpg"></p></td></tr></table>')
+        assert "dp-callout" in procesar_contenido(html)
+
+
+class TestFiguraAmpliablePorComentario:
+    """El asesor clava el globo SOBRE la imagen ("incluir pop up para
+    ampliar"): aplicar_comentarios marca la figura y procesar_contenido le
+    pone el estilo con lupa en vez del estático."""
+
+    def test_la_marca_vuelve_la_figura_expandible(self):
+        from bs4 import BeautifulSoup
+        from maquetador.ingest.docx_comments import aplicar_comentarios
+        html = ('<div><p>Figura 1. Un esquema</p>'
+                '<p><img src="__MEDIA__/M_1 fig 1.jpg"></p>'
+                '<p>Nota. Figura creada con ChatGPT.</p></div>')
+        soup = BeautifulSoup(html, "html.parser")
+        aplicar_comentarios(soup, [{
+            "instruccion": "Para maquetación, incluir pop up para ampliar.",
+            "anclado": "Nota. Figura creada con ChatGPT.",
+            "accion": "figura_expandible", "autor": ""}])
+        out = procesar_contenido(str(soup))
+        assert "dp-popup-image" in out
+        assert "data-ampliable" not in out   # la marca no se publica
+
+
 class TestFiguraDeDisenoDesdeMarcador:
     """Cuando el asesor deja solo el marcador ("Figura 5. …") sin imagen
     embebida al lado, se inserta la figura de diseño en su lugar."""

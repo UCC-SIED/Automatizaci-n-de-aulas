@@ -40,7 +40,8 @@ _W15 = "{http://schemas.microsoft.com/office/word/2012/wordml}"
 # y borrar el párrafo entero sería un error; se avisa para hacerlo a mano.
 _AUTO = {"subtitulo", "subsubtitulo", "recuadro_simple", "lectura", "video",
          "podcast", "sin_recuadro", "otra_pagina", "enlace_descargable",
-         "genially_listo"}
+         "genially_listo", "no_maquetar", "foro_en_lectura",
+         "foro_lectura_y_espacio", "figura_expandible"}
 
 # Nivel de encabezado por acción, según la política de jerarquía de la UCC:
 # H2 es el título de la página, H3 el subtítulo y H4 el sub-subtítulo.
@@ -95,6 +96,15 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     if n.startswith(("para diseno", "para diseño")):
         return None
 
+    # "NO MAQUETAR": el tramo anclado NO va al aula. Es distinto de "quitar"
+    # (que no se automatiza porque suele ser un micro-pedido: "quitar los dos
+    # puntos"): acá el asesor excluye una sección entera, y dejarla pasar
+    # publica material que no es para el estudiante. Caso real: las
+    # "Indicaciones para el tutor" al final de una AFI —cómo corregir, qué
+    # priorizar— quedaban visibles en el aula.
+    if re.match(r"^\s*no\s+(?:se\s+)?maqueta", n):
+        return "no_maquetar"
+
     # Señales negativas primero (NO encuadrar)
     if any(k in n for k in ("sin recuadro", "sin cuadro", "no resaltar",
                             "no encuadrar", "con sangria", "sangria sin")):
@@ -111,6 +121,22 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     # esta página.
     if re.search(r"(siguiente|pr[oó]xima)\s*p[aá]g", n):
         return "otra_pagina"
+    # Dónde va el recuadro del foro que el docente dejó escrito en la
+    # lectura: solo en la página, solo en el espacio del foro (el
+    # DiscussionTopic de Canvas), o en los dos. El asesor lo dice de varias
+    # formas ("para dejar en la lectura", "esto es para el espacio del
+    # foro", "es el mismo contenido para la lectura y para el espacio del
+    # foro"). Va ANTES de la rama "lectura", que si no se lleva cualquier
+    # mención a la lectura como si fuera un CTA "Descubrí leyendo".
+    if "foro" in n or na.startswith("foro"):
+        al_espacio = "espacio del foro" in n or "espacio para el foro" in n
+        en_lectura = "lectura" in n
+        if al_espacio and en_lectura:
+            return "foro_lectura_y_espacio"
+        if al_espacio:
+            return "otra_pagina"
+        if en_lectura:
+            return "foro_en_lectura"
     # "sub-subtítulo" contiene "subtítulo": hay que mirarlo primero.
     if re.search(r"sub\s*-?\s*sub\s*-?\s*titulo", n):
         return "subsubtitulo"
@@ -125,6 +151,12 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
         # El asesor pide la orientación en el mismo comentario
         # ("Para maquetación: TABS vertical").
         return "tabs_vertical" if "vertical" in n else "tabs"
+    # "Incluir pop up para ampliar" sobre una figura: no es el componente
+    # expander (un panel colapsable) sino la figura con lupa, que se abre
+    # en grande al hacer clic. Va ANTES de "expander"/"expandir" para que
+    # "ampliar" no se lleve la figura a un panel.
+    if re.search(r"(pop\s*-?\s*up|lupa)", n) and "ampli" in n:
+        return "figura_expandible"
     if any(k in n for k in ("expander", "expandible", "expandir")):
         return "expander"
     if any(k in n for k in ("flip card", "flipcard", "flip-card", "tarjeta",
@@ -264,7 +296,28 @@ def extraer_comentarios(docx_path) -> list:
         # espacios ya vienen dentro del texto): unir con "" reconstruye la
         # palabra partida por Google Docs ('subyace' + 'nte' → 'subyacente').
         texto = "".join(t.text or "" for t in cont.iter(f"{_W}t")).strip()
-        return texto or crudo
+        if texto:
+            return texto
+        # El globo está clavado SOBRE una imagen (rango vacío, párrafo sin
+        # texto): el ancla pasa a ser el primer bloque con texto que sigue
+        # —el epígrafe o la nota al pie de la figura—, que es lo que
+        # permite ubicarla después en el HTML.
+        if cont.find(f".//{_W}drawing") is not None:
+            posteriores = [b for b in droot.iter()
+                           if b.tag in (f"{_W}p", f"{_W}tbl")]
+            vistos, seguir = False, None
+            for b in posteriores:
+                if b is cont:
+                    vistos = True
+                    continue
+                if vistos:
+                    t = "".join(x.text or "" for x in b.iter(f"{_W}t")).strip()
+                    if t:
+                        seguir = t
+                        break
+            if seguir:
+                return seguir
+        return crudo
 
     out = []
     for cid, instr in textos.items():
@@ -390,6 +443,46 @@ def _buscar_elemento_final(soup, anclado: str):
     return resultado
 
 
+def _imagen_cercana(el):
+    """La <img> que acompaña al elemento anclado. El globo de "ampliar" se
+    clava sobre la imagen, y el ancla termina siendo el texto más cercano
+    (el epígrafe o la nota al pie). Según cómo armó el docente la figura,
+    ese texto puede ser un hermano de la imagen o una celda distinta de la
+    MISMA tabla sin bordes que envuelve figura + epígrafe + nota."""
+    dentro = el if getattr(el, "name", None) == "img" else el.find("img")
+    if dentro is not None:
+        return dentro
+    for cand in list(el.find_previous_siblings())[:3] \
+            + list(el.find_next_siblings())[:3]:
+        img = cand if getattr(cand, "name", None) == "img" else cand.find("img")
+        if img is not None:
+            return img
+    contenedor = el.find_parent("table") or el.parent
+    return contenedor.find("img") if contenedor is not None else None
+
+
+def _cuerpo_de_recuadro(tabla) -> str:
+    """El contenido de un recuadro-tabla, sin su rótulo. Hay dos geometrías
+    según cómo lo armó el docente: el rótulo en su propia fila (2 filas × 1
+    columna) o el rótulo y el cuerpo como párrafos de la MISMA celda (1×1).
+    Con la segunda, mirar solo `tr[1:]` devolvía vacío y el foro quedaba sin
+    consigna."""
+    filas = tabla.find_all("tr")
+    piezas = []
+    for fila in filas[1:]:
+        celda = fila.find(["td", "th"])
+        if celda is not None:
+            piezas.append("".join(str(x) for x in celda.children))
+    if piezas:
+        return "".join(piezas)
+    celda = tabla.find(["td", "th"])
+    if celda is None:
+        return ""
+    hijos = [h for h in celda.children
+             if getattr(h, "name", None) or str(h).strip()]
+    return "".join(str(h) for h in hijos[1:])   # sin el párrafo del rótulo
+
+
 def _tramo_hasta(el, hasta) -> list:
     """[el, …, hasta] recorriendo hermanos de flujo desde `el`. `hasta`
     puede ser el propio hermano o un descendiente suyo (p.ej. el último
@@ -494,6 +587,17 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
                         encabezado.name = nivel
                     c["_aplicado"] = True
             continue
+        # "NO MAQUETAR": se borra TODO el tramo anclado, no solo el elemento
+        # donde arranca. El asesor marca de una una sección entera (p.ej. las
+        # "Indicaciones para el tutor" al cierre de una AFI), así que borrar
+        # solo el primer párrafo dejaría publicado el resto.
+        if accion == "no_maquetar":
+            fin = _buscar_elemento_final(soup, c["anclado"])
+            for elemento in _tramo_hasta(el, fin):
+                elemento.decompose()
+            c["_aplicado"] = True
+            continue
+
         # Ya está dentro de un recuadro/componente armado: encuadrarlo otra vez
         # deja una caja dentro de otra.
         if accion == "recuadro_simple" and el.find_parent(class_="dp-callout"):
@@ -569,9 +673,18 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
         c["_aplicado"] = True
         inner = "".join(str(x) for x in el.children).strip()
         if accion in _NIVEL_ENCABEZADO:
-            enc = soup.new_tag(_NIVEL_ENCABEZADO[accion])
-            enc.string = el.get_text(" ", strip=True)
-            el.replace_with(enc)
+            if el.find_parent("table") is not None:
+                # Adentro de un recuadro (la tabla que después se convierte
+                # en la caja): un <hN> ahí compite con el propio título del
+                # recuadro. Queda como línea destacada —letra más grande y
+                # en negrita— sin asumir la categoría de encabezado, igual
+                # que las bajadas de panel.
+                el.name = "p"
+                el["class"] = (el.get("class") or []) + ["lead", "dp-text-bold"]
+            else:
+                enc = soup.new_tag(_NIVEL_ENCABEZADO[accion])
+                enc.string = el.get_text(" ", strip=True)
+                el.replace_with(enc)
         elif accion == "quitar":
             el.decompose()
         elif accion == "recuadro_simple":
@@ -600,18 +713,35 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
             # de sacarlo, se guarda el cuerpo (todo menos la fila/celda del
             # rótulo) para que ese contenido pueda ir a parar a donde
             # corresponde de verdad (ver aplicar_comentarios/segmentar_docx).
-            tabla = el.find_parent("table")
+            tabla = el if el.name == "table" else el.find_parent("table")
             if tabla is not None:
-                piezas = []
-                for fila in tabla.find_all("tr")[1:]:
-                    celda = fila.find(["td", "th"])
-                    if celda is not None:
-                        piezas.append("".join(str(x) for x in celda.children))
-                c["_contenido_extraido"] = "".join(piezas)
+                c["_contenido_extraido"] = _cuerpo_de_recuadro(tabla)
                 tabla.decompose()
             else:
                 c["_contenido_extraido"] = inner
                 el.decompose()
+        elif accion == "figura_expandible":
+            # El globo está sobre la imagen (o sobre su epígrafe/nota): se
+            # marca la figura vecina para que procesar_contenido le ponga
+            # el estilo con lupa en vez del estático.
+            img = _imagen_cercana(el)
+            if img is not None:
+                img["data-ampliable"] = "1"
+            else:
+                c["_aplicado"] = False
+                continue
+        elif accion == "foro_en_lectura":
+            # El asesor confirma que ESTE recuadro se queda donde está: no
+            # hay nada que hacer, pero se marca aplicado para que no salga
+            # como pedido pendiente.
+            pass
+        elif accion == "foro_lectura_y_espacio":
+            # El mismo contenido va en los dos lados: se copia para el
+            # espacio del foro y se deja igual en la lectura (a diferencia
+            # de "otra_pagina", que lo saca de la página).
+            tabla = el if el.name == "table" else el.find_parent("table")
+            c["_contenido_extraido"] = (_cuerpo_de_recuadro(tabla)
+                                        if tabla is not None else inner)
         elif accion == "enlace_descargable":
             # El asesor deja el link real en el comentario (a veces sin más
             # texto que "debe ser descargable"): el texto anclado pasa a ser

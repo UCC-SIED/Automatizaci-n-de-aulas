@@ -28,9 +28,12 @@ def normalizar(texto: str) -> str:
 
 
 # Archivos que son borradores o material descartado: nunca son fuente.
+# Los informes de similitud y de uso de IA son control interno de la cátedra
+# (Turnitin, declaración GAIDeT): acompañan al material pero no se publican.
 _DESCARTAR = re.compile(
     r"(borrador|copia de|elimina(r|da)|despues se borra|devoluci|"
-    r"versi[óo]n anterior|^no_|^~\$)", re.I)
+    r"versi[óo]n anterior|^no_|^~\$|[-–—]\s*similitud|"
+    r"informe de uso de ia|[-–—]\s*uso de ia)", re.I)
 
 # Imágenes que comparten carpeta con la foto del docente pero NO son un
 # retrato: fotogramas y miniaturas de la grabación, capturas de pantalla,
@@ -252,6 +255,10 @@ def escanear(carpeta: Path) -> InventarioCurso:
                 inv.programa.append(path)
             elif "hoja de ruta" in nombre:
                 inv.hoja_de_ruta.append(path)
+            elif _PAT_FICHA_CASO.search(nombre):
+                # El PDF de la ficha (el que sale de diseño) es la versión
+                # publicable del repositorio de casos.
+                inv.casos.append((num, path))
             else:
                 inv.otros.append(path)
             continue

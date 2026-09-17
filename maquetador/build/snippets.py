@@ -281,6 +281,29 @@ def _es_instruccion_maquetacion(texto: str) -> bool:
         "recurso tipo", "esquema con", "infografia con", "cita con"))
 
 
+def _es_envoltorio_de_figura(tabla) -> bool:
+    """¿La tabla existe solo para sostener una figura (imagen + epígrafe +
+    nota), en vez de ser un recuadro del catálogo? Se reconoce porque su
+    primer rótulo es un epígrafe ("Figura 1. …", "Tabla 2. …") y adentro
+    hay una imagen de contenido."""
+    primera = tabla.find(["td", "th"])
+    if primera is None:
+        return False
+    if not _PAT_CAPTION.match(primera.get_text(" ", strip=True)):
+        return False
+    return any(_es_figura(img) for img in tabla.find_all("img"))
+
+
+def _desarmar_tabla(tabla) -> None:
+    """Reemplaza la tabla por el contenido de sus celdas, en orden."""
+    piezas = []
+    for celda in tabla.find_all(["td", "th"]):
+        piezas.extend(h for h in celda.children
+                      if getattr(h, "name", None) or str(h).strip())
+    tabla.replace_with(BeautifulSoup(
+        "".join(str(p) for p in piezas), "html.parser"))
+
+
 def _tabla_a_recuadro(tabla) -> str:
     """Convierte una tabla de 1 columna en el snippet que corresponda."""
     filas = tabla.find_all("tr")
@@ -1587,6 +1610,12 @@ def _alt_parrafo_a_atributo(soup):
 
 def _figura_es_expandible(img) -> bool:
     """Solo si el asesor lo pidió explícitamente cerca de la figura."""
+    if img.has_attr("data-ampliable"):
+        # El pedido vino por comentario del DOCX clavado sobre la imagen
+        # ("incluir pop up para ampliar"), no por el texto que la rodea:
+        # aplicar_comentarios dejó la marca acá.
+        del img["data-ampliable"]
+        return True
     contenedor = img.find_parent("p") or img.parent
     trozos = [img.get("alt", "")]
     if contenedor is not None:
@@ -1757,6 +1786,15 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
         max_cols = max((len(tr.find_all(["td", "th"]))
                         for tr in tabla.find_all("tr")), default=0)
         if max_cols == 1:
+            if _es_envoltorio_de_figura(tabla):
+                # Tabla sin bordes que solo sostiene la figura con su
+                # epígrafe y su nota: no es un recuadro. Encuadrarla mete la
+                # imagen adentro de un dp-callout, y ahí _es_figura la
+                # descarta: la figura se queda sin ancho, sin borde y sin
+                # poder ampliarse. Se desarma y el contenido sigue el
+                # camino normal de las figuras.
+                _desarmar_tabla(tabla)
+                continue
             nuevo = _tabla_a_recuadro(tabla)
             if nuevo:
                 tabla.replace_with(BeautifulSoup(nuevo, "html.parser"))

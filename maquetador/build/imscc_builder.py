@@ -1879,6 +1879,23 @@ class GeneradorAula:
                 self.recursos_nuevos.append(
                     (_gen_id(), f"web_resources/Multimedia cargada/{path.name}"))
             logger.info(f"  {len(self.figuras_usadas)} figuras de DISEÑO empaquetadas")
+        # Repositorio de casos: las fichas se suben como archivos del curso
+        # (la planilla las pide como repositorio, no como página propia), y
+        # el equipo las enlaza desde donde corresponda.
+        casos = list(getattr(self.spec, "casos", []) or [])
+        if casos:
+            carpeta = self.working / "web_resources" / "Multimedia cargada"
+            carpeta.mkdir(parents=True, exist_ok=True)
+            for path in casos:
+                shutil.copy2(path, carpeta / path.name)
+                self.recursos_nuevos.append(
+                    (_gen_id(), f"web_resources/Multimedia cargada/{path.name}"))
+            self.spec.issues.append(Issue(Severidad.INFO,
+                f"{len(casos)} fichas del repositorio de casos subidas a "
+                "'Multimedia cargada': " + ", ".join(p.name for p in casos)
+                + ". Quedan como archivos del curso, para enlazarlas desde "
+                "donde corresponda."))
+
         # Figuras de DISEÑO que no pude ubicar en ninguna página
         sobrantes = [p for p in getattr(self.spec, "imagenes_diseno", [])
                      if p not in self.figuras_usadas]

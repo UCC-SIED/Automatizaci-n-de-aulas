@@ -85,6 +85,19 @@ def reconciliar(spec: CourseSpec, inv: InventarioCurso) -> CourseSpec:
     # imágenes embebidas de los DOCX (mejor calidad).
     spec.imagenes_diseno = list(inv.imagenes_diseno)
     spec.fotos_docente = list(inv.fotos_docente)
+    # Repositorio de casos: las fichas se suben como archivos del curso (la
+    # planilla las pide como repositorio, no como página de contenido). Se
+    # prefiere el PDF —la versión que sale de diseño— sobre el DOCX fuente.
+    def _clave_caso(path):
+        """'Modulo 3 - Ficha_Caso_Quibi.docx.pdf' y 'M3 - Ficha_Caso_Quibi.docx'
+        son el mismo caso: la clave es el nombre del caso, no el archivo."""
+        m = re.search(r"caso[_\s-]+(.+)$", path.stem, re.I)
+        base = (m.group(1) if m else path.stem)
+        return re.sub(r"[^a-z0-9]", "", base.lower().replace(".docx", ""))
+
+    _con_pdf = {_clave_caso(p) for _n, p in inv.casos if p.suffix.lower() == ".pdf"}
+    spec.casos = [p for _n, p in inv.casos
+                  if p.suffix.lower() == ".pdf" or _clave_caso(p) not in _con_pdf]
 
     perfiles = {}  # {num_modulo: PerfilDocx}
     for num, path in inv.docx_modulos.items():

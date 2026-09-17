@@ -244,7 +244,8 @@ def segmentar_docx(docx_path: Path, marcadores: dict) -> tuple:
             aplicar_comentarios(soup_sec, comentarios)
             secciones[clave] = str(soup_sec)
             for c in comentarios:
-                if c.get("accion") == "otra_pagina" and c.get("_aplicado") \
+                if c.get("accion") in ("otra_pagina", "foro_lectura_y_espacio") \
+                        and c.get("_aplicado") \
                         and not any(o["anclado"] == c["anclado"]
                                     for o in origenes_otra_pagina):
                     origenes_otra_pagina.append({
