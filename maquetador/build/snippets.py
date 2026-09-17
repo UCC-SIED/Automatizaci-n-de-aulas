@@ -375,10 +375,16 @@ def _tabla_a_recuadro(tabla) -> str:
 _PAT_FIG_CAPTION = re.compile(
     r"^(figura|esquema|tabla)\s*(\d+)?\s*(?:[\.:]|[-–—]|$)", re.I)
 # Nombres reales observados: "M_1 Fig 4.jpg", "M1 Figura 2.jpg",
-# "Figura 4 M3.png", "Tabla 1 M2.jpg", "Esquema.jpg"
+# "Figura 4 M3.png", "Tabla 1 M2.jpg", "Esquema.jpg", "M1 - Figura 1.png".
+# El separador entre el módulo y el tipo varía por curso (espacio, guion
+# bajo, guion medio o una mezcla): con `\s*` a secas, "M1 - Figura 1.png"
+# no matcheaba y la figura quedaba sin indexar —silenciosamente, sin aviso.
+_SEP_FIG = r"[\s_\-–—]*"
 _PAT_FIG_FILE = re.compile(
-    r"(?:m[_\s]?(\d+)\s*fig(?:ura)?\s*(\d+))|(?:fig(?:ura)?\s*(\d+)\s*m[_\s]?(\d+))"
-    r"|(?:tabla\s*(\d+)\s*m[_\s]?(\d+))|(?:m[_\s]?(\d+)\s*tabla\s*(\d+))", re.I)
+    rf"(?:m[_\s\-]?(\d+){_SEP_FIG}fig(?:ura)?{_SEP_FIG}(\d+))"
+    rf"|(?:fig(?:ura)?{_SEP_FIG}(\d+){_SEP_FIG}m[_\s\-]?(\d+))"
+    rf"|(?:tabla{_SEP_FIG}(\d+){_SEP_FIG}m[_\s\-]?(\d+))"
+    rf"|(?:m[_\s\-]?(\d+){_SEP_FIG}tabla{_SEP_FIG}(\d+))", re.I)
 
 # "Estándares para Recursos Visuales y Datos": la figura estática lleva otro
 # borde que la expandible. La estática es el caso por defecto; el estilo con

@@ -373,6 +373,45 @@ class TestAfiConGuionBajo:
             f"El AFI con guion bajo no se clasificó como actividad: {nombres}"
 
 
+class TestFichaDeCasoNoEsElDesarrolloDelModulo:
+    """Las fichas de caso ("Modulo 1 - Caso_Starbucks.docx",
+    "M3 - Ficha_Caso_Quibi.docx") son anexos del módulo —el repositorio de
+    casos que pide la planilla—, no su desarrollo teórico. Regresión real
+    (Creación de Valor en la Economía de la Experiencia): competían por el
+    slot del módulo y le ganaban al multimedial real solo por orden
+    alfabético, así que los módulos 1 y 3 quedaban armados desde una ficha
+    de caso y ninguna de sus páginas de contenido se encontraba."""
+
+    def _curso(self, tmp_path):
+        raiz = tmp_path / "Creacion de Valor"
+        mod1 = raiz / "Materiales" / "Módulos" / "Módulo 1"
+        mod1.mkdir(parents=True)
+        (mod1 / "Modulo 1 - Caso_Cirque_du_Soleil.docx").write_text("x", encoding="utf-8")
+        (mod1 / "Modulo 1 - Ficha_Caso_Disney.docx").write_text("x", encoding="utf-8")
+        (mod1 / "Modulo 1 - Creación de Valor - Sepúlveda.docx").write_text("x", encoding="utf-8")
+        return raiz
+
+    def test_el_modulo_toma_el_multimedial_no_la_ficha(self, tmp_path):
+        inv = escanear(self._curso(tmp_path))
+        assert "Creación de Valor" in inv.docx_modulos[1].name
+
+    def test_las_fichas_quedan_en_casos(self, tmp_path):
+        inv = escanear(self._curso(tmp_path))
+        nombres = sorted(p.name for _n, p in inv.casos)
+        assert nombres == ["Modulo 1 - Caso_Cirque_du_Soleil.docx",
+                           "Modulo 1 - Ficha_Caso_Disney.docx"]
+
+    def test_un_titulo_que_solo_empieza_con_caso_sigue_siendo_contenido(self, tmp_path):
+        """'Casos de estudio'/'Caso práctico' pueden ser el desarrollo del
+        módulo: solo la forma de ficha ("Ficha_Caso…"/"Caso_…") es anexo."""
+        raiz = tmp_path / "Otro curso"
+        (raiz / "Módulos").mkdir(parents=True)
+        (raiz / "Módulos" / "Modulo 1 - Casos de estudio.docx").write_text("x", encoding="utf-8")
+        inv = escanear(raiz)
+        assert inv.docx_modulos.get(1) is not None
+        assert inv.casos == []
+
+
 class TestModuloConPrefijoM:
     """Los DOCX modulares a veces vienen como 'M1_Material multimedial…': el
     guion bajo tras el número no debe impedir extraer el módulo (regresión:

@@ -49,6 +49,14 @@ def _PARECE_RETRATO(nombre_normalizado: str) -> bool:
 _CARPETAS_DESCARTAR = ("borrador", "borradores", "devoluciones",
                        "version anterior", "versiones anterior")
 
+# Ficha de caso ("Ficha_Caso_Disney", "Modulo 1 - Caso_Starbucks"): es un
+# anexo del módulo —el repositorio de casos que pide la planilla—, no el
+# desarrollo teórico. Se pide la forma "Ficha_Caso…" o el "Caso_" unido por
+# guion bajo (así se nombran las fichas) para no llevarse por delante un
+# título común que arranca igual ("Casos de estudio", "Caso práctico
+# integrador"), que sí puede ser el desarrollo del módulo.
+_PAT_FICHA_CASO = re.compile(r"(?:^|[-_\s])(?:ficha[_\s-]*caso|caso_)", re.I)
+
 _PAT_MODULO_NUM = re.compile(
     r"(?:m[óo]dul[a-z]*[\s_]*(\d+)|(?:^|[-_\s])m[\s_]?(\d+)(?![a-z0-9])|"
     r"\bm(\d+)(?![a-z0-9]))", re.I)
@@ -98,6 +106,7 @@ class InventarioCurso:
     fotos_docente: list = field(default_factory=list)
     imagenes_diseno: list = field(default_factory=list)   # figuras/esquemas/tablas
     esquema: list = field(default_factory=list)           # esquema introductorio
+    casos: list = field(default_factory=list)             # [(n|None, Path)] fichas de caso
     otros: list = field(default_factory=list)
     issues: list = field(default_factory=list)
 
@@ -114,6 +123,7 @@ class InventarioCurso:
             "hoja_de_ruta": _l(self.hoja_de_ruta), "biografia": _l(self.biografia),
             "fotos_docente": _l(self.fotos_docente),
             "imagenes_diseno": _l(self.imagenes_diseno), "esquema": _l(self.esquema),
+            "casos": _l(self.casos),
             "issues": [i.to_dict() for i in self.issues],
         }
 
@@ -177,6 +187,11 @@ def escanear(carpeta: Path) -> InventarioCurso:
         if ext == ".docx":
             if "foro" in nombre:
                 inv.foros.append((num, path))
+            elif _PAT_FICHA_CASO.search(nombre):
+                # Anexo del módulo (repositorio de casos), no su desarrollo
+                # teórico: si compite por el slot del módulo le gana al
+                # multimedial real solo por orden alfabético.
+                inv.casos.append((num, path))
             elif "actividad" in nombre or re.search(r"(?<![a-z])afi(?![a-z])", nombre):
                 # "afi" como palabra aislada. Se usa lookaround de LETRAS (no \b)
                 # porque '_' es carácter de palabra y \bafi\b no matchea "AFI_…"

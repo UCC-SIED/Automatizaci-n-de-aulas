@@ -130,6 +130,36 @@ class TestListaDeObjetivos:
         assert bloque.count("<li>") == 4
 
 
+class TestIndiceDeFigurasDeDiseno:
+    """El separador entre el módulo y el tipo de figura cambia por curso
+    ("M_1 fig 2.jpg", "M1 Figura 2.jpg", "M1 - Figura 1.png"). Regresión
+    real (Creación de Valor en la Economía de la Experiencia): con el guion
+    medio, "M1 - Figura 1.png" no se indexaba y la Figura 1 de CADA módulo
+    quedaba afuera del aula, sin ningún aviso."""
+
+    def _indice(self, nombres):
+        from pathlib import Path
+        from maquetador.build.snippets import indexar_figuras_diseno
+        return indexar_figuras_diseno([Path(n) for n in nombres])
+
+    def test_guion_medio_entre_modulo_y_figura(self):
+        indice = self._indice(["M1 - Figura 1.png", "M2 - Figura 1.png",
+                               "M3 - Figura 1.png"])
+        assert indice[(1, "figura", 1)].name == "M1 - Figura 1.png"
+        assert indice[(2, "figura", 1)].name == "M2 - Figura 1.png"
+        assert indice[(3, "figura", 1)].name == "M3 - Figura 1.png"
+
+    def test_las_convenciones_de_siempre_siguen_andando(self):
+        indice = self._indice(["M_1 fig 2.jpg", "M1 Figura 3.jpg",
+                               "Figura 4 M3.png", "Tabla 1 M2.jpg",
+                               "M_Esquema.jpg"])
+        assert indice[(1, "figura", 2)].name == "M_1 fig 2.jpg"
+        assert indice[(1, "figura", 3)].name == "M1 Figura 3.jpg"
+        assert indice[(3, "figura", 4)].name == "Figura 4 M3.png"
+        assert indice[(2, "tabla", 1)].name == "Tabla 1 M2.jpg"
+        assert indice[("esquema",)].name == "M_Esquema.jpg"
+
+
 class TestFiguraDeDisenoDesdeMarcador:
     """Cuando el asesor deja solo el marcador ("Figura 5. …") sin imagen
     embebida al lado, se inserta la figura de diseño en su lugar."""
