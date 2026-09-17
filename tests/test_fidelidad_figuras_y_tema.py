@@ -130,6 +130,42 @@ class TestListaDeObjetivos:
         assert bloque.count("<li>") == 4
 
 
+class TestRecuadroDebajoDeLosObjetivos:
+    """Los objetivos no son solo la lista: el asesor deja debajo el recuadro
+    que invita al video del módulo. Ese bloque no pasaba por
+    procesar_contenido y la caja se publicaba como una <table> cruda, con
+    bordes de Word y sin ícono. Regresión real: Gestión del Riesgo, los tres
+    módulos."""
+
+    OBJETIVOS = (
+        "<p>Al finalizar este módulo serás capaz de:</p>"
+        "<ul><li>Diferenciar riesgo, incertidumbre y complejidad.</li></ul>"
+        "<table><thead><tr><th><p><strong>Auriculares <em>on</em></strong></p>"
+        "</th></tr><tr><th><p>Antes de empezar, te propongo visualizar un "
+        "video introductorio.</p></th></tr></thead></table>")
+
+    def _pagina(self):
+        return pagina_intro("Introducción M1", "<p>i</p>", self.OBJETIVOS,
+                            "b.png", "id")
+
+    def test_la_caja_se_maqueta(self):
+        html = self._pagina()
+        assert "<table>" not in html
+        assert "dp-callout" in html
+
+    def test_auriculares_on_es_el_cta_de_video(self):
+        """En un módulo el asesor escribe "Auriculares on (Video y Podcast)" y
+        en los otros dos solo "Auriculares on": salía CTA en uno y recuadro
+        simple en los demás."""
+        html = self._pagina()
+        assert "Auriculares on" in html
+        assert "Icono%20recuadro%20video.svg" in html
+
+    def test_los_objetivos_siguen_siendo_una_lista(self):
+        assert "<li>Diferenciar riesgo, incertidumbre y complejidad.</li>" \
+            in self._pagina()
+
+
 class TestIndiceDeFigurasDeDiseno:
     """El separador entre el módulo y el tipo de figura cambia por curso
     ("M_1 fig 2.jpg", "M1 Figura 2.jpg", "M1 - Figura 1.png"). Regresión

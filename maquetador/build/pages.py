@@ -55,6 +55,12 @@ def _banner(banner_src: str, alt: str = "") -> str:
 def pagina_intro(titulo: str, intro_html: str, objetivos_html: str,
                  banner_src: str, identifier: str, tema: str = "") -> str:
     """Página 'Introducción MN' del módulo."""
+    # Los objetivos no son solo la lista: el asesor puede dejar debajo un
+    # recuadro del catálogo (en Gestión del Riesgo, el "Auriculares on" que
+    # invita al video del módulo). Sin pasar por procesar_contenido esa caja
+    # se publicaba como una <table> cruda, con bordes de Word y sin ícono.
+    objetivos = procesar_contenido(
+        sanear_lista_objetivos(limpiar_anclas_vacias(objetivos_html)), tema)
     return f"""{_cabecera(titulo, identifier)}
 <div id="dp-wrapper" class="{DP_WRAPPER_CLASSES}" {_attrs_str(DP_WRAPPER_ATTRS)}>
 <div id="dp-wrapper_1" class="undefined">
@@ -69,7 +75,7 @@ def pagina_intro(titulo: str, intro_html: str, objetivos_html: str,
 </div>
 <div class="dp-content-block kl_readings2">
 <h2 class="dp-has-icon"><i class="fas fa-flag" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i> Objetivos</h2>
-{sanear_lista_objetivos(limpiar_anclas_vacias(objetivos_html))}
+{objetivos}
 <p>&nbsp;</p>
 </div>
 </div>

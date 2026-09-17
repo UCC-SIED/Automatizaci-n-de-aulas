@@ -256,6 +256,14 @@ def _clasificar_recuadro(etiqueta: str, texto_completo: str) -> tuple:
     if "lectura" in n or "te invito a leer" in nt \
             or "invitamos a leer" in nt or "te invito a la lectura" in nt:
         return "lectura", "Descubrí leyendo"
+    if "auriculares" in n:
+        # "Auriculares on" ES el título oficial del CTA de Video/Podcast: a
+        # veces llega pelado y a veces con la aclaración de tipo entre
+        # paréntesis ("Auriculares on (Video y Podcast)"). Sin esta rama, el
+        # mismo recuadro salía como CTA en el módulo que traía el paréntesis
+        # y como recuadro simple en los otros dos.
+        es_podcast = ("podcast" in nt or "audio" in nt) and "video" not in nt
+        return ("podcast" if es_podcast else "video"), "Auriculares on"
     if "video" in n or "visualizar el video" in nt[:200]:
         return "video", "Auriculares on"
     if "podcast" in n or "audio" in n:
