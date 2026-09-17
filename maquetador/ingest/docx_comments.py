@@ -41,7 +41,8 @@ _W15 = "{http://schemas.microsoft.com/office/word/2012/wordml}"
 _AUTO = {"subtitulo", "subsubtitulo", "recuadro_simple", "lectura", "video",
          "podcast", "sin_recuadro", "otra_pagina", "enlace_descargable",
          "genially_listo", "no_maquetar", "foro_en_lectura",
-         "foro_lectura_y_espacio", "figura_expandible", "enlazar_actividad"}
+         "foro_lectura_y_espacio", "figura_expandible", "enlazar_actividad",
+         "destacar_tramo"}
 
 # Nivel de encabezado por acción, según la política de jerarquía de la UCC:
 # H2 es el título de la página, H3 el subtítulo y H4 el sub-subtítulo.
@@ -191,6 +192,12 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
         return "podcast"
     if "recuadro" in n or "resalta" in n:   # resaltar, resaltado, "resaltado simple"
         return "recuadro_simple"
+    # "En cursiva u otra forma de destacado": el asesor marca un tramo largo
+    # que tiene que leerse aparte del cuerpo (el prompt de IA que el estudiante
+    # copia y pega). No es un párrafo suelto como el recuadro simple: son
+    # varios, y hay que encuadrarlos juntos.
+    if "cursiva" in n or "destacad" in n or "destacar" in n:
+        return "destacar_tramo"
     if "lectura" in n:
         return "lectura"
     if re.search(r"\bvideo\b", n):
@@ -519,6 +526,19 @@ def _texto_tooltip(instruccion: str) -> str:
     return ""
 
 
+def _completar_cursiva(soup, elemento) -> None:
+    """Pone en cursiva el texto suelto del bloque, dejando en paz lo que ya lo
+    está. El asesor escribe casi todo el prompt en cursiva pero deja fuera el
+    rótulo ("[Prompt]") y los campos que el estudiante completa."""
+    for texto in list(elemento.find_all(string=True)):
+        if not texto.strip():
+            continue
+        if any(p.name in ("em", "i", "code") for p in texto.parents):
+            continue
+        em = soup.new_tag("em")
+        texto.wrap(em)
+
+
 def _archivo_referenciado(el) -> str:
     """Nombre del DOCX que el asesor anotó al pie del recuadro para decir a qué
     actividad apunta el enlace ("EP - AFI.docx", "AEO 1 - GRyI.docx").
@@ -666,6 +686,26 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
         if accion == "no_maquetar":
             fin = _buscar_elemento_final(soup, c["anclado"])
             for elemento in _tramo_hasta(el, fin):
+                elemento.decompose()
+            c["_aplicado"] = True
+            continue
+
+        # "En cursiva u otra forma de destacado": el tramo entero se encuadra
+        # y se completa la cursiva. El asesor ya escribió en cursiva casi todo
+        # el prompt, pero no el rótulo ni los [campos a completar], y sin caja
+        # el bloque se confunde con el cuerpo de la página.
+        if accion == "destacar_tramo":
+            fin = _buscar_elemento_final(soup, c["anclado"])
+            tramo = _tramo_hasta(el, fin)
+            if not tramo:
+                continue
+            piezas = []
+            for elemento in tramo:
+                _completar_cursiva(soup, elemento)
+                piezas.append(str(elemento))
+            tramo[0].replace_with(BeautifulSoup(
+                resaltado_simple("".join(piezas)), "html.parser"))
+            for elemento in tramo[1:]:
                 elemento.decompose()
             c["_aplicado"] = True
             continue

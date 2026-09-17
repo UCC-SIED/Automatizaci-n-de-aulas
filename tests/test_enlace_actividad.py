@@ -127,3 +127,58 @@ class TestNombreDeArchivoSuelto:
         html = ("<p>Descargá la plantilla Registro.xlsx y completala con los "
                 "riesgos de tu proyecto.</p>")
         assert "Registro.xlsx" in procesar_contenido(html)
+
+
+class TestDestacarTramo:
+    """«Maquetación: en cursiva u otra forma de destacado» sobre el prompt de
+    IA que el estudiante copia y pega. Son varios párrafos seguidos, no uno:
+    con el recuadro simple (que encuadra un solo elemento) el bloque quedaba
+    partido y se confundía con el cuerpo de la página."""
+
+    PROMPT = (
+        "<p>Adaptá a tu necesidad el siguiente texto, copialo y pegalo:</p>"
+        "<p>[Prompt]<em> Actúa como analista de gestión de riesgos.</em></p>"
+        "<p><em>Necesito una planilla de cálculo simple.</em></p>"
+        "<p><em>Mi proyecto: </em>[escribirlo en una o dos líneas]</p>"
+        "<p>Después de copiarlo, revisá el resultado.</p>")
+
+    ANCLA = ("[Prompt] Actúa como analista de gestión de riesgos. Necesito una "
+             "planilla de cálculo simple. Mi proyecto: [escribirlo en una o "
+             "dos líneas]")
+
+    def _out(self):
+        soup, c = _aplicar(self.PROMPT,
+                           "Maquetación: en cursiva u otra forma de destacado",
+                           self.ANCLA)
+        return str(soup), c
+
+    def test_se_clasifica(self):
+        assert _clasificar("Maquetación: en cursiva u otra forma de destacado") \
+            == "destacar_tramo"
+
+    def test_el_tramo_entero_queda_en_una_sola_caja(self):
+        out, c = self._out()
+        assert c["_aplicado"] is True
+        soup = BeautifulSoup(out, "html.parser")
+        assert len(soup.find_all(class_="dp-callout")) == 1
+        caja = soup.find(class_="dp-callout")
+        assert "Actúa como analista" in caja.get_text()
+        assert "Mi proyecto:" in caja.get_text()
+
+    def test_se_completa_la_cursiva_que_falta(self):
+        """El asesor escribió en cursiva casi todo, pero no el rótulo ni los
+        campos que el estudiante completa."""
+        caja = BeautifulSoup(self._out()[0], "html.parser").find(class_="dp-callout")
+        sueltos = [t for t in caja.find_all(string=True) if t.strip()
+                   and not any(p.name in ("em", "i") for p in t.parents)]
+        assert sueltos == []
+
+    def test_no_se_lleva_lo_que_esta_fuera_del_tramo(self):
+        caja = BeautifulSoup(self._out()[0], "html.parser").find(class_="dp-callout")
+        assert "copialo y pegalo" not in caja.get_text()
+        assert "revisá el resultado" not in caja.get_text()
+
+    def test_el_texto_de_alrededor_sigue_en_la_pagina(self):
+        out, _c = self._out()
+        assert "copialo y pegalo" in out
+        assert "revisá el resultado" in out
