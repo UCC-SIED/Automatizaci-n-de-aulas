@@ -894,9 +894,13 @@ class GeneradorAula:
     # ------------------------------------------------------------------ #
     #  Helpers de inyección en foros (topics) y actividades (assignments)
     # ------------------------------------------------------------------ #
-    def _docx_a_html(self, path: Path, prefijo: str) -> str:
+    def _docx_a_html(self, path: Path, prefijo: str, es_actividad: bool = False) -> str:
         """Convierte un DOCX (foro/actividad) a HTML con snippets UCC.
-        Las imágenes embebidas se suman al paquete con el prefijo dado."""
+        Las imágenes embebidas se suman al paquete con el prefijo dado.
+
+        `es_actividad=True` deja el h1/h2 nativo del DOCX sin bajar a h3:
+        maquetar_actividad necesita esa distinción (título del caso vs.
+        sub-encabezados) para armar sus propios niveles."""
         img = ImagenInline()
         with open(path, "rb") as f:
             html = mammoth.convert_to_html(
@@ -916,7 +920,8 @@ class GeneradorAula:
         for nombre, data, ctype in img.imagenes:
             self.media[f"{prefijo}_{nombre}"] = (data, ctype)
         html = str(soup).replace("__MEDIA__/", f"__MEDIA__/{prefijo}_")
-        return procesar_contenido(self._rutear_media(html), self.spec.tema)
+        return procesar_contenido(self._rutear_media(html), self.spec.tema,
+                                  bajar_h1_h2=not es_actividad)
 
     def _rid_en_meta(self, content_type: str, patron_titulo: str) -> str:
         pat = re.compile(
@@ -1184,7 +1189,8 @@ class GeneradorAula:
                             "en Canvas (Completo/Incompleto, no cuenta para la "
                             "nota final).", item.titulo))
                         continue
-                    html = self._docx_a_html(archivo, f"act_sugerida_m{n}")
+                    html = self._docx_a_html(archivo, f"act_sugerida_m{n}",
+                                             es_actividad=True)
                     if self._escribir_assignment(rid_sug, html, ctx):
                         item.issues.append(Issue(Severidad.INFO,
                             f"Contenido de '{archivo.name}' cargado en un "
@@ -1197,7 +1203,7 @@ class GeneradorAula:
                     "Assignment", rf"[^<]*[Aa]ctividad[^<]*M{n}[^<]*")
                 if not rid or rid in self.assignments_escritos:
                     continue
-                html = self._docx_a_html(archivo, f"act_m{n}")
+                html = self._docx_a_html(archivo, f"act_m{n}", es_actividad=True)
                 if self._escribir_assignment(rid, html, ctx):
                     assignment_escrito = True
                     item.issues.append(Issue(Severidad.INFO,
@@ -1230,7 +1236,7 @@ class GeneradorAula:
             return
         if rid in self.assignments_escritos:
             return
-        html = self._docx_a_html(item.fuente.archivo, "afi")
+        html = self._docx_a_html(item.fuente.archivo, "afi", es_actividad=True)
         if self._escribir_assignment(rid, html, "AFI"):
             item.issues.append(Issue(Severidad.INFO,
                 f"Contenido de '{item.fuente.archivo.name}' cargado en la "

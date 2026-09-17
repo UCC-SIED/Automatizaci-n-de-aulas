@@ -256,7 +256,9 @@ class TestNivelDeEncabezadosDelCaso:
         out = maquetar_actividad(
             "<h2>Proyecto: Caso X</h2><h3>Contexto del proyecto:</h3>"
             "<p>Descripción del contexto.</p>")
-        assert "<h4>Contexto del proyecto:</h4>" in out
+        # Baja a h4 y se le saca el ":" final, igual que a cualquier otro
+        # encabezado del catálogo.
+        assert "<h4>Contexto del proyecto</h4>" in out
         assert "<h3>Contexto del proyecto:</h3>" not in out
 
     def test_rotulo_de_seccion_que_llega_como_encabezado_nativo_sigue_en_h3(self):
@@ -269,6 +271,59 @@ class TestNivelDeEncabezadosDelCaso:
             "<h2>Actividad obligatoria: Caso X</h2>"
             "<h3>Pautas de presentación:</h3>")
         assert "<h3>Pautas de presentación</h3>" in out
+
+    def test_h2_nativo_del_caso_que_no_es_el_titulo_baja_a_h3(self):
+        """Un <h2> de Word DENTRO del caso planteado (no el primer
+        encabezado, que ya se convirtió en el título de la actividad) no
+        puede competir en el mismo nivel que el título: baja a <h3>, sin el
+        ':' final. Caso real: 'Proyecto: "Puente Comunitario La Esperanza"'
+        quedaba como <h2> nativo sin tocar."""
+        out = maquetar_actividad(
+            "<h2>Actividad obligatoria 1</h2>"
+            '<h2>Proyecto: "Puente Comunitario La Esperanza"</h2>'
+            "<p>Descripción del proyecto.</p>")
+        assert '<h3>Proyecto: "Puente Comunitario La Esperanza"</h3>' in out
+        # El título sintético de la actividad (el "primero", que acá se
+        # descompone por ser genérico) sigue sin clase espuria ni duplicado.
+        assert out.count("<h2") == 0
+
+    def test_el_titulo_sintetico_de_la_actividad_no_baja_de_nivel(self):
+        """El <h2 class="dp-ignore-theme"> que arma maquetar_actividad para
+        el título real (a partir del "primero") no es un h2 nativo del
+        DOCX: el bucle que baja h1/h2 a h3 no debe tocarlo."""
+        out = maquetar_actividad("<h2>Proyecto: Caso X</h2><p>Cuerpo.</p>")
+        assert '<h2 class="dp-ignore-theme"' in out
+
+    def test_pipeline_completo_preserva_el_nivel_para_maquetar_actividad(self):
+        """Regresión real: procesar_contenido corre ANTES de maquetar_
+        actividad (vía _docx_a_html) y por defecto aplana TODO h1/h2 del
+        cuerpo a <h3> — con eso, "Proyecto: …" (Heading 2 nativo) y
+        "Contexto del proyecto" (Heading 3 nativo) llegaban indistinguibles
+        (los dos <h3>) y maquetar_actividad no podía saber cuál de los dos
+        era el subtítulo del caso y cuál un encabezado más profundo: los
+        bajaba a los dos por igual. Con bajar_h1_h2=False (lo que pasa
+        _docx_a_html para actividades) el nivel nativo llega intacto y cada
+        uno termina en su nivel correcto."""
+        html = ('<p><strong>Actividad obligatoria 1</strong></p>'
+                '<h2>Proyecto: "Puente Comunitario La Esperanza"</h2>'
+                '<p>Descripción del proyecto.</p>'
+                '<h3>Contexto del proyecto:</h3>'
+                '<p>Descripción del contexto.</p>')
+        procesado = procesar_contenido(html, "", bajar_h1_h2=False)
+        out = maquetar_actividad(procesado)
+        assert '<h3>Proyecto: "Puente Comunitario La Esperanza"</h3>' in out
+        assert "<h4>Contexto del proyecto</h4>" in out
+
+    def test_subrayado_directo_en_un_encabezado_nativo_se_saca(self):
+        """El autor a veces subraya a mano un 'Título 3' de Word que ya
+        lleva subrayado por el tema (CSS): queda doble. Caso real:
+        'Contexto del proyecto:' e 'Información técnica y operativa:'."""
+        out = maquetar_actividad(
+            "<h2>Actividad obligatoria 1</h2>"
+            "<h3><u>Contexto del proyecto</u>:</h3>"
+            "<p>Descripción del contexto.</p>")
+        assert "<u>" not in out
+        assert "<h4>Contexto del proyecto</h4>" in out
 
 
 class TestRotuloEnLineaYDisclaimerDeIA:
@@ -287,6 +342,19 @@ class TestRotuloEnLineaYDisclaimerDeIA:
             "trabajo, que su uso esté correctamente citado.</p>")
         assert "dp-callout" in out
         assert "aporte de la IA" in out
+
+    def test_disclaimer_de_ia_lleva_espaciado_de_parrafo_completo(self):
+        """El aviso de cierre sobre uso de IA es un aparte del "Modelo de
+        actividad" (nota de cierre, no parte del relato del caso): lleva
+        aire de párrafo entero arriba y abajo, no el espaciado corto de
+        cualquier otro recuadro simple encerrado entre texto — maquetar_
+        actividad no llamaba a _espaciar_recuadros en absoluto, así que el
+        disclaimer quedaba sin ningún aire."""
+        out = maquetar_actividad(
+            "<p>Formato: Word</p>"
+            "<p>Se recomienda que el aporte de la IA no exceda el 30 % del "
+            "trabajo, que su uso esté correctamente citado.</p>")
+        assert "<p>Formato: Word</p><p>\xa0</p><div" in out
 
 
 class TestEspaciadoYDosPuntosDeRotulosDeSeccion:

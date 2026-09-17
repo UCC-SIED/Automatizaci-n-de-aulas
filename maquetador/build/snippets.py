@@ -883,6 +883,25 @@ _PAT_ROTULO_EN_LINEA = re.compile(
 _PAT_DISCLAIMER_IA = re.compile(r"aporte de la ia", re.I)
 
 
+def _limpiar_encabezado(h) -> None:
+    """Un encabezado nativo del DOCX puede traer subrayado directo del autor
+    (redundante: el tema ya subraya los encabezados por CSS, queda doble) y
+    los dos puntos finales de la frase original — ninguno de los dos
+    corresponde en un <h3>/<h4> del catálogo. Solo toca el último nodo de
+    texto (no h.clear()+h.string): así no se pierde formato interno legítimo
+    (p.ej. un <strong>/<em> a mitad del encabezado)."""
+    for u in h.find_all("u"):
+        u.unwrap()
+    ultimo = None
+    for nodo in h.descendants:
+        if isinstance(nodo, NavigableString):
+            ultimo = nodo
+    if ultimo is not None:
+        limpio = re.sub(r"[:\s]+$", "", str(ultimo))
+        if limpio != str(ultimo):
+            ultimo.replace_with(limpio)
+
+
 def maquetar_actividad(html: str, tema: str = "") -> str:
     """Da forma al cuerpo de una actividad según el "Modelo de actividad".
 
@@ -905,6 +924,16 @@ def maquetar_actividad(html: str, tema: str = "") -> str:
         return html
     soup = BeautifulSoup(html, "html.parser")
 
+    # El DOCX a veces trae el rótulo genérico ("Actividad obligatoria 1", sin
+    # nombre de caso) COMO SU PROPIO encabezado: no aporta nada (el banner
+    # de la Assignment ya lo muestra), se decompone y ahí termina — no se
+    # sigue buscando otro encabezado para promover a "título de la
+    # actividad": el que sigue ("Proyecto: …") es un subtítulo del caso
+    # como cualquier otro, no el título. procesar_contenido ya corrió con
+    # bajar_h1_h2=False para esta actividad: llega con su nivel h1/h2
+    # nativo intacto, así que el bucle de más abajo lo baja a <h3> igual que
+    # cualquier otro encabezado de Word que no sea "primero" — no hace
+    # falta tratarlo como caso especial acá.
     primero = soup.find(["h1", "h2", "h3", "h4"])
     if primero is not None and not primero.get("class"):
         texto = primero.get_text(" ", strip=True)
@@ -922,8 +951,8 @@ def maquetar_actividad(html: str, tema: str = "") -> str:
     # planteado) bajan a <h4>: van antes del bucle de rótulos de sección, así
     # los <h3> que ESE bucle arma después (Objetivo/Consigna/…) no se tocan.
     # Un rótulo de sección que YA llegó como encabezado nativo en vez de
-    # <p> ("Pautas de presentación:" es "Título 2" en este DOCX, y
-    # procesar_contenido ya lo bajó a h3 antes de llegar acá) se deja: tiene
+    # <p> ("Pautas de presentación:" es "Título 2" en este DOCX, y el bucle
+    # de p→h3 de más abajo lo tocaría si viniera como <p>) se deja: tiene
     # que terminar en el mismo nivel que sus hermanos armados desde <p>.
     for h3 in soup.find_all("h3"):
         texto_sin_dp = re.sub(r"[:\s]+$", "", h3.get_text(" ", strip=True))
@@ -933,14 +962,33 @@ def maquetar_actividad(html: str, tema: str = "") -> str:
             # como párrafo): se los saca acá también.
             h3.string = texto_sin_dp
             continue
+        _limpiar_encabezado(h3)
         h3.name = "h4"
+
+    # Encabezados h1/h2 nativos del DOCX que no son el título de la
+    # actividad (el "primero", ya resuelto arriba: decompuesto, o reemplazado
+    # por el <h2 class="dp-ignore-theme"> de la plantilla propia — por eso se
+    # excluye cualquiera CON clase) bajan a <h3>. Va después del bucle de
+    # arriba, para que uno recién bajado a <h3> no vuelva a bajar a <h4>.
+    for h in list(soup.find_all(["h1", "h2"])):
+        if h.get("class"):
+            continue
+        _limpiar_encabezado(h)
+        h.name = "h3"
 
     for p in list(soup.find_all("p")):
         texto = p.get_text(" ", strip=True)
         if _PAT_DISCLAIMER_IA.search(_norm(texto)):
-            p.replace_with(BeautifulSoup(
+            fragmento = BeautifulSoup(
                 resaltado_simple("".join(str(x) for x in p.children)),
-                "html.parser"))
+                "html.parser")
+            nuevo = fragmento.find("div", class_="dp-callout")
+            p.replace_with(nuevo)
+            # Aviso de cierre: aire de párrafo completo arriba y abajo (no
+            # el corto que llevaría cualquier otro recuadro simple), para
+            # que se note como un aparte, no como parte del flujo del caso.
+            _aire_antes(nuevo, soup)
+            _aire_despues(nuevo, soup)
             continue
         m_rotulo = _PAT_ROTULO_EN_LINEA.match(texto)
         if m_rotulo:
@@ -1580,7 +1628,13 @@ def aplicar_acento_del_tema(html: str, tema: str) -> str:
         lambda m: 'style="' + m.group(1).replace(ACCENT, acento) + '"', html)
 
 
-def procesar_contenido(html: str, tema: str = "") -> str:
+def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> str:
+    """`bajar_h1_h2=False` (actividades): maquetar_actividad necesita el
+    nivel NATIVO h1/h2 vs h3 del DOCX para distinguir el título del caso
+    ("Proyecto: …", Heading 2) de sus sub-encabezados ("Contexto del
+    proyecto", Heading 3) — bajarlos acá los aplana a los dos al mismo
+    <h3> y esa distinción se pierde antes de que maquetar_actividad pueda
+    usarla."""
     if not html:
         return html
     soup = BeautifulSoup(html, "html.parser")
@@ -1677,8 +1731,10 @@ def procesar_contenido(html: str, tema: str = "") -> str:
     # de encabezado principal; cualquier subtítulo numerado interno es
     # siempre h3, tanto si el asesor lo marcó en negrita (ver paso 2) como
     # si usó el estilo de título de Word (mammoth lo vuelca tal cual a
-    # <h1>/<h2>, sin bajarlo de nivel).
-    for h in soup.find_all(["h1", "h2"]):
+    # <h1>/<h2>, sin bajarlo de nivel). Las actividades (bajar_h1_h2=False)
+    # se saltan este paso: maquetar_actividad hace su propio manejo de
+    # niveles, más fino, y necesita el h1/h2 nativo para eso.
+    for h in soup.find_all(["h1", "h2"]) if bajar_h1_h2 else []:
         # El h2 con ícono no es un encabezado del contenido: es el divisor de
         # sección que arma el propio generador (bloque de video, por ejemplo).
         if "dp-has-icon" in (h.get("class") or []):
