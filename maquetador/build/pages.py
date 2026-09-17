@@ -59,8 +59,10 @@ def pagina_intro(titulo: str, intro_html: str, objetivos_html: str,
     # recuadro del catálogo (en Gestión del Riesgo, el "Auriculares on" que
     # invita al video del módulo). Sin pasar por procesar_contenido esa caja
     # se publicaba como una <table> cruda, con bordes de Word y sin ícono.
-    objetivos = procesar_contenido(
-        sanear_lista_objetivos(limpiar_anclas_vacias(objetivos_html)), tema)
+    # El bloque "Video" de Canvas Studio no va anidado adentro del bloque de
+    # objetivos: es un content-block propio, hermano al mismo nivel.
+    objetivos, bloque_video = separar_bloque_de_video(procesar_contenido(
+        sanear_lista_objetivos(limpiar_anclas_vacias(objetivos_html)), tema))
     return f"""{_cabecera(titulo, identifier)}
 <div id="dp-wrapper" class="{DP_WRAPPER_CLASSES}" {_attrs_str(DP_WRAPPER_ATTRS)}>
 <div id="dp-wrapper_1" class="undefined">
@@ -78,6 +80,7 @@ def pagina_intro(titulo: str, intro_html: str, objetivos_html: str,
 {objetivos}
 <p>&nbsp;</p>
 </div>
+{bloque_video}
 </div>
 </div>
 </body>

@@ -98,6 +98,12 @@ def cta_descubri_leyendo(body_html: str) -> str:
 # Marcador que deja el asesor donde va un video propio ("VIDEO M2.", "VIDEO 2",
 # "VIDEO MÓDULO 1"). A veces es un párrafo suelto y a veces queda pegado al
 # final de la invitación.
+# "Embeber video: GRyI - V_M1" — el asesor marca dónde va un video PROPIO y
+# con qué archivo se corresponde. Es una indicación para maquetación, no
+# contenido del aula.
+_PAT_EMBEBER_VIDEO = re.compile(
+    r"^\s*(?:embeber|incrustar|insertar|subir)\b[^:<]{0,25}?\bvideos?\b\s*[:.\-–—]*\s*",
+    re.I)
 _PAT_MARCADOR_VIDEO = re.compile(
     r"^\s*videos?\s*(?:m(?:[oó]dulo)?\s*)?\d*\s*[\.:]?\s*$", re.I)
 _PAT_MARCADOR_VIDEO_FINAL = re.compile(
@@ -109,18 +115,23 @@ def _sin_marcador_video(html: str) -> str:
     return _PAT_MARCADOR_VIDEO_FINAL.sub("", html, count=1)
 
 
-def bloque_video_studio(body_html: str = "") -> str:
+def bloque_video_studio(body_html: str = "", referencia: str = "") -> str:
     """Bloque de video propio de la UCC (Canvas Studio).
 
     Los videos de desarrollo / introducción / conceptuales NO son un CTA: no
     mandan a YouTube, se suben a Canvas Studio y se incrustan. Como el id del
     video recién existe cuando alguien lo sube —después de generar el aula— el
     bloque queda armado y vacío, listo para pegar el embed.
+
+    `referencia` es el nombre con el que el asesor identificó el video en el
+    DOCX ("GRyI - V_M1"): no se publica, va en el comentario del hueco para
+    que quien pegue el embed sepa cuál de los archivos va acá.
     """
     intro = f'{body_html}<p>&nbsp;</p>' if body_html else ""
+    cual = f": {referencia}" if referencia else ""
     return f"""<div class="dp-content-block" data-title="Video" data-category="+UCC">
 <h2 class="dp-has-icon"><i class="dp-icon fab fa-youtube" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i></h2>
-{intro}<div class="dp-embed-wrapper mx-auto d-block" style="text-align: center;"><!-- Pegar aquí el embed de Canvas Studio --></div>
+{intro}<div class="dp-embed-wrapper mx-auto d-block" style="text-align: center;"><!-- Pegar aquí el embed de Canvas Studio{cual} --></div>
 <p>&nbsp;</p>
 </div>"""
 
@@ -394,9 +405,26 @@ def _tabla_a_recuadro(tabla) -> str:
         # sugerida)", 44 caracteres) → siempre se saca del cuerpo, si no queda
         # duplicada como texto suelto debajo de la caja ya armada.
         quitar = tipo != "simple" or len(etiqueta) <= 35 or es_instr
-    body = _html_lineas(lineas[1:] if quitar and len(lineas) > 1 else lineas)
+    cuerpo = lineas[1:] if quitar and len(lineas) > 1 else lineas
+    body = _html_lineas(cuerpo)
     if not body:
-        body = _html_lineas(lineas)
+        cuerpo = lineas
+        body = _html_lineas(cuerpo)
+
+    if tipo == "video" and not _PAT_URL_VIDEO.search(body):
+        # Con la marca "Embeber video: <nombre>" el video es propio de la UCC:
+        # va al bloque de Canvas Studio, no a un CTA que manda afuera. Decide
+        # la marca, no la ausencia de URL: hay CTAs legítimos que invitan a una
+        # charla TED sin pegar el link en el mismo párrafo.
+        frag = BeautifulSoup(body, "html.parser")
+        marca = next((p for p in frag.find_all("p")
+                      if _PAT_EMBEBER_VIDEO.match(p.get_text(" ", strip=True))),
+                     None)
+        if marca is not None:
+            referencia = _PAT_EMBEBER_VIDEO.sub(
+                "", marca.get_text(" ", strip=True)).strip(" .:–—-")
+            marca.decompose()
+            return bloque_video_studio(str(frag).strip(), referencia)
 
     if tipo == "foro":
         return cta_titulo(titulo, body, ICONOS["foro"])
@@ -794,8 +822,17 @@ def _absorber_siguientes(p) -> list:
 
 
 def _procesar_cues_parrafo(soup):
+    # Bloques de video que YA venían armados de la tabla ("Embeber video: …"):
+    # sus párrafos no se vuelven a mirar, si no el bloque salía duplicado y
+    # anidado dentro de sí mismo. Se toman ahora y no con find_parent adentro
+    # del bucle porque los bloques que arma ESTE paso se quedan abiertos y
+    # absorben el resto de la página a propósito (ver más abajo): lo que cae
+    # ahí adentro sí debe seguir procesándose.
+    ya_armados = soup.find_all("div", attrs={"data-title": "Video"})
     for p in list(soup.find_all("p")):
         if p.parent is None or p.find_parent(class_="dp-callout"):
+            continue
+        if any(any(a is bloque for a in p.parents) for bloque in ya_armados):
             continue
         # El asesor pidió explícitamente NO encuadrar este párrafo.
         if p.get("data-keep-plain"):

@@ -170,3 +170,84 @@ class TestElBloqueDeVideoEsUnBloqueAparteEnLaPagina:
                                "b.png", "id")
         soup = BeautifulSoup(out, "html.parser")
         assert soup.find("div", attrs={"data-title": "Video"}) is None
+
+
+class TestRecuadroConMarcaDeEmbebido:
+    """El asesor de Gestión del Riesgo entrega el video del módulo como
+    recuadro "Auriculares on" y adentro escribe «Embeber video: GRyI - V_M1».
+    Ese video es propio (el .mp4 está en la carpeta), así que va al bloque de
+    Canvas Studio, no a un CTA que manda afuera. La marca es la que decide: en
+    Creación de Valor hay CTAs legítimos —"Te sugiero ver… la siguiente charla
+    TED"— que tampoco traen la URL en el mismo párrafo y deben seguir siendo
+    CTA."""
+
+    CAJA = ('<table><thead><tr><th><p><strong>Auriculares <em>on</em> (Video y '
+            'Podcast)</strong></p></th></tr>'
+            '<tr><th><p>Antes de empezar con el recorrido, te propongo '
+            'visualizar un video introductorio.</p>'
+            '<p>Embeber video: <a href="https://docs.google.com/document/d/1fi">'
+            'GRyI - V_M1</a></p></th></tr></thead></table>')
+
+    SIN_MARCA = ('<table><thead><tr><th><p><strong>Auriculares on</strong></p>'
+                 '</th></tr><tr><th><p>Te sugiero ver la siguiente charla TED '
+                 'en la que Joe Pine presenta el marco conceptual.</p>'
+                 '</th></tr></thead></table>')
+
+    def test_arma_el_bloque_de_canvas_studio(self):
+        out = procesar_contenido(self.CAJA)
+        assert 'data-title="Video"' in out
+        assert "Auriculares on" not in out
+
+    def test_la_indicacion_de_embeber_no_se_publica(self):
+        out = procesar_contenido(self.CAJA)
+        assert "Embeber video" not in out
+        assert "docs.google.com" not in out
+
+    def test_el_nombre_del_video_queda_como_comentario(self):
+        """No se publica, pero le dice a quien pegue el embed cuál de los
+        archivos de la carpeta va en este hueco."""
+        out = procesar_contenido(self.CAJA)
+        assert "<!-- Pegar aquí el embed de Canvas Studio: GRyI - V_M1 -->" in out
+
+    def test_la_invitacion_se_conserva(self):
+        assert "te propongo visualizar un video introductorio." \
+            in procesar_contenido(self.CAJA)
+
+    def test_el_bloque_no_sale_duplicado(self):
+        """La invitación es además un "cue" de video: el paso de párrafos
+        volvía a encuadrarla y el bloque salía anidado dentro de sí mismo."""
+        assert procesar_contenido(self.CAJA).count('data-title="Video"') == 1
+
+    def test_sin_la_marca_sigue_siendo_un_cta(self):
+        out = procesar_contenido(self.SIN_MARCA)
+        assert "Auriculares on" in out
+        assert 'data-title="Video"' not in out
+
+
+class TestVideoEnLaPaginaDeIntroduccion:
+    """El recuadro del video va debajo de los objetivos, en "Introducción MN":
+    el bloque de Studio tiene que salir como content-block hermano, igual que
+    en las páginas de contenido."""
+
+    OBJETIVOS = ("<p>Al finalizar este módulo serás capaz de:</p>"
+                 "<ul><li>Diferenciar riesgo e incertidumbre.</li></ul>"
+                 + TestRecuadroConMarcaDeEmbebido.CAJA)
+
+    def test_el_video_es_hermano_del_bloque_de_objetivos(self):
+        from bs4 import BeautifulSoup
+        from maquetador.build.pages import pagina_intro
+        out = pagina_intro("Introducción M1", "<p>i</p>", self.OBJETIVOS,
+                           "b.png", "id")
+        soup = BeautifulSoup(out, "html.parser")
+        video = soup.find("div", attrs={"data-title": "Video"})
+        assert video is not None
+        assert video.find_parent(class_="kl_readings2") is None
+
+    def test_los_objetivos_no_se_van_con_el_video(self):
+        from maquetador.build.pages import pagina_intro
+        from bs4 import BeautifulSoup
+        out = pagina_intro("Introducción M1", "<p>i</p>", self.OBJETIVOS,
+                           "b.png", "id")
+        soup = BeautifulSoup(out, "html.parser")
+        objetivos = soup.find("div", class_="kl_readings2")
+        assert "Diferenciar riesgo e incertidumbre." in objetivos.get_text()
