@@ -245,6 +245,30 @@ def pares_de_secciones(el, modo: str = "auto", hasta=None) -> tuple:
     return (pares, consumidos) if len(pares) >= 2 else ([], [])
 
 
+def _pares_dentro_de_celda(tabla) -> list:
+    """Caja de UNA sola celda: el asesor escribe adentro el nombre del
+    componente ("Expander", "Tabs (uno al lado del otro)") y debajo los ítems
+    con el título en negrita.
+
+    `pares_de_tabla` no ve pares ahí (hay una celda sola) y, sin esto, el
+    armado seguía de largo por los HERMANOS de la tabla: el componente se
+    armaba con el contenido de más abajo —en Gestión del Riesgo, con el
+    epígrafe "Tabla 1" y su tabla de escalas— que además desaparecía de la
+    página, mientras la caja real quedaba sin maquetar."""
+    celdas = tabla.find_all(["td", "th"])
+    if len(celdas) != 1:
+        return []
+    bloques = [b for b in celdas[0].children
+               if getattr(b, "name", None) in _TAGS_FLUJO]
+    if not bloques:
+        return []
+    for modo in ("negrita", "auto"):
+        pares, _consumidos = pares_de_secciones(bloques[0], modo=modo)
+        if len(pares) >= 2:
+            return pares
+    return []
+
+
 def extraer_pares(el, instruccion: str = "", hasta=None):
     """Desde el elemento anclado → (pares, consumidos). ([], []) si <2 pares.
 
@@ -268,6 +292,9 @@ def extraer_pares(el, instruccion: str = "", hasta=None):
         tabla, consumidos_tabla = (t, [el, t]) if t is not None else (None, None)
     if tabla is not None:
         pares = pares_de_tabla(tabla)
+        if len(pares) >= 2:
+            return pares, consumidos_tabla
+        pares = _pares_dentro_de_celda(tabla)
         if len(pares) >= 2:
             return pares, consumidos_tabla
 

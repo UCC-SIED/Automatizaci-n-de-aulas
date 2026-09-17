@@ -373,6 +373,52 @@ class TestAfiConGuionBajo:
             f"El AFI con guion bajo no se clasificó como actividad: {nombres}"
 
 
+class TestSiglaPropiaDelAsesorEnLaCarpetaDeActividades:
+    """Cada asesor abrevia como quiere: "AEO 1 - GRyI.docx" (actividad de
+    evaluación obligatoria) no dice "actividad" ni "AFI" en el nombre y caía
+    en `otros`. La planilla nombraba el archivo exacto, pero como no estaba
+    entre los candidatos la actividad obligatoria del módulo 2 terminaba
+    apuntando al AFI. Regresión real: Gestión del Riesgo y la Incertidumbre."""
+
+    def _curso(self, tmp_path):
+        raiz = tmp_path / "08. Gestión del Riesgo"
+        (raiz / "3. Actividades").mkdir(parents=True)
+        (raiz / "2. Desarrollo Teórico").mkdir(parents=True)
+        (raiz / "2. Desarrollo Teórico" / "Modulo 1 - GRyI.docx").write_text(
+            "x", encoding="utf-8")
+        for nombre in ("AEO 1 - GRyI.docx", "AEO 2 - GRyI.docx",
+                       "AFI - GRyI.docx", "Foro de Apertura - GRyI.docx"):
+            (raiz / "3. Actividades" / nombre).write_text("x", encoding="utf-8")
+        return raiz
+
+    def test_el_docx_de_la_carpeta_actividades_es_una_actividad(self, tmp_path):
+        inv = escanear(self._curso(tmp_path))
+        nombres = sorted(p.name for _n, p in inv.actividades)
+        assert nombres == ["AEO 1 - GRyI.docx", "AEO 2 - GRyI.docx",
+                           "AFI - GRyI.docx"]
+
+    def test_el_foro_sigue_siendo_foro(self, tmp_path):
+        inv = escanear(self._curso(tmp_path))
+        assert [p.name for _n, p in inv.foros] == ["Foro de Apertura - GRyI.docx"]
+
+    def test_el_guion_de_video_se_reconoce_por_su_carpeta(self, tmp_path):
+        """"GRyI - V_M1.docx" tampoco dice "video" ni "guion": lo dice la
+        carpeta que lo contiene."""
+        raiz = self._curso(tmp_path)
+        (raiz / "5. Videos").mkdir()
+        (raiz / "5. Videos" / "GRyI - V_M1.docx").write_text("x", encoding="utf-8")
+        inv = escanear(raiz)
+        assert [(n, p.name) for n, p in inv.guiones_video] == \
+            [(1, "GRyI - V_M1.docx")]
+
+    def test_la_numeracion_de_la_actividad_no_es_la_del_modulo(self, tmp_path):
+        """El "1" de "AEO 1" es el número de actividad, no el del módulo: si
+        se lo tomara como módulo, la obligatoria del módulo 2 (que la planilla
+        manda a AEO 1) se filtraría fuera de los candidatos."""
+        inv = escanear(self._curso(tmp_path))
+        assert all(n is None for n, _p in inv.actividades)
+
+
 class TestFichaDeCasoNoEsElDesarrolloDelModulo:
     """Las fichas de caso ("Modulo 1 - Caso_Starbucks.docx",
     "M3 - Ficha_Caso_Quibi.docx") son anexos del módulo —el repositorio de

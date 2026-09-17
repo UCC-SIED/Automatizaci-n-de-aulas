@@ -271,6 +271,21 @@ def _clasificar_recuadro(etiqueta: str, texto_completo: str) -> tuple:
     return "simple", ""
 
 
+# Nombres con los que los asesores piden cada componente desde el propio
+# DOCX: los escriben como primera línea de la caja y le dejan encima un
+# comentario ("Maquetación").
+_EXPANDER_KW = ("expander", "expandible", "expandibles", "acordeon",
+                "desplegable", "desplegables")
+# "Flips cards" (con la 's' de más) es como lo escribe el asesor de "Gestión
+# del Riesgo": sin la variante, la tabla salía como un recuadro con la
+# instrucción a la vista.
+_FLIP_KW = ("flip card", "flip cards", "flipcard", "flipcards",
+            "flips card", "flips cards")
+# La orientación viene en la misma línea ("Tabs (uno al lado del otro)",
+# "Tabs verticales; al hacer clic…").
+_TABS_KW = ("tabs", "solapas", "pestanas", "pestana")
+
+
 def _es_instruccion_maquetacion(texto: str) -> bool:
     """Etiquetas que son INDICACIONES de maquetación (cómo formatear), no
     contenido: no van en el aula. P.ej. 'Tabla con resaltado sutil'."""
@@ -278,7 +293,28 @@ def _es_instruccion_maquetacion(texto: str) -> bool:
     return n.startswith((
         "tabla con", "tabla de datos", "con resaltado", "resaltado",
         "recuadro con", "cuadro con", "imagen con", "imagen de diseno",
-        "recurso tipo", "esquema con", "infografia con", "cita con"))
+        "recurso tipo", "esquema con", "infografia con", "cita con",
+    # Nombre pelado del componente como primera línea de la caja: es la
+    # convención de varios asesores ("Tabs (uno al lado del otro)",
+    # "Expander", "Flips cards (una al lado de la otra)"). Si el componente
+    # se pudo armar nunca llegamos acá; si no se pudo, al menos la
+    # indicación no queda a la vista del estudiante.
+    ) + _TABS_KW + _EXPANDER_KW + _FLIP_KW)
+
+
+def _filas_propias(tabla) -> list:
+    """<tr> de esta tabla, sin los de las tablas anidadas adentro."""
+    return [tr for tr in tabla.find_all("tr") if tr.find_parent("table") is tabla]
+
+
+def _columnas_propias(tabla) -> int:
+    """Ancho real de la tabla. Contar todas las celdas de `find_all` mezclaba
+    las de las tablas anidadas: una caja de 1 celda que adentro tiene una
+    tabla de datos daba "13 columnas" y se maquetaba como tabla de datos, con
+    una tabla metida en el <th> de otra."""
+    return max((len([c for c in tr.find_all(["td", "th"])
+                     if c.find_parent("table") is tabla])
+                for tr in _filas_propias(tabla)), default=0)
 
 
 def _es_envoltorio_de_figura(tabla) -> bool:
@@ -306,16 +342,19 @@ def _desarmar_tabla(tabla) -> None:
 
 def _tabla_a_recuadro(tabla) -> str:
     """Convierte una tabla de 1 columna en el snippet que corresponda."""
-    filas = tabla.find_all("tr")
+    filas = _filas_propias(tabla)
     celdas = [c for c in (tr.find(["td", "th"]) for tr in filas) if c is not None]
     if not celdas:
         return ""
 
     # "Líneas" del recuadro: las celdas (tabla multi-fila) o, si hay una sola
-    # celda con varios párrafos, cada <p> (así la 1ª línea = etiqueta/instrucción).
+    # celda con varios bloques, cada bloque (así la 1ª línea =
+    # etiqueta/instrucción). Se toman los bloques y no solo los <p>: con
+    # `find_all("p")` las listas se perdían enteras y las tablas de datos
+    # anidadas quedaban aplastadas en sus párrafos sueltos.
     if len(celdas) == 1:
-        ps = [p for p in celdas[0].find_all("p") if p.get_text(strip=True)]
-        lineas = ps if len(ps) >= 2 else celdas
+        bloques = _bloques_de_celda(celdas[0])
+        lineas = bloques if len(bloques) >= 2 else celdas
     else:
         lineas = celdas
 
@@ -326,7 +365,7 @@ def _tabla_a_recuadro(tabla) -> str:
     def _html_lineas(ls):
         partes = []
         for el in ls:
-            if getattr(el, "name", "") == "p":
+            if getattr(el, "name", "") not in ("td", "th"):
                 partes.append(str(el))
                 continue
             inner = "".join(str(x) for x in el.children).strip()
@@ -447,6 +486,34 @@ def _figura_diseno_es_expandible(p) -> bool:
     return any(kw in texto for kw in _FIG_EXPANDIBLE_KW)
 
 
+# Lo único que sigue a una figura y SÍ es contenido de la página.
+_PAT_PIE_DE_FIGURA = re.compile(r"^\s*(nota|fuente)\s*[\.:]", re.I)
+
+
+def _brief_de_figura(p) -> list:
+    """Bloques que hay que borrar porque son el pedido a DISEÑO, no contenido.
+
+    El asesor arma una caja de una sola celda con el epígrafe arriba ("Figura
+    4. Toma de decisiones") y abajo describe lo que quiere que dibujen
+    ("Imagen, tipo check list" y los cuatro ítems). Cuando esa figura llega
+    hecha desde la carpeta Diseño, el texto ya está DENTRO de la imagen: si
+    se deja, la página muestra lo mismo dos veces.
+
+    Se exige la caja entera (una celda, sin ninguna imagen adentro) para no
+    tocar los párrafos que siguen a una figura suelta en medio del texto, y
+    se conservan la Nota y la Fuente, que sí son pie de figura."""
+    celda = p.find_parent(["td", "th"])
+    if celda is None or celda.find("img"):
+        return []
+    tabla = celda.find_parent("table")
+    if tabla is None or len(tabla.find_all(["td", "th"])) != 1:
+        return []
+    if p.find_previous_sibling() is not None:   # el epígrafe abre la caja
+        return []
+    return [b for b in p.find_next_siblings()
+            if not _PAT_PIE_DE_FIGURA.match(b.get_text(" ", strip=True))]
+
+
 def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
                               usadas: set) -> str:
     """Donde hay un epígrafe 'Figura N.' con una imagen embebida al lado,
@@ -533,6 +600,7 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
             expandible = _figura_diseno_es_expandible(p)
             clase_img = _FIG_CLASES_EXPANDIBLE if expandible else _FIG_CLASES_ESTATICA
             ancho = 700 if expandible else 600
+            brief = _brief_de_figura(p)
             resto = texto[m.end():].strip(" .:–—-")
             img_html = ""
             if resto:
@@ -546,6 +614,8 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
                 f'src="__DISENO__/{path.name}" alt="{texto[:120]}" '
                 f'loading="lazy"></p>')
             p.replace_with(BeautifulSoup(img_html, "html.parser"))
+            for bloque in brief:
+                bloque.decompose()
             usadas.add(path)
     return str(soup)
 
@@ -1116,11 +1186,115 @@ def sanear_lista_objetivos(html: str) -> str:
 # publicadas (view.genially.com/…), que es el que aparece en las aulas.
 _PAT_GENIALLY_URL = re.compile(
     r"https?://(?:[\w-]+\.)*genial(?:\.ly|ly\.com)/[^\s\"'<>]+", re.I)
-_EXPANDER_KW = ("expander", "expandible", "expandibles", "acordeon",
-                "desplegable", "desplegables")
+# Bloques de primer nivel que puede haber dentro de la celda de un recuadro.
+_BLOQUES_CELDA = ("p", "ul", "ol", "table", "blockquote", "figure", "div",
+                  "h1", "h2", "h3", "h4", "h5", "h6", "pre", "img")
 
 
-_FLIP_KW = ("flip card", "flip cards", "flipcard", "flipcards")
+def _bloques_de_celda(cell) -> list:
+    """Bloques hijos directos de la celda, en orden de documento.
+
+    No sirve `find_all("p")`: el asesor escribe el cuerpo de cada ítem como
+    lista (<ul>) o hasta como tabla de datos anidada, y al recorrer solo los
+    párrafos esos bloques se perdían — el panel quedaba con el título y el
+    cuerpo vacío."""
+    bloques = []
+    for hijo in cell.children:
+        nombre = getattr(hijo, "name", None)
+        if nombre not in _BLOQUES_CELDA:
+            continue
+        if nombre == "p" and not hijo.get_text(strip=True) and not hijo.find("img"):
+            continue
+        bloques.append(hijo)
+    return bloques
+
+
+def _titulo_negrita(bloque):
+    """<strong> con texto que abre un párrafo-ítem, o None."""
+    if getattr(bloque, "name", None) != "p":
+        return None
+    strong = bloque.find("strong")
+    if strong is None or not strong.get_text(strip=True):
+        return None
+    return strong
+
+
+# Nombre del componente al principio de la línea de instrucción, con su
+# paréntesis aclaratorio si lo trae ("Flips cards (una al lado de la otra)").
+_PAT_NOMBRE_COMPONENTE = re.compile(
+    r"^\s*(?:flips?\s*cards?|expanders?|expandibles?|acorde(?:on|ón)e?s?|"
+    r"desplegables?|tabs?|solapas?|pesta(?:n|ñ)as?)\b"
+    r"(?:\s*\([^)]*\))?[\s:;.,–—-]*", re.I)
+
+
+def _titulo_tras_instruccion(cell) -> str:
+    """Lo que el asesor escribió DESPUÉS del nombre del componente en la línea
+    de instrucción ("Expander Cuatro preguntas para decidir…"): es el título
+    del bloque, no parte de la indicación, y se perdía junto con la línea.
+
+    Se exige que arranque en mayúscula: así "Tabs verticales; al hacer clic en
+    cada zona…" se reconoce como lo que es, el resto de la indicación."""
+    bloques = _bloques_de_celda(cell)
+    if not bloques or _titulo_negrita(bloques[0]) is not None:
+        return ""
+    texto = bloques[0].get_text(" ", strip=True)
+    resto = _PAT_NOMBRE_COMPONENTE.sub("", texto, count=1).strip()
+    if resto == texto or len(resto) <= 3 or not resto[:1].isupper():
+        return ""
+    return resto
+
+
+def _indices_de_epigrafe(bloques) -> set:
+    """Índices de los bloques en negrita que NO abren un panel: el epígrafe de
+    una figura o tabla ("Tabla 2") y, según APA, su línea de título justo
+    debajo. Van en negrita como los títulos de panel, pero son el rótulo de
+    una tabla que el asesor metió adentro del expander."""
+    cuerpo = set()
+    for i, b in enumerate(bloques):
+        strong = _titulo_negrita(b)
+        if strong is None or not _PAT_CAPTION.match(
+                strong.get_text(" ", strip=True)):
+            continue
+        cuerpo.add(i)
+        if i + 1 < len(bloques) and _titulo_negrita(bloques[i + 1]) is not None:
+            cuerpo.add(i + 1)
+    return cuerpo
+
+
+def _grupos_por_titulo_en_negrita(cell) -> list:
+    """[(título, html)] de una celda donde cada ítem abre con su título en
+    negrita y sigue con el cuerpo (resto del párrafo, listas, tablas) hasta el
+    próximo título en negrita. Es la convención con la que los asesores
+    escriben expanders, tabs y flip cards dentro de una sola celda."""
+    bloques = _bloques_de_celda(cell)
+    epigrafes = _indices_de_epigrafe(bloques)
+
+    def _abre_panel(k):
+        return k not in epigrafes and _titulo_negrita(bloques[k]) is not None
+
+    grupos, i, n = [], 0, len(bloques)
+    while i < n:
+        if not _abre_panel(i):     # instrucción inicial o cuerpo huérfano
+            i += 1
+            continue
+        strong = _titulo_negrita(bloques[i])
+        titulo = strong.get_text(" ", strip=True).strip(" .:–-")
+        strong.extract()
+        resto = re.sub(r"^[\s.:–-]+", "",
+                       "".join(str(x) for x in bloques[i].children).strip())
+        # Word deja un <strong> vacío tras el punto ("<strong> </strong>"):
+        # tiene marcado pero no texto, así que no es cuerpo.
+        piezas = ([f"<p>{resto}</p>"]
+                  if BeautifulSoup(resto, "html.parser").get_text(strip=True)
+                  else [])
+        j = i + 1
+        while j < n and not _abre_panel(j):
+            piezas.append(str(bloques[j]))
+            j += 1
+        if titulo:
+            grupos.append((titulo, "".join(piezas) or "&nbsp;"))
+        i = j
+    return grupos
 
 
 def _tabla_a_flipcards(tabla):
@@ -1129,63 +1303,90 @@ def _tabla_a_flipcards(tabla):
     cell = tabla.find(["td", "th"])
     if cell is None:
         return None
-    parrafos = [p for p in cell.find_all("p") if p.get_text(strip=True)]
-    items, i, n = [], 0, len(parrafos)
-    while i < n:
-        p = parrafos[i]
-        strong = p.find("strong")
-        if not strong:        # instrucción inicial o dorso huérfano: se ignora
-            i += 1
-            continue
-        frente = strong.get_text(" ", strip=True).strip(" .:–-")
-        strong.extract()
-        dorso = [re.sub(r"^[\s.:–-]+", "", "".join(str(x) for x in p.children).strip())]
-        j = i + 1
-        while j < n and not parrafos[j].find("strong"):   # dorso = párrafos sin negrita
-            dorso.append(parrafos[j].get_text(" ", strip=True))
-            j += 1
-        if frente:
-            items.append((frente, " ".join(d for d in dorso if d) or "&nbsp;"))
-        i = j
+    items = [(t, BeautifulSoup(c, "html.parser").get_text(" ", strip=True) or "&nbsp;")
+             for t, c in _grupos_por_titulo_en_negrita(cell)]
     if len(items) < 2:
         return None
     return construir_flipcards(items)
 
 
-def _tabla_a_acordeon(tabla):
-    """Tabla cuya etiqueta es 'Expander/Expandible/Acordeón' → acordeón
-    (dp-panels-wrapper). Cada párrafo con título en negrita abre un panel: el
-    <strong> es el encabezado, y el contenido son el resto del párrafo del
-    encabezado MÁS los párrafos siguientes hasta el próximo encabezado en
-    negrita (igual que _tabla_a_flipcards) — el DOCX trae el cuerpo de cada
-    ítem en párrafos aparte, no en el mismo párrafo que el título."""
+def _tabla_a_acordeon(tabla, variante: str = "dp-expander-default"):
+    """Tabla cuya etiqueta es 'Expander/Expandible/Acordeón' (o 'Tabs') →
+    paneles CidiLabs. Cada párrafo con título en negrita abre un panel: el
+    <strong> es el encabezado, y el contenido es el resto de ese párrafo MÁS
+    los bloques siguientes hasta el próximo encabezado en negrita — el DOCX
+    trae el cuerpo de cada ítem en párrafos y listas aparte, no en el mismo
+    párrafo que el título."""
     cell = tabla.find(["td", "th"])
     if cell is None:
         return None
-    parrafos = [p for p in cell.find_all("p") if p.get_text(strip=True)]
-    # El primer párrafo es la etiqueta ('Expander'); si la etiqueta y el primer
-    # ítem comparten párrafo, igual se procesan los que tienen <strong>.
-    grupos, i, n = [], 0, len(parrafos)
-    while i < n:
-        p = parrafos[i]
-        strong = p.find("strong")
-        if not strong:
-            i += 1
-            continue
-        heading = strong.get_text(" ", strip=True).strip(" .:–-")
-        strong.extract()
-        resto = re.sub(r"^[\s.:–-]+", "", "".join(str(x) for x in p.children).strip())
-        piezas = [f"<p>{resto}</p>"] if resto else []
-        j = i + 1
-        while j < n and not parrafos[j].find("strong"):
-            piezas.append(str(parrafos[j]))
-            j += 1
-        if heading:
-            grupos.append((heading, "".join(piezas) or "&nbsp;"))
-        i = j
+    titulo = _titulo_tras_instruccion(cell)
+    grupos = _grupos_por_titulo_en_negrita(cell)
     if len(grupos) < 2:        # un acordeón necesita al menos 2 paneles
         return None
-    return construir_panels(grupos)
+    encabezado = (f'<p class="lead dp-text-bold">{titulo}</p>\n'
+                  if titulo else "")
+    return encabezado + construir_panels(grupos, variante)
+
+
+def _grupos_de_tabla_de_datos(datos) -> list:
+    """[(solapa, html)] a partir de una tabla de datos: la 1ª fila son los
+    encabezados y cada fila siguiente es una solapa rotulada con su primera
+    celda. Es la otra forma en que el asesor entrega unas tabs: escribe la
+    tabla y arriba anota 'Tabs verticales; al hacer clic en cada zona…'."""
+    filas = _filas_propias(datos)
+    if len(filas) < 3:          # encabezados + al menos dos solapas
+        return []
+    encabezados = [c.get_text(" ", strip=True)
+                   for c in filas[0].find_all(["td", "th"])]
+    grupos = []
+    for fila in filas[1:]:
+        celdas = fila.find_all(["td", "th"])
+        rotulo = celdas[0].get_text(" ", strip=True) if celdas else ""
+        if not rotulo:
+            continue
+        piezas = []
+        for i, celda in enumerate(celdas[1:], start=1):
+            cuerpo = BeautifulSoup("".join(str(x) for x in celda.children),
+                                   "html.parser")
+            if not cuerpo.get_text(strip=True):
+                continue
+            titulo = encabezados[i] if i < len(encabezados) else ""
+            # El encabezado de la columna va PEGADO al texto, no como párrafo
+            # en negrita aparte: suelto lo agarra el paso de subtítulos y una
+            # columna queda con estilo de subtítulo y la otra no.
+            primero = cuerpo.find("p")
+            if titulo and primero is not None:
+                rotulo_html = BeautifulSoup(
+                    f"<strong>{titulo}.</strong> ", "html.parser")
+                primero.insert(0, rotulo_html)
+            elif titulo:
+                cuerpo = BeautifulSoup(
+                    f"<p><strong>{titulo}.</strong> {cuerpo}</p>", "html.parser")
+            piezas.append(str(cuerpo))
+        grupos.append((rotulo, "".join(p for p in piezas if p) or "&nbsp;"))
+    return grupos if len(grupos) >= 2 else []
+
+
+def _tabla_a_tabs(tabla):
+    """Tabla cuya etiqueta es 'Tabs …' → solapas. La orientación la dice el
+    propio asesor en la etiqueta ('Tabs verticales; …')."""
+    cell = tabla.find(["td", "th"])
+    if cell is None:
+        return None
+    ps = cell.find_all("p")
+    etiqueta = _norm(ps[0].get_text(" ", strip=True)) if ps else ""
+    variante = ("dp-tabs-buttons-vertical" if "vertical" in etiqueta
+                else "dp-tabs-buttons")
+    por_negrita = _tabla_a_acordeon(tabla, variante)
+    if por_negrita:
+        return por_negrita
+    # Sin títulos en negrita: el contenido de las solapas viene como tabla.
+    internas = [t for t in cell.find_all("table") if _columnas_propias(t) > 1]
+    if len(internas) != 1:
+        return None
+    grupos = _grupos_de_tabla_de_datos(internas[0])
+    return construir_panels(grupos, variante) if grupos else None
 
 
 def bloque_recurso_incrustado(iframe_html: str = "", titulo: str = "") -> str:
@@ -1762,6 +1963,14 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
         if not h.get_text(strip=True) and not h.find("img"):
             h.decompose()
 
+    # 0.3 Marcado vacío de Word: al escribir "<strong>Título</strong>.<strong>
+    #     </strong>Texto" queda un resaltado que solo contiene un espacio. No
+    #     se ve, pero ensucia el HTML y aparece al principio del cuerpo de
+    #     cada panel de un expander/tabs.
+    for inline in soup.find_all(["strong", "b", "em", "i", "u"]):
+        if not inline.get_text(strip=True) and not inline.find("img"):
+            inline.unwrap()
+
     # 0.4 Carátula de la plantilla del DOCX (título + tabla de metadatos): es
     #     el formulario, no el contenido.
     quitar_encabezado_plantilla(soup)
@@ -1769,8 +1978,19 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
     # 0.5 Genially: incrustar (URL) o marcar para incrustar (descripción).
     _procesar_genially(soup)
 
-    # 1. Tablas → acordeón ('Expander'), recuadro (1 columna) o tabla de datos
+    # 1.0 Las tablas de datos anidadas (el asesor mete una tabla adentro de un
+    #     expander o de una caja) se estilan ANTES: en cuanto se reemplaza la
+    #     tabla contenedora, las de adentro quedan fuera del árbol y cualquier
+    #     cambio posterior ya no llega a la salida.
+    for interna in soup.find_all("table"):
+        if interna.find_parent("table") is not None \
+                and _columnas_propias(interna) > 1:
+            estilar_tabla_datos(interna, tema)
+
+    # 1. Tablas → acordeón ('Expander'), tabs, recuadro (1 col) o tabla de datos
     for tabla in soup.find_all("table"):
+        if tabla.find_parent("table") is not None:
+            continue                     # ya se resolvió con su contenedora
         primer = tabla.find(["td", "th"])
         etiqueta = _norm(primer.get_text(" ", strip=True)) if primer else ""
         if etiqueta.startswith(_FLIP_KW):
@@ -1783,9 +2003,12 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
             if acordeon:
                 tabla.replace_with(BeautifulSoup(acordeon, "html.parser"))
                 continue
-        max_cols = max((len(tr.find_all(["td", "th"]))
-                        for tr in tabla.find_all("tr")), default=0)
-        if max_cols == 1:
+        if etiqueta.startswith(_TABS_KW):
+            tabs = _tabla_a_tabs(tabla)
+            if tabs:
+                tabla.replace_with(BeautifulSoup(tabs, "html.parser"))
+                continue
+        if _columnas_propias(tabla) == 1:
             if _es_envoltorio_de_figura(tabla):
                 # Tabla sin bordes que solo sostiene la figura con su
                 # epígrafe y su nota: no es un recuadro. Encuadrarla mete la
