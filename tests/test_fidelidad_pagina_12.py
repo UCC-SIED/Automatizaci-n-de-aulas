@@ -163,6 +163,18 @@ class TestPreguntaSubtituloDentroDeUnPanel:
         out = procesar_contenido(html)
         assert "<h3>Un título normal de la página</h3>" in out
 
+    def test_no_lleva_aire_hacia_su_propia_explicacion(self):
+        """La pregunta y la respuesta que la sigue son la misma idea: aire
+        antes (separarla del párrafo previo) sí, pero NO abajo, entre la
+        pregunta y lo que la explica — se ve como un corte en el medio.
+        Confirmado en Canvas: "genial quedó esto... sacá el espacio de abajo
+        nomás, pero quedó bien" (arriba)."""
+        out = procesar_contenido(self.HTML)
+        assert ('¿Cuándo conviene utilizar Ishikawa?</p><p>Esta herramienta'
+               in out)
+        assert ('¿Cuándo conviene utilizar Ishikawa?</p><p>\xa0</p>'
+               not in out)
+
 
 class TestRecuadroDuplicado:
     def test_el_recuadro_dentro_de_otro_queda_uno_solo(self):

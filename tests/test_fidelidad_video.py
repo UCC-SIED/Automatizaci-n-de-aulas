@@ -198,6 +198,32 @@ class TestElBloqueDeVideoEsUnBloqueAparteEnLaPagina:
         assert "Antes del video" not in video.get_text()
         assert "Comprender los problemas" not in readings.get_text()
 
+    def test_el_bloque_de_video_termina_con_el_mismo_aire_que_kl_readings2(self):
+        """kl_readings2 SIEMPRE cierra con un <p>&nbsp;</p> antes del borde
+        del content-block (lo pone pagina_contenido); ese mismo spacer le
+        faltaba al bloque de video cuando absorbe el resto de la página —
+        terminaba pegado al borde. Regresión real: módulo 2.2 de Gestión de
+        la Calidad, el último párrafo de la página quedaba sin aire debajo."""
+        from bs4 import BeautifulSoup
+        from maquetador.build.pages import pagina_contenido
+        out = pagina_contenido("2.2. Título", self.HTML, "b.png", "id")
+        soup = BeautifulSoup(out, "html.parser")
+        video = soup.find("div", attrs={"data-title": "Video"})
+        ultimo = video.find_all(recursive=False)[-1]
+        assert ultimo.name == "p"
+        assert ultimo.get_text(strip=True) in ("", "\xa0")
+
+    def test_no_duplica_el_aire_si_ya_termina_en_espaciador(self):
+        from bs4 import BeautifulSoup
+        from maquetador.build.pages import pagina_contenido
+        html = self.HTML + "<p>&nbsp;</p>"
+        out = pagina_contenido("2.2. Título", html, "b.png", "id")
+        soup = BeautifulSoup(out, "html.parser")
+        video = soup.find("div", attrs={"data-title": "Video"})
+        hijos = video.find_all(recursive=False)
+        assert not (hijos[-1].get_text(strip=True) in ("", "\xa0")
+                   and hijos[-2].get_text(strip=True) in ("", "\xa0"))
+
     def test_sin_video_no_hay_bloque_aparte(self):
         from bs4 import BeautifulSoup
         from maquetador.build.pages import pagina_contenido

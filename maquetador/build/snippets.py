@@ -1746,12 +1746,17 @@ def _desheadear_dentro_de_panel(soup):
 
 
 def _espaciar_destacados(soup):
-    """Aire arriba y abajo de la frase destacada (estilo lead)."""
+    """Aire arriba de la frase destacada (estilo lead), no abajo.
+
+    Es una bajada/etiqueta —nombra lo que sigue ("¿Cuándo conviene utilizar
+    Ishikawa?", "Enfoque al cliente")—, no un párrafo suelto: separarla del
+    texto que la precede tiene sentido, pero separarla de SU PROPIA
+    explicación (que va justo debajo) se ve como un corte en el medio de la
+    misma idea. Verificado en Canvas."""
     for p in soup.find_all("p", class_="lead"):
         if p.parent is None or "dp-text-bold" not in (p.get("class") or []):
             continue
         _aire_antes(p, soup)
-        _aire_despues(p, soup)
 
 
 def _introducido_por_dos_puntos(p) -> bool:
@@ -2363,5 +2368,15 @@ def separar_bloque_de_video(html: str) -> tuple:
     bloque = soup.find("div", attrs={"data-title": "Video"}, recursive=False)
     if bloque is None:
         return html, ""
+    # El molde de la página SIEMPRE cierra con un <p>&nbsp;</p> de aire antes
+    # del borde del content-block — pero ese trailing spacer va después de
+    # {resto}, no del bloque de video. Si el video absorbió el resto de la
+    # página (ver _procesar_cues_parrafo), lo último que queda adentro es el
+    # cierre del CONTENIDO, no el del molde: sin este spacer, la página
+    # terminaba pegada al borde del bloque en vez de con el mismo aire que
+    # cualquier otra.
+    ultimo = bloque.find_all(recursive=False)[-1] if bloque.find_all(recursive=False) else None
+    if not (ultimo is not None and _es_espaciador(ultimo)):
+        bloque.append(BeautifulSoup("<p>&nbsp;</p>", "html.parser"))
     bloque_html = str(bloque.extract())
     return str(soup), bloque_html
