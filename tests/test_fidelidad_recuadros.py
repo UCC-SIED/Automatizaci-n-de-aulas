@@ -109,3 +109,31 @@ class TestEspaciadoDelRecuadroSimple:
         out = procesar_contenido(html)
         assert "<br/></p><div" in out
         assert "</div>\n</div><p><br/>" in out
+
+
+class TestAireCortoEsUnParrafoPropio:
+    """El "espacio chico" que arriba se pegaba como <br> al FINAL del
+    párrafo anterior: se confirmó en Canvas que ESE <br>, pegado justo
+    antes de un <div> (el recuadro), no siempre se ve como espacio —
+    persistía el reclamo de '¿Estamos creando las condiciones…?' incluso
+    ya con el fix de arriba/abajo. Ahora es un <p><br></p> propio, un
+    bloque real con un único salto de línea adentro, no la cola de otro
+    párrafo."""
+
+    def test_no_se_cuelga_del_parrafo_anterior(self):
+        html = ('<p>Antes.</p>'
+                f'{resaltado_simple(f"<p><em>{FRASE}</em></p>")}'
+                '<p>Después.</p>')
+        out = procesar_contenido(html)
+        assert "<p>Antes.</p><p><br/></p><div" in out
+        assert "Antes.<br" not in out
+
+    def test_dos_vecinos_no_duplican_el_espaciador(self):
+        """Si ya hay un <p><br></p> (u otro espaciador) puesto, no se agrega
+        uno encima — no queda "<p><br/></p><p><br/></p>" apilado."""
+        html = ('<p>Antes.</p><p><br></p>'
+                f'{resaltado_simple(f"<p><em>{FRASE}</em></p>")}'
+                '<p>Después.</p>')
+        out = procesar_contenido(html)
+        assert "<p><br/></p><p><br/></p>" not in out
+        assert "<p>Antes.</p><p><br/></p><div" in out

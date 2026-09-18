@@ -216,7 +216,7 @@ class TestTablaQueSoloEnvuelveLaFigura:
     def test_la_figura_conserva_su_estilo(self):
         out = procesar_contenido(self.HTML)
         assert "dp-image-bordered" in out
-        assert "width: 600px" in out
+        assert "width: 700px" in out
 
     def test_un_recuadro_de_verdad_con_imagen_sigue_encuadrado(self):
         """Una caja del catálogo que además trae una imagen adentro sigue
@@ -332,10 +332,12 @@ class TestFiguraDeDisenoDesdeMarcador:
         assert "dp-image-shadow" in out
         assert "width: 700px" in out
 
-    def test_sin_palabra_clave_de_densidad_queda_estatica_en_600(self):
-        """Una figura común (sin 'resumen'/'síntesis'/'expandible' en el
-        epígrafe ni en el texto alternativo) no se vuelve expandible: solo
-        las figuras densas en texto lo piden."""
+    def test_sin_palabra_clave_de_densidad_no_es_expandible(self):
+        """Una figura común (sin 'resumen'/'síntesis'/'expandible'/
+        'comparativo' en el epígrafe ni en el texto alternativo) no se
+        vuelve ampliable: solo las figuras densas en texto lo piden. El
+        ancho de 700px es el mismo para estática y ampliable — lo que las
+        distingue es la clase (borde vs. sombra+zoom), no el tamaño."""
         from pathlib import Path
         from maquetador.build.snippets import reemplazar_figuras_diseno
         html = ('<p>Figura 1. Evolución de la gestión de calidad</p>'
@@ -344,7 +346,7 @@ class TestFiguraDeDisenoDesdeMarcador:
         out = reemplazar_figuras_diseno(
             html, 1, {(1, "figura", 1): Path("M_1 fig 1.jpg")}, set())
         assert "dp-popup-image" not in out
-        assert "width: 600px" in out
+        assert "width: 700px" in out
 
     def test_un_cuadro_comparativo_tambien_es_densidad(self):
         """"Cuadro comparativo entre…" no trae "resumen" ni "síntesis" pero

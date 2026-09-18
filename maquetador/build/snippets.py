@@ -674,7 +674,11 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
             # Visuales y Datos" y las aulas a mano); salía invertido.
             expandible = _figura_diseno_es_expandible(p)
             clase_img = _FIG_CLASES_EXPANDIBLE if expandible else _FIG_CLASES_ESTATICA
-            ancho = 700 if expandible else 600
+            # 700px para estática y ampliable por igual (pedido del usuario:
+            # "un poquito más grande" el ancho por defecto de 600 se veía
+            # chico); lo que las distingue es la clase (borde vs.
+            # sombra+zoom), no el tamaño.
+            ancho = 700
             brief = _brief_de_figura(p)
             resto = texto[m.end():].strip(" .:–—-")
             img_html = ""
@@ -1612,46 +1616,32 @@ def _es_recuadro_simple(caja) -> bool:
 
 
 def _aire_corto_antes(el):
-    """Espaciado chico: un salto de línea al final del párrafo anterior.
+    """Espaciado chico: un párrafo propio con un solo <br> adentro, más
+    corto que el <p>&nbsp;</p> de aire entero.
 
-    Es el shift+enter que hace el equipo: separa menos que un párrafo vacío.
-    Si el vecino no es un <p> (p.ej. una lista), no hay adentro de qué
-    colgar el <br>: se inserta como su propio párrafo corto, en vez de
-    quedar sin aire.
+    Antes este "shift+enter" se colgaba como <br> suelto al FINAL del
+    párrafo anterior (el atajo real que usa el equipo al escribir a mano en
+    el editor de Canvas). Verificado en Canvas: ese <br> final, pegado justo
+    antes de un elemento de bloque (el <div> del recuadro), no siempre se
+    renderiza como espacio visible — el navegador no le arma una línea con
+    altura porque no hay contenido después. Un <br> como ÚNICO contenido de
+    su propio <p> sí tiene garantizada esa línea (es el contenido entero de
+    un bloque real, no la cola de otro).
     """
     previo = el.previous_sibling
     while isinstance(previo, NavigableString) and not previo.strip():
         previo = previo.previous_sibling
-    if previo is None:
-        return
-    if _es_espaciador(previo):
-        return
-    if getattr(previo, "name", None) != "p":
+    if previo is not None and not _es_espaciador(previo):
         el.insert_before(BeautifulSoup("<p><br></p>", "html.parser"))
-        return
-    hijos = [h for h in previo.children if getattr(h, "name", None) or str(h).strip()]
-    if hijos and getattr(hijos[-1], "name", None) == "br":
-        return
-    previo.append(BeautifulSoup("<br>", "html.parser"))
 
 
 def _aire_corto_despues(el):
-    """Espaciado chico DESPUÉS: un salto de línea al principio del párrafo
-    siguiente (la mitad "después" de _aire_corto_antes)."""
+    """Espaciado chico DESPUÉS: la mitad "después" de _aire_corto_antes."""
     sig = el.next_sibling
     while isinstance(sig, NavigableString) and not sig.strip():
         sig = sig.next_sibling
-    if sig is None:
-        return
-    if _es_espaciador(sig):
-        return
-    if getattr(sig, "name", None) != "p":
+    if sig is not None and not _es_espaciador(sig):
         el.insert_after(BeautifulSoup("<p><br></p>", "html.parser"))
-        return
-    hijos = [h for h in sig.children if getattr(h, "name", None) or str(h).strip()]
-    if hijos and getattr(hijos[0], "name", None) == "br":
-        return
-    sig.insert(0, BeautifulSoup("<br>", "html.parser"))
 
 
 def _vecino_real(el, atras: bool):
@@ -1709,18 +1699,6 @@ def _espaciar_recuadros(soup):
             continue
         _aire_antes(caja, soup)
         _aire_despues(caja, soup)
-
-
-def _espaciar_paneles(soup):
-    """Aire de párrafo completo arriba y abajo de tabs/acordeón/expander
-    (dp-panels-wrapper): son un componente grande, con título propio en cada
-    solapa/panel — igual que un recuadro con título, nunca les corresponde
-    el espaciado corto de un recuadro simple."""
-    for panel in soup.find_all("div", class_="dp-panels-wrapper"):
-        if panel.parent is None or panel.find_parent(class_="dp-panels-wrapper"):
-            continue
-        _aire_antes(panel, soup)
-        _aire_despues(panel, soup)
 
 
 def _agrandar_intro_subrayada_de_panel(soup):
@@ -1878,8 +1856,7 @@ def _nota_a_figcaption(soup):
         # lo de adentro, no el <figure>, que es un bloque de ancho fijo.
         fig["class"] = (["mx-auto", "d-block"]
                         + (clases or _FIG_CLASES_ESTATICA.split()))
-        ancho = 700 if "dp-popup-image" in clases else 600
-        fig["style"] = f"width: {ancho}px; height: auto; text-align: center;"
+        fig["style"] = "width: 700px; height: auto; text-align: center;"
 
         cap = soup.new_tag("figcaption")
         interior = BeautifulSoup(
@@ -2283,8 +2260,9 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
             img["class"] = (_FIG_CLASES_EXPANDIBLE if expandible
                             else _FIG_CLASES_ESTATICA)
             if not img.get("style"):
-                ancho = 700 if expandible else 600
-                img["style"] = f"width: {ancho}px; height: auto;"
+                # 700px para estática y ampliable por igual (ver la misma
+                # nota en reemplazar_figuras_diseno).
+                img["style"] = "width: 700px; height: auto;"
         # Centrar el párrafo contenedor aunque Word haya envuelto la imagen en
         # <strong>/<span>: hay que subir hasta el <p>, no mirar el padre directo.
         contenedor = img.find_parent("p")
@@ -2299,7 +2277,6 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
     _espaciar_recuadros(soup)
     _agrandar_intro_subrayada_de_panel(soup)
     _desheadear_dentro_de_panel(soup)
-    _espaciar_paneles(soup)
     _espaciar_destacados(soup)
 
     # 3.5 Enlaces: URLs sueltas → <a>; todo enlace externo con el estilo

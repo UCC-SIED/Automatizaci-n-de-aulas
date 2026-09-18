@@ -66,23 +66,29 @@ class TestVariantesDePanel:
 
 
 class TestEspaciadoYTipografiaDePaneles:
-    """Tabs/acordeón/expander (dp-panels-wrapper) llevan aire de párrafo
-    completo arriba y abajo, como cualquier componente con título propio —
-    y si el panel arranca con una bajada TODO subrayada (la bajada del
+    """Tabs/acordeón/expander (dp-panels-wrapper) NO llevan aire propio
+    arriba ni abajo — se probó lo contrario (aire de párrafo completo
+    siempre) y en la revisión en Canvas se veía exagerado en un acordeón que
+    va metido en el medio de un tramo de texto ("Planificación /
+    Aseguramiento / Control de la calidad", módulo 1.4 de Gestión de la
+    Calidad): se revierte a que el panel no agregue nada por su cuenta, y
+    si el DOCX ya trae separación alrededor, queda tal cual llegó.
+
+    Si el panel arranca con una bajada TODO subrayada (la bajada del
     título del panel, p.ej. "La calidad como responsabilidad de toda la
     organización" abriendo "Calidad Total"), esa línea lleva letra un poco
     más grande y en negrita (estilo "lead dp-text-bold"), pero sigue siendo
     párrafo, no heading."""
 
-    def test_lleva_aire_arriba_y_abajo(self):
+    def test_no_agrega_aire_propio(self):
         html = ("<p>Antes del panel.</p>"
                 + construir_panels([("A", "<p>Contenido A.</p>"),
                                     ("B", "<p>Contenido B.</p>")],
                                    "dp-tabs-buttons")
                 + "<p>Después del panel.</p>")
         out = procesar_contenido(html)
-        assert "<p>Antes del panel.</p><p>\xa0</p><div" in out
-        assert "</div><p>\xa0</p><p>Después del panel.</p>" in out
+        assert "<p>Antes del panel.</p><div" in out
+        assert "</div><p>Después del panel.</p>" in out
 
     def test_la_bajada_subrayada_del_panel_usa_lead(self):
         html = construir_panels(
