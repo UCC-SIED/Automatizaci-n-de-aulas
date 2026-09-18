@@ -91,6 +91,35 @@ class TestTabsConTituloEnNegrita:
         assert "Enfoque al cliente" in out
         assert 'dp-panel-heading">Principio N.° 1: Enfoque' not in out
 
+    def test_la_bajada_corta_va_en_negrita_y_mas_grande(self):
+        """"Enfoque al cliente" nombra el ítem del panel (la bajada del
+        título) — mismo trato que cualquier otra bajada del catálogo, no un
+        párrafo común. Regresión real: de los 4 principios de este mismo
+        módulo, solo uno (el que además coincidía con un <h3> nativo en otra
+        parte del documento) salía con este estilo; los otros tres quedaban
+        en <p> pelado."""
+        out, _ = self._aplicar("TABS horizontal (palabras en negrita)")
+        assert '<p class="lead dp-text-bold">Enfoque al cliente</p>' in out
+        assert '<p class="lead dp-text-bold">Liderazgo</p>' in out
+
+    def test_una_oracion_larga_despues_del_prefijo_no_se_agranda(self):
+        """Si lo que sigue al prefijo en negrita es una oración de verdad, no
+        una etiqueta, se deja como párrafo común: agrandarla se vería raro."""
+        html = ("<div><p><strong>Principio N.° 1</strong>: Enfoque al "
+               "cliente, que implica alinear toda la organización hacia la "
+               "satisfacción de sus necesidades y expectativas reales.</p>"
+               "<p>Más contenido del primer panel.</p>"
+               "<p><strong>Principio N.° 2</strong>: Otro principio</p>"
+               "<p>Más contenido del segundo panel.</p></div>")
+        soup = BeautifulSoup(html, "html.parser")
+        c = [{"instruccion": "TABS horizontal (palabras en negrita)",
+              "anclado": "Principio N.° 1", "accion": "tabs", "autor": ""}]
+        aplicar_comentarios(soup, c)
+        out = str(soup)
+        assert ('<p class="lead dp-text-bold">Enfoque al cliente, que '
+               'implica') not in out
+        assert "Enfoque al cliente, que implica alinear" in out
+
 
 class TestPreguntaSubtituloDentroDeUnPanel:
     """Word estila algunas preguntas organizadoras con "Subtitle" ("¿Cuándo

@@ -345,3 +345,19 @@ class TestFiguraDeDisenoDesdeMarcador:
             html, 1, {(1, "figura", 1): Path("M_1 fig 1.jpg")}, set())
         assert "dp-popup-image" not in out
         assert "width: 600px" in out
+
+    def test_un_cuadro_comparativo_tambien_es_densidad(self):
+        """"Cuadro comparativo entre…" no trae "resumen" ni "síntesis" pero
+        es la misma clase de figura densa en texto (dos o más columnas
+        comparadas). Regresión real: Figura 2, módulo 1.1 de Gestión de la
+        Calidad."""
+        from pathlib import Path
+        from maquetador.build.snippets import reemplazar_figuras_diseno
+        html = ('<p>Figura 2. Comparación entre enfoque preventivo y '
+                'proactivo</p>'
+                '<p>Texto alternativo: Cuadro comparativo entre el enfoque '
+                'preventivo y proactivo en la gestión de calidad.</p>')
+        out = reemplazar_figuras_diseno(
+            html, 1, {(1, "figura", 2): Path("M_1 fig 2.jpg")}, set())
+        assert "dp-popup-image" in out
+        assert "width: 700px" in out

@@ -124,8 +124,17 @@ def _titulo_en_negrita_al_inicio(el):
     if not (2 <= len(titulo) <= 60):
         return None, None
     resto = "".join(str(h) for h in hijos[1:]).lstrip(" :–—-")
-    if not BeautifulSoup(resto, "html.parser").get_text(strip=True):
+    texto_resto = BeautifulSoup(resto, "html.parser").get_text(strip=True)
+    if not texto_resto:
         return None, None       # todo el párrafo era el título: no es prefijo
+    # Si lo que sigue al prefijo en negrita es corto, es la bajada que nombra
+    # el ítem del panel ("Principio N.° 1: Enfoque al cliente" → "Enfoque al
+    # cliente"), no el arranque del cuerpo: mismo trato que cualquier otra
+    # bajada de panel, negrita y letra un poco más grande, sin ser heading.
+    # Con texto largo (una oración de verdad, no una etiqueta) se deja como
+    # párrafo común — mismo umbral que el propio título.
+    if len(texto_resto) <= 60:
+        return titulo, f'<p class="lead dp-text-bold">{resto}</p>'
     return titulo, f"<p>{resto}</p>"
 
 

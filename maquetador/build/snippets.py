@@ -245,6 +245,15 @@ def resaltado_simple(body_html: str) -> str:
         else:
             cuerpo = (f'<p class="card-text" style="text-align: center;">'
                       f'{body_html}</p>')
+    elif texto and not BeautifulSoup(body_html, "html.parser").find("p"):
+        # Una cita larga (>220) que llega SIN su <p> (aplicar_comentarios pasa
+        # solo el contenido interno del párrafo anclado, "".join(children),
+        # no el <p> que lo envolvía) quedaba como texto/<em> suelto, hijo
+        # directo de card-body: sin bloque propio, el margen que separa la
+        # caja de lo que sigue queda a merced de cómo el navegador arme la
+        # caja anónima para ese contenido inline — inconsistente. Se envuelve
+        # igual que la frase corta, sin el centrado (no es una frase corta).
+        cuerpo = f"<p>{body_html}</p>"
     return f"""<div class="dp-callout dp-callout-color-lg-tip card dp-callout-position-default dp-callout-type-title-bar" style="border-color: {ACCENT}; border-radius: 5px;">
 <div class="card-body">
 {cuerpo}
@@ -1530,7 +1539,7 @@ _PAT_ALT_PARRAFO = re.compile(
 # poder ampliarla para leerla, la haya pedido el asesor o no.
 _FIG_EXPANDIBLE_KW = ("expandible", "expandida", "ampliable",
                       "clic para ampliar", "click para ampliar",
-                      "resumen", "sintesis")
+                      "resumen", "sintesis", "comparativo", "comparacion")
 
 
 def _es_espaciador(el) -> bool:
@@ -2339,8 +2348,14 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
     # un subtítulo del párrafo anterior con <p>&nbsp;</p>, salvo que sea el
     # primer elemento de la página. Alcanza también al h4: el sub-subtítulo
     # se marca igual que el subtítulo, solo cambia el nivel de encabezado.
+    # El bloque "Video" (cuando queda abierto, ver separar_bloque_de_video)
+    # no es un componente aislado: es el resto del FLUJO de la página que
+    # cayó adentro por quedar después del marcador de video. Un subtítulo
+    # que aterriza ahí (p.ej. "Conclusión", o cualquier encabezado que
+    # siga al video) tiene que espaciarse igual que uno a nivel de página.
+    _bloque_video = soup.find("div", attrs={"data-title": "Video"}, recursive=False)
     for hx in soup.find_all(["h3", "h4"], class_=lambda c: not c):
-        if hx.parent is not soup:
+        if hx.parent is not soup and hx.parent is not _bloque_video:
             continue
         anterior = hx.previous_sibling
         while isinstance(anterior, NavigableString) and not anterior.strip():

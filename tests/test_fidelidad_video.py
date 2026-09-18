@@ -124,6 +124,41 @@ class TestElBloqueDeVideoQuedaAbierto:
         assert "<h3>Otro tema</h3>" in out
 
 
+class TestSubtitulosDentroDelBloqueDeVideoSiguenEspaciados:
+    """El paso 5 de procesar_contenido (espaciador antes de un subtítulo
+    suelto) solo miraba subtítulos a nivel de página (hx.parent is soup):
+    cualquier <h3>/<h4> que cae DENTRO del bloque "Video" —que queda abierto
+    y absorbe el resto de la página, no es un componente aislado— se saltaba
+    sin su <p>&nbsp;</p> de arriba. Afecta también a la "Conclusión" del
+    módulo, que se agrega al final de la página y cae ahí mismo. Regresión
+    real: módulo 1.4 de Gestión de la Calidad, dos subtítulos y la
+    Conclusión sin espacio."""
+
+    HTML = (PROPIO +
+            '<p>El video plantea la diferencia entre cumplir '
+            'especificaciones técnicas y responder a expectativas reales.</p>'
+            '<h3>Calidad desde la perspectiva del cliente</h3>'
+            '<p>La calidad no se define solo desde lo técnico.</p>'
+            '<h3>Conclusión</h3>'
+            '<p>La calidad en proyectos no se juega solo al final.</p>')
+
+    def test_el_subtitulo_dentro_del_bloque_de_video_lleva_espaciador(self):
+        out = procesar_contenido(self.HTML)
+        assert ('<p>\xa0</p><h3>Calidad desde la perspectiva del cliente'
+               '</h3>') in out
+
+    def test_la_conclusion_tambien_lleva_espaciador(self):
+        out = procesar_contenido(self.HTML)
+        assert "<p>\xa0</p><h3>Conclusión</h3>" in out
+
+    def test_un_subtitulo_a_nivel_de_pagina_sigue_funcionando(self):
+        """No se rompe el caso de siempre: un h3 que NO está adentro de
+        ningún bloque de video también lleva su espaciador."""
+        html = "<p>Texto previo.</p><h3>Un título cualquiera</h3><p>Cuerpo.</p>"
+        out = procesar_contenido(html)
+        assert "<p>\xa0</p><h3>Un título cualquiera</h3>" in out
+
+
 class TestElBloqueDeVideoEsUnBloqueAparteEnLaPagina:
     """El bloque "Video" no va ANIDADO dentro del content-block de lectura
     (kl_readings2) de la página: el equipo a mano cierra ese div y abre uno

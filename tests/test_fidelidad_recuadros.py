@@ -63,6 +63,35 @@ class TestFraseCortaCentrada:
         assert '<p class="card-text" style="text-align: center;">' in html
 
 
+class TestCitaLargaSinEnvoltorio:
+    """aplicar_comentarios pasa el contenido INTERNO del párrafo anclado
+    ("".join(children), no el <p> que lo envolvía) a resaltado_simple. Con
+    una cita corta no importa (se re-envuelve en el <p class="card-text">
+    centrado), pero con una cita larga (>220, la rama que NO centra) el
+    <em>/texto suelto quedaba como hijo directo de card-body, sin ningún
+    <p> — a merced de cómo arme el navegador la caja anónima para ese
+    contenido inline. Regresión real: módulo 1.4 de Gestión de la Calidad,
+    "La participación temprana de stakeholders…" (233 caracteres)."""
+
+    LARGA = ("La participación temprana de stakeholders ayuda a evitar uno "
+             "de los problemas más frecuentes en proyectos: entregar algo "
+             "técnicamente correcto que no responde a las expectativas "
+             "reales de quienes deben usarlo, aprobarlo o sostenerlo.")
+
+    def test_queda_envuelta_en_p(self):
+        html = resaltado_simple(f"<em>{self.LARGA}</em>")
+        assert f"<p><em>{self.LARGA}</em></p>" in html
+
+    def test_no_se_centra_por_ser_larga(self):
+        html = resaltado_simple(f"<em>{self.LARGA}</em>")
+        assert "text-align: center" not in html
+        assert "card-text" not in html
+
+    def test_una_cita_larga_que_ya_trae_p_no_se_duplica(self):
+        html = resaltado_simple(f"<p>{self.LARGA}</p>")
+        assert html.count("<p>") == 1
+
+
 class TestEspaciadoDelRecuadroSimple:
     """El recuadro simple (sin título) llevaba el aire corto solo ARRIBA:
     _espaciar_recuadros nunca llamaba a _aire_corto_despues en esa rama.
