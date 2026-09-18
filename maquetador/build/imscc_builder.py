@@ -1007,6 +1007,31 @@ class GeneradorAula:
         self.topics_escritos.add(rid)
         return True
 
+    @staticmethod
+    def _color_del_placeholder(html_previo: str) -> str:
+        """Color del primer texto con estilo propio que YA trae el
+        placeholder del aula base para este assignment (p.ej. el banner fijo
+        "¡Llegaste al final!" de la AFI). Devuelve "" si no hay ninguno."""
+        m = re.search(r'style="color:\s*(#[0-9a-fA-F]{3,6})[;"]', html_previo)
+        return m.group(1) if m else ""
+
+    _PAT_PARRAFO_VACIO_FINAL = re.compile(
+        r"(?:<p>(?:&nbsp;|\s*)</p>\s*)+$")
+
+    @classmethod
+    def _sacar_un_espacio_final(cls, html_previo: str) -> str:
+        """Si el placeholder termina en dos o más párrafos vacíos seguidos
+        (el aula base de la AFI trae <hr><p>&nbsp;</p><p>&nbsp;</p> antes del
+        título del caso, un aire doble), saca uno solo: el resto de las
+        páginas de actividad usan un único párrafo vacío de separación."""
+        m = cls._PAT_PARRAFO_VACIO_FINAL.search(html_previo)
+        if m is None:
+            return html_previo
+        vacios = re.findall(r"<p>(?:&nbsp;|\s*)</p>", m.group(0))
+        if len(vacios) < 2:
+            return html_previo
+        return html_previo[:m.start()] + "".join(vacios[1:])
+
     def _escribir_assignment(self, rid: str, body_html: str, ctx: str) -> bool:
         """Llena el bloque 'Actividad' del assignment del aula base."""
         carpeta = self.working / rid
@@ -1026,11 +1051,17 @@ class GeneradorAula:
                 "El assignment del aula base no tiene el bloque 'Actividad' "
                 "esperado.", ctx))
             return False
-        html = pat.sub(
-            lambda m: (m.group(1) + m.group(2) + "\n"
-                       + maquetar_actividad(body_html, self.spec.tema)
-                       + "\n" + m.group(3)),
-            html, count=1)
+        def _reemplazo(m):
+            # Si el placeholder del aula base ya trae un texto fijo con color
+            # propio (el banner "¡Llegaste al final!" de la AFI, azul #003087
+            # sin importar el tema del curso), el título del caso se pinta
+            # igual — es el mismo bloque, no puede quedar de otro color.
+            color = self._color_del_placeholder(m.group(2))
+            previo = self._sacar_un_espacio_final(m.group(2))
+            return (m.group(1) + previo + "\n"
+                   + maquetar_actividad(body_html, self.spec.tema, color)
+                   + "\n" + m.group(3))
+        html = pat.sub(_reemplazo, html, count=1)
         _escribir(archivos[0], html)
         self.assignments_escritos.add(rid)
         return True

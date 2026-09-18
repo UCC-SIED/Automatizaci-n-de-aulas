@@ -228,6 +228,55 @@ class TestTablaQueSoloEnvuelveLaFigura:
         assert "dp-callout" in procesar_contenido(html)
 
 
+class TestFiguraDeDisenoQueReemplazaUnaTabla:
+    """El docente arma la figura como una tabla de datos real (columnas
+    "Elemento"/"Ejemplo", varias filas) al lado del epígrafe, y Diseño la
+    rehace como imagen. Por ser tabular es, por definición, densa en texto:
+    siempre va ampliable y a 700px, lo haya pedido el asesor o no — igual
+    que las figuras que solo dejan un marcador (ver
+    TestFiguraDeDisenoDesdeMarcador). Regresión real: Figura 4 ('Ejemplo de
+    indicador'), módulo 2.3 de Gestión de la Calidad."""
+
+    HTML = (
+        "<p>A continuación se presenta un ejemplo aplicado.</p>"
+        "<p>Figura 4. Ejemplo de indicador</p>"
+        "<table><tr><td><p>Elemento</p></td><td><p>Ejemplo</p></td></tr>"
+        "<tr><td><p>Nombre del indicador</p></td>"
+        "<td><p>% de actividades realizadas sin reproceso</p></td></tr>"
+        "<tr><td><p>¿Qué mide?</p></td><td><p>Actividades sin reproceso</p></td>"
+        "</tr></table>"
+        "<p>Texto alternativo: Ejemplo que muestra los elementos de un "
+        "indicador.</p>")
+
+    def _generar(self):
+        from pathlib import Path
+        from maquetador.build.snippets import reemplazar_figuras_diseno
+        return reemplazar_figuras_diseno(
+            self.HTML, 2, {(2, "figura", 4): Path("M_2 fig 4.jpg")}, set())
+
+    def test_reemplaza_la_tabla_por_la_imagen_de_diseno(self):
+        out = self._generar()
+        assert "M_2 fig 4.jpg" in out
+        assert "<table>" not in out
+
+    def test_queda_ampliable_y_a_700_sin_pedirlo_explicitamente(self):
+        out = self._generar()
+        assert "dp-popup-image" in out
+        assert "dp-image-shadow" in out
+        assert "width: 700px" in out
+
+    def test_una_figura_que_reemplaza_una_imagen_comun_sigue_en_600(self):
+        """Solo cuando reemplaza una TABLA se asume densa: una figura que
+        reemplaza una imagen embebida común no cambia de comportamiento."""
+        from pathlib import Path
+        from maquetador.build.snippets import reemplazar_figuras_diseno
+        html = ('<p>Figura 1. Evolución de la gestión de calidad</p>'
+                '<p><img src="__MEDIA__/orig.jpg"></p>')
+        out = reemplazar_figuras_diseno(
+            html, 1, {(1, "figura", 1): Path("M_1 fig 1.jpg")}, set())
+        assert "dp-popup-image" not in out
+
+
 class TestFiguraAmpliablePorComentario:
     """El asesor clava el globo SOBRE la imagen ("incluir pop up para
     ampliar"): aplicar_comentarios marca la figura y procesar_contenido le

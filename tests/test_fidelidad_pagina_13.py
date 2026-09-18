@@ -189,6 +189,32 @@ class TestLaboratorioDeIdeas:
         assert "<strong>Laboratorio de ideas</strong>" in \
             resaltado_laboratorio_ideas("<p>cuerpo</p>")
 
+    def test_el_cuerpo_queda_sangrado_como_el_titulo(self):
+        """Regresión real (módulo 2.1): el texto y la lista del cuerpo salían
+        pegados al borde, sin la sangría de 40px que sí lleva el <h3> del
+        título — quedaban desalineados con él."""
+        out = resaltado_laboratorio_ideas(
+            "<p>¡Momento de ensayar!</p>"
+            "<ul><li>¿Qué problemas?</li><li>¿Cómo se gestionaban?</li></ul>"
+            "<p>No se busca una respuesta correcta.</p>")
+        assert '<p style="padding-left: 40px;">¡Momento de ensayar!</p>' in out
+        assert ('<p style="padding-left: 40px;">No se busca una respuesta '
+                'correcta.</p>') in out
+
+    def test_la_lista_va_doblemente_anidada_sin_vinieta_extra(self):
+        """La convención del equipo: <ul><li style="list-style-type: none;">
+        envuelve la lista real, para correrla bajo la sangría sin agregarle
+        su propia viñeta."""
+        out = resaltado_laboratorio_ideas(
+            "<p>Intro.</p><ul><li>Uno</li><li>Dos</li></ul>")
+        assert ('<ul><li style="list-style-type: none;"><ul><li>Uno</li>'
+                '<li>Dos</li></ul></li></ul>') in out
+
+    def test_conserva_un_style_previo_de_los_parrafos(self):
+        out = resaltado_laboratorio_ideas(
+            '<p style="text-align: center;">Centrado.</p>')
+        assert 'style="text-align: center; padding-left: 40px;"' in out
+
 
 class TestEspaciadoDeFiguraQueEsTabla:
     """Una "figura" a veces es en realidad una tabla de datos (el epígrafe

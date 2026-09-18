@@ -92,6 +92,49 @@ class TestTabsConTituloEnNegrita:
         assert 'dp-panel-heading">Principio N.° 1: Enfoque' not in out
 
 
+class TestPreguntaSubtituloDentroDeUnPanel:
+    """Word estila algunas preguntas organizadoras con "Subtitle" ("¿Cuándo
+    conviene utilizar Ishikawa?"), y esa hoja de estilo mapea a <h3:fresh>. El
+    comentario "expander (títulos subrayados)" no las toma como apertura de
+    panel (van adentro del cuerpo de una sección ya abierta), así que ese
+    <h3> quedaba verbatim compitiendo con la jerarquía de títulos de la
+    página. Regresión real: módulo 2.2 de "Gestión de la Calidad", dentro del
+    expander "El diagrama de Ishikawa"."""
+
+    HTML = ('<div class="dp-panels-wrapper dp-expander-default">'
+            '<div class="dp-panel-group">'
+            '<h3 class="dp-panel-heading">El diagrama de Ishikawa</h3>'
+            '<div class="dp-panel-content">'
+            '<p>Una de las herramientas más utilizadas para el análisis de '
+            'causas.</p>'
+            '<h3><a id="_heading=h.x"></a>¿Cuándo conviene utilizar '
+            'Ishikawa?</h3>'
+            '<p>Esta herramienta resulta especialmente útil cuando existen '
+            'múltiples causas posibles.</p>'
+            "</div></div></div>")
+
+    def test_deja_de_ser_un_encabezado(self):
+        out = procesar_contenido(self.HTML)
+        assert "<h3>¿Cuándo conviene" not in out
+        assert "¿Cuándo conviene utilizar Ishikawa?" in out
+
+    def test_queda_en_negrita_y_un_poco_mas_grande_pero_como_parrafo(self):
+        out = procesar_contenido(self.HTML)
+        assert ('<p class="lead dp-text-bold">¿Cuándo conviene utilizar '
+                'Ishikawa?</p>') in out
+
+    def test_el_titulo_que_abre_el_panel_no_se_toca(self):
+        """Ese sí es un <h3>, pero con class="dp-panel-heading": es la
+        solapa/panel en sí, no debe demoverse."""
+        out = procesar_contenido(self.HTML)
+        assert 'class="dp-panel-heading">El diagrama de Ishikawa</h3>' in out
+
+    def test_no_afecta_encabezados_fuera_de_un_panel(self):
+        html = "<h3>Un título normal de la página</h3><p>Cuerpo.</p>"
+        out = procesar_contenido(html)
+        assert "<h3>Un título normal de la página</h3>" in out
+
+
 class TestRecuadroDuplicado:
     def test_el_recuadro_dentro_de_otro_queda_uno_solo(self):
         html = ('<div class="dp-callout dp-callout-color-lg-tip card">'

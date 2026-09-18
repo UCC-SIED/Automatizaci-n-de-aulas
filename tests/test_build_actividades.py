@@ -380,3 +380,55 @@ class TestSlotDeActividadDelAulaBase:
         quedan = self._generador()._recursos_que_pide_modulo(
             self._modulo("Actividad"))
         assert "Actividad obligatoria M1" in quedan
+
+
+class TestColorYAireDelPlaceholderDeActividad:
+    """El aula base de la AFI trae un banner fijo "¡Llegaste al final!" en
+    azul (#003087), siempre, sin importar el tema del curso, seguido de dos
+    párrafos vacíos antes de donde se inserta el título del caso. El título
+    que genera maquetar_actividad debía usar el mismo azul (no el del tema)
+    y el doble espacio debía reducirse a uno. Regresión real: AFI de "Gestión
+    de la Calidad" (tema posgrado, que por defecto usa #1b1e31)."""
+
+    from maquetador.build.imscc_builder import GeneradorAula as _GA
+
+    PLACEHOLDER_AFI = (
+        '<p class="" style="color: #003087;"><span style="font-size: 24pt;">'
+        '<strong>¡Llegaste al final!</strong></span></p>'
+        '<p><span style="font-size: 18pt;"><strong>Es tu momento de '
+        'demostrar lo aprendido.</strong></span></p>'
+        '<hr><p>&nbsp;</p><p>&nbsp;</p>')
+
+    def test_extrae_el_color_del_banner_fijo(self):
+        assert self._GA._color_del_placeholder(self.PLACEHOLDER_AFI) == "#003087"
+
+    def test_sin_banner_fijo_no_hay_color_que_extraer(self):
+        assert self._GA._color_del_placeholder(
+            '<h2 class="dp-has-icon"></h2><p>&nbsp;</p>') == ""
+
+    def test_el_doble_espacio_final_queda_en_uno_solo(self):
+        out = self._GA._sacar_un_espacio_final(self.PLACEHOLDER_AFI)
+        assert out.count("<p>&nbsp;</p>") == 1
+        assert "¡Llegaste al final!" in out    # el resto no se toca
+
+    def test_un_solo_espacio_final_no_se_toca(self):
+        """El resto de los assignments (Actividad obligatoria M1/M2, sin este
+        banner) solo traen un párrafo vacío: no hay nada que recortar."""
+        placeholder = '<h2 class="dp-has-icon"></h2><p>&nbsp;</p>'
+        assert self._GA._sacar_un_espacio_final(placeholder) == placeholder
+
+    def test_el_titulo_del_caso_usa_el_color_del_banner_no_el_del_tema(self):
+        from maquetador.build.snippets import maquetar_actividad
+        color = self._GA._color_del_placeholder(self.PLACEHOLDER_AFI)
+        out = maquetar_actividad(
+            "<h2>Analizá situaciones reales</h2><p>Cuerpo.</p>",
+            tema="posgrado", color_titulo=color)
+        assert 'style="color: #003087; text-align: center;"' in out
+        assert "#1b1e31" not in out   # el accent de posgrado no debe colarse
+
+    def test_sin_color_de_banner_sigue_usando_el_del_tema(self):
+        from maquetador.build.snippets import maquetar_actividad
+        out = maquetar_actividad(
+            "<h2>Proyecto de ampliación de una planta</h2><p>Cuerpo.</p>",
+            tema="posgrado")
+        assert "#1b1e31" in out

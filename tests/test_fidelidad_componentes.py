@@ -71,8 +71,8 @@ class TestEspaciadoYTipografiaDePaneles:
     y si el panel arranca con una bajada TODO subrayada (la bajada del
     título del panel, p.ej. "La calidad como responsabilidad de toda la
     organización" abriendo "Calidad Total"), esa línea lleva letra un poco
-    más grande (estilo "lead"), pero sigue siendo párrafo, no heading ni
-    negrita."""
+    más grande y en negrita (estilo "lead dp-text-bold"), pero sigue siendo
+    párrafo, no heading."""
 
     def test_lleva_aire_arriba_y_abajo(self):
         html = ("<p>Antes del panel.</p>"
@@ -93,8 +93,8 @@ class TestEspaciadoYTipografiaDePaneles:
              ("Lean", "<p>Contenido de Lean.</p>")],
             "dp-tabs-buttons")
         out = procesar_contenido(html)
-        assert ('<p class="lead"><u>La calidad como responsabilidad de '
-               'toda la organización</u></p>') in out
+        assert ('<p class="lead dp-text-bold"><u>La calidad como '
+               'responsabilidad de toda la organización</u></p>') in out
 
     def test_un_parrafo_underline_parcial_no_se_agranda(self):
         """Solo una bajada TOTALMENTE subrayada cuenta — un párrafo con

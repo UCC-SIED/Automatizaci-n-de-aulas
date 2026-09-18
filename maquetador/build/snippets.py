@@ -178,20 +178,40 @@ def resaltado_ejemplo(body_html: str, titulo: str = "Ejemplos que iluminan") -> 
 </div>"""
 
 
+def _indentar_cuerpo_laboratorio(body_html: str) -> str:
+    """El cuerpo del "Laboratorio de ideas" va sangrado 40px, alineado con el
+    título: cada <p> de primer nivel lleva ese padding, y una lista de primer
+    nivel se envuelve en un <ul><li style="list-style-type: none;">…</li></ul>
+    extra (la convención del equipo para correr los ítems bajo esa sangría sin
+    que les salga su propia viñeta duplicada)."""
+    soup = BeautifulSoup(body_html, "html.parser")
+    for p in soup.find_all("p", recursive=False):
+        estilo = p.get("style", "")
+        p["style"] = (estilo.rstrip("; ") + "; " if estilo else "") \
+            + "padding-left: 40px;"
+    for lista in soup.find_all(["ul", "ol"], recursive=False):
+        envoltorio = soup.new_tag("ul")
+        li = soup.new_tag("li", style="list-style-type: none;")
+        lista.wrap(li)
+        li.wrap(envoltorio)
+    return str(soup)
+
+
 def resaltado_laboratorio_ideas(body_html: str,
                                 titulo: str = "Laboratorio de ideas") -> str:
     """Desafío personal sin entrega — "Lecture Hook" con forma de flecha,
     ícono de matraz. Catálogo UCC, ver docs/referencia-designplus-cidilabs-
     ucc.md."""
+    cuerpo = _indentar_cuerpo_laboratorio(body_html)
     return f"""<div class="dp-content-block" style="margin-left: 0 !important; padding-left: 0 !important;" data-title="Lecture Hook" data-category="Interactions">
 <div class="dp-column-container container-fluid" style="font-size: 16px; width: 100%; border-radius: 16px; overflow: hidden; padding-left: 0 !important; margin-left: 0 !important;">
 <div class="row" style="margin-left: 0; margin-right: 0;">
 <div class="col-lg-1 col-md-1 col-sm-2 dp-bg dp-shape-peak-r cp-bg-dp-primary dp-mask-grd-md-h dp-wcag-aa align-items-center justify-content-center" style="padding-right: 0px;">
-<p class="text-center"><strong><i class="dp-icon fas fa-flask" style="font-size: 25px;" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i></strong></p>
+<p class="text-center dp-heading-ignore"><strong><i class="dp-icon fas fa-flask" style="font-size: 25px;" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i></strong></p>
 </div>
 <div class="dp-bg dp-shape-tri-cut-l cp-bg-light col-lg-11 col-md-11 col-sm-10 dp-padding-direction-tblr" style="padding-right: 75px; padding-left: 25px; background-color: #f4f6f8;">
 <h3 class="dp-ignore-theme" style="padding-left: 40px;"><strong>{titulo}</strong></h3>
-{body_html}
+{cuerpo}
 </div>
 </div>
 </div>
@@ -620,9 +640,13 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
             vecino["src"] = f"__DISENO__/{path.name}"
             usadas.add(path)
         elif clase == "table":
-            expandible = _figura_diseno_es_expandible(p)
-            clase_img = _FIG_CLASES_EXPANDIBLE if expandible else _FIG_CLASES_ESTATICA
-            ancho = 700 if expandible else 600
+            # Una figura de diseño que reemplaza una TABLA de datos es, por
+            # definición, densa en texto (varias filas/columnas resumidas en
+            # una sola imagen): siempre necesita poder ampliarse para leerse,
+            # lo haya pedido el asesor o no — mismo criterio que
+            # _FIG_EXPANDIBLE_KW para las figuras que solo dejan un marcador.
+            clase_img = _FIG_CLASES_EXPANDIBLE
+            ancho = 700
             nueva = BeautifulSoup(
                 f'<p style="text-align: center;"><img class="{clase_img}" '
                 f'style="width: {ancho}px; height: auto;" '
@@ -1076,7 +1100,7 @@ def _limpiar_encabezado(h) -> None:
             ultimo.replace_with(limpio)
 
 
-def maquetar_actividad(html: str, tema: str = "") -> str:
+def maquetar_actividad(html: str, tema: str = "", color_titulo: str = "") -> str:
     """Da forma al cuerpo de una actividad según el "Modelo de actividad".
 
     - El primer encabezado es el título de la actividad: va como H2 de título
@@ -1093,6 +1117,11 @@ def maquetar_actividad(html: str, tema: str = "") -> str:
     - Un rótulo dentro del relato ("Situación de incertidumbre:") se destaca
       en línea (negrita + subrayado), sin volverse un encabezado propio.
     - El disclaimer de uso de IA va en recuadro simple.
+
+    `color_titulo`: color del título del caso, si hay que igualarlo al de un
+    texto fijo que YA trae el placeholder del aula base (p.ej. el banner
+    "¡Llegaste al final!" de la AFI, que es azul #003087 siempre, sin
+    importar el tema del curso). Sin esto, el color sale del tema.
     """
     if not html:
         return html
@@ -1116,7 +1145,7 @@ def maquetar_actividad(html: str, tema: str = "") -> str:
         else:
             limpio = _PAT_PREFIJO_ACTIVIDAD.sub("", texto).strip()
             if limpio:
-                color = ACENTO_POR_TEMA.get(_norm(tema or ""), ACCENT)
+                color = color_titulo or ACENTO_POR_TEMA.get(_norm(tema or ""), ACCENT)
                 primero.replace_with(BeautifulSoup(
                     _H2_TITULO_ACTIVIDAD.format(color=color, titulo=limpio),
                     "html.parser"))
@@ -1689,8 +1718,9 @@ def _agrandar_intro_subrayada_de_panel(soup):
     """El primer párrafo de un panel, si está TODO subrayado, es la bajada
     del título (p.ej. "La calidad como responsabilidad de toda la
     organización" abriendo el panel "Calidad Total"): letra un poco más
-    grande que el resto del cuerpo, pero sigue siendo párrafo —no title,
-    no negrita— como pide el catálogo."""
+    grande y en negrita, igual que cualquier otra bajada del catálogo
+    (subtítulo dentro de un recuadro, pregunta organizadora dentro de un
+    panel) — sigue siendo párrafo, no un título de sección."""
     for contenido in soup.find_all("div", class_="dp-panel-content"):
         p = contenido.find("p", recursive=False)
         if p is None:
@@ -1702,8 +1732,30 @@ def _agrandar_intro_subrayada_de_panel(soup):
         if _norm(" ".join(u.get_text(" ", strip=True) for u in us)) != _norm(texto):
             continue
         clases = p.get("class") or []
-        if "lead" not in clases:
-            p["class"] = clases + ["lead"]
+        for clase in ("lead", "dp-text-bold"):
+            if clase not in clases:
+                clases = clases + [clase]
+        p["class"] = clases
+
+
+def _desheadear_dentro_de_panel(soup):
+    """Un <hN> nativo de Word (estilo "Subtitle") que queda DENTRO del cuerpo
+    de un panel —no es el título que lo abre, sino una pregunta o subtítulo
+    que organiza esa sección del contenido ("¿Cuándo conviene utilizar
+    Ishikawa?")— no debe competir con la jerarquía de encabezados de la
+    página: pasa a párrafo destacado (negrita, letra un poco más grande),
+    igual que las bajadas de panel y los subtítulos dentro de un recuadro.
+
+    Solo se demota el <hN> que NO abre el panel (`_es_encabezado_de_seccion`
+    con modo="subrayado" ya lo excluyó de abrir uno nuevo; acá se limpia el
+    que quedó, verbatim, adentro del <div class="dp-panel-content">)."""
+    for contenido in soup.find_all("div", class_="dp-panel-content"):
+        for h in contenido.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
+            p = soup.new_tag("p")
+            p["class"] = ["lead", "dp-text-bold"]
+            for hijo in list(h.children):
+                p.append(hijo.extract())
+            h.replace_with(p)
 
 
 def _espaciar_destacados(soup):
@@ -2237,6 +2289,7 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
     _espaciar_figuras(soup)
     _espaciar_recuadros(soup)
     _agrandar_intro_subrayada_de_panel(soup)
+    _desheadear_dentro_de_panel(soup)
     _espaciar_paneles(soup)
     _espaciar_destacados(soup)
 
