@@ -6,13 +6,13 @@
     <lomimscc:lom>
       <lomimscc:general>
         <lomimscc:title>
-          <lomimscc:string>Aula base Educación a distancia</lomimscc:string>
+          <lomimscc:string>Aula base Educación a distancia (Educación)</lomimscc:string>
         </lomimscc:title>
       </lomimscc:general>
       <lomimscc:lifeCycle>
         <lomimscc:contribute>
           <lomimscc:date>
-            <lomimscc:dateTime>2026-05-10</lomimscc:dateTime>
+            <lomimscc:dateTime>2026-09-10</lomimscc:dateTime>
           </lomimscc:date>
         </lomimscc:contribute>
       </lomimscc:lifeCycle>
@@ -116,16 +116,16 @@
             <title>Bibliografía M4</title>
           </item>
         </item>
-        <item identifier="g29dc74a4ffff5906b75a7e7ecd93afe3">
-          <title>Actividad final integradora</title>
-          <item identifier="g6b7d7a644e1b43433fad411424a7c6e9" identifierref="gb9820a8125e02ab4e0a2e895c093f2ca">
-            <title>Actividad final integradora</title>
-          </item>
-        </item>
         <item identifier="g88e7daf311dd3e2f434b1a3d1c7641ea">
           <title>Encuesta de valoración final</title>
           <item identifier="g052d1ac728677e509a8170a62953bca4" identifierref="g8d43e0c444d771d185a988cbffd4c6cb">
             <title>Encuesta de valoración final </title>
+          </item>
+        </item>
+        <item identifier="g29dc74a4ffff5906b75a7e7ecd93afe3">
+          <title>Actividad final integradora</title>
+          <item identifier="g6b7d7a644e1b43433fad411424a7c6e9" identifierref="gb9820a8125e02ab4e0a2e895c093f2ca">
+            <title>Actividad final integradora</title>
           </item>
         </item>
       </item>
@@ -266,6 +266,13 @@
       <file href="gdff25549c1ba6ec46cac0fac730ad467/calificacion-de-la-asignatura.html"/>
       <file href="gdff25549c1ba6ec46cac0fac730ad467/assignment_settings.xml"/>
     </resource>
+    <resource identifier="g7da07628ab1ec8808e34c1234b18115e" type="imsdt_xmlv1p1">
+      <file href="g7da07628ab1ec8808e34c1234b18115e.xml"/>
+      <dependency identifierref="g6357db027d02859c526d66d339649812"/>
+    </resource>
+    <resource identifier="g6357db027d02859c526d66d339649812" type="associatedcontent/imscc_xmlv1p1/learning-application-resource" href="g6357db027d02859c526d66d339649812.xml">
+      <file href="g6357db027d02859c526d66d339649812.xml"/>
+    </resource>
     <resource identifier="g4f058ed11916611a88caf04610e4d80f" type="imsdt_xmlv1p1">
       <file href="g4f058ed11916611a88caf04610e4d80f.xml"/>
       <dependency identifierref="ga1be26b1ea5a6cfa025a448ffa61abc6"/>
@@ -301,13 +308,6 @@
     <resource identifier="g0866e3aa5096313e1c88a345de639ad6" type="associatedcontent/imscc_xmlv1p1/learning-application-resource" href="g0866e3aa5096313e1c88a345de639ad6.xml">
       <file href="g0866e3aa5096313e1c88a345de639ad6.xml"/>
     </resource>
-    <resource identifier="gaf321598bbb10f89c6980715c02af5c6" type="imsdt_xmlv1p1">
-      <file href="gaf321598bbb10f89c6980715c02af5c6.xml"/>
-      <dependency identifierref="g92d3462570c47a6d959e4f155825118e"/>
-    </resource>
-    <resource identifier="g92d3462570c47a6d959e4f155825118e" type="associatedcontent/imscc_xmlv1p1/learning-application-resource" href="g92d3462570c47a6d959e4f155825118e.xml">
-      <file href="g92d3462570c47a6d959e4f155825118e.xml"/>
-    </resource>
     <resource identifier="g91192f9a05d987d7bf0d5eda2411b07c" type="imsdt_xmlv1p1">
       <file href="g91192f9a05d987d7bf0d5eda2411b07c.xml"/>
       <dependency identifierref="g867286df67f5d63f5f1b90e958a2d967"/>
@@ -328,6 +328,13 @@
     </resource>
     <resource identifier="g931e53f8a196f2a06b4dc01bf6ad95d4" type="associatedcontent/imscc_xmlv1p1/learning-application-resource" href="g931e53f8a196f2a06b4dc01bf6ad95d4.xml">
       <file href="g931e53f8a196f2a06b4dc01bf6ad95d4.xml"/>
+    </resource>
+    <resource identifier="gaf321598bbb10f89c6980715c02af5c6" type="imsdt_xmlv1p1">
+      <file href="gaf321598bbb10f89c6980715c02af5c6.xml"/>
+      <dependency identifierref="g92d3462570c47a6d959e4f155825118e"/>
+    </resource>
+    <resource identifier="g92d3462570c47a6d959e4f155825118e" type="associatedcontent/imscc_xmlv1p1/learning-application-resource" href="g92d3462570c47a6d959e4f155825118e.xml">
+      <file href="g92d3462570c47a6d959e4f155825118e.xml"/>
     </resource>
     <resource identifier="g8d43e0c444d771d185a988cbffd4c6cb" type="imsqti_xmlv1p2/imscc_xmlv1p1/assessment">
       <file href="g8d43e0c444d771d185a988cbffd4c6cb/assessment_qti.xml"/>
@@ -574,6 +581,9 @@
     </resource>
     <resource type="webcontent" identifier="g0ed265bd436cb986d332939ba0b4b587" href="web_resources/Multimedia cargada/Actividad Final Integradora.png">
       <file href="web_resources/Multimedia cargada/Actividad Final Integradora.png"/>
+    </resource>
+    <resource type="webcontent" identifier="g0f5fadde608294c7ab45734c82463b0f" href="web_resources/Multimedia cargada/Foro-AFI.png">
+      <file href="web_resources/Multimedia cargada/Foro-AFI.png"/>
     </resource>
     <resource type="webcontent" identifier="g782285248e95a049f2d644ea8e613c1a" href="web_resources/course_image/Maquetacion.png">
       <file href="web_resources/course_image/Maquetacion.png"/>

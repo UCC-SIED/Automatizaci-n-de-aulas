@@ -27,6 +27,21 @@ from maquetador.ingest.docx_comments import extraer_comentarios, aplicar_comenta
 
 logger = logging.getLogger("segmenter")
 
+# Mammoth solo mapea por defecto los estilos "Heading 1".."Heading 6" a <hN>.
+# Los asesores también usan el estilo Word "Subtitle" (subtítulo debajo del
+# título de sección) para subtítulos de nivel h3, y ese estilo NO tiene
+# mapeo por defecto: sin esta regla, el párrafo queda como <p> suelto (sin
+# negrita, sin marca alguna) y el resto del pipeline no tiene forma de
+# reconocerlo como encabezado.
+#
+# Mammoth tampoco preserva el subrayado por defecto (lo considera una
+# elección de estilo sin significado semántico): un asesor que marca los
+# títulos de un expander/acordeón subrayándolos ("Para maquetación: expander
+# (títulos subrayados)") los pierde del todo — quedan como <p> sueltos,
+# indistinguibles del resto del texto, y _es_encabezado_de_seccion() nunca
+# los reconoce como encabezado.
+_MAMMOTH_STYLE_MAP = "p[style-name='Subtitle'] => h3:fresh\nu => u"
+
 _PAT_NUM = re.compile(r"^(\d+(?:\.\d+)+)\.?\s*")
 
 
@@ -152,14 +167,20 @@ def segmentar_docx(docx_path: Path, marcadores: dict) -> tuple:
     reconciliador (p.ej. {"1.1": "1.1. El problema de la corrupción",
     "3.1": "Onboarding digital: …"}).
 
-    Devuelve ({clave: html}, [imagenes], [no_encontrados], [comentarios]).
-    El 4º elemento son los pedidos de maquetación del asesor (comentarios del
-    DOCX) que no se pudieron aplicar solos y hay que revisar/armar a mano.
+    Devuelve ({clave: html}, [imagenes], [no_encontrados], [comentarios],
+    [origenes_otra_pagina]). El 4º elemento son los pedidos de maquetación del
+    asesor (comentarios del DOCX) que no se pudieron aplicar solos y hay que
+    revisar/armar a mano. El 5º son los pedidos "va en otra página" que SÍ se
+    aplicaron (ver aplicar_comentarios): [{"anclado", "pagina_origen", "html"}],
+    con la clave de la sección de la que se sacó cada uno (la pista de dónde
+    ubicar ese ítem —un foro, típicamente— en el flujo del módulo) y el HTML
+    que se sacó (la consigna real, para cargarla en el ítem que corresponde).
     """
     img = ImagenInline()
     with open(docx_path, "rb") as f:
         html = mammoth.convert_to_html(
-            f, convert_image=mammoth.images.img_element(img.handler)).value
+            f, convert_image=mammoth.images.img_element(img.handler),
+            style_map=_MAMMOTH_STYLE_MAP).value
     soup = BeautifulSoup(html, "html.parser")
     _aplanar_listas_con_titulos(soup, marcadores)
     elementos = [el for el in soup.find_all(recursive=False)]
@@ -212,12 +233,26 @@ def segmentar_docx(docx_path: Path, marcadores: dict) -> tuple:
     # sobre cada sección ya cortada, para no romper los límites de sección.
     # Cada comentario se aplica en la sección que contiene su texto anclado.
     comentarios = extraer_comentarios(docx_path)
+    # "otra_pagina" (p.ej. el foro "directamente en siguiente pág") se saca de
+    # la sección que lo contiene, pero esa sección es justo la pista de dónde
+    # debe ubicarse el ítem real (el foro) en el flujo del aula: se registra
+    # qué clave lo contenía para que el builder pueda ordenar el módulo.
+    origenes_otra_pagina = []
     if comentarios:
         for clave, html_sec in list(secciones.items()):
             soup_sec = BeautifulSoup(html_sec, "html.parser")
             aplicar_comentarios(soup_sec, comentarios)
             secciones[clave] = str(soup_sec)
+            for c in comentarios:
+                if c.get("accion") in ("otra_pagina", "foro_lectura_y_espacio") \
+                        and c.get("_aplicado") \
+                        and not any(o["anclado"] == c["anclado"]
+                                    for o in origenes_otra_pagina):
+                    origenes_otra_pagina.append({
+                        "anclado": c["anclado"], "pagina_origen": clave,
+                        "html": c.get("_contenido_extraido", "")})
     comentarios_pendientes = [c for c in comentarios if not c.get("_aplicado")]
 
     no_encontrados = [c for c in marcadores if c not in secciones]
-    return secciones, img.imagenes, no_encontrados, comentarios_pendientes
+    return (secciones, img.imagenes, no_encontrados, comentarios_pendientes,
+            origenes_otra_pagina)

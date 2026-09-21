@@ -14,7 +14,7 @@
   <points_possible>10.0</points_possible>
   <grading_type>points</grading_type>
   <all_day>false</all_day>
-  <submission_types>online_text_entry,online_upload</submission_types>
+  <submission_types>online_upload</submission_types>
   <position>2</position>
   <turnitin_enabled>false</turnitin_enabled>
   <vericite_enabled>false</vericite_enabled>
@@ -37,6 +37,7 @@
   <grader_names_visible_to_final_grader>true</grader_names_visible_to_final_grader>
   <anonymous_instructor_annotations>false</anonymous_instructor_annotations>
   <allowed_attempts>2</allowed_attempts>
+  <lockdown_browser_settings>{"require_lockdown_browser":false}</lockdown_browser_settings>
   <similarity_detection_tool resource_type_code="cpf-tca-settings" vendor_code="turnitin.com" product_code="turnitin-lti" visibility="immediate"/>
   <tool_setting>
     <tool_proxy product_code="turnitin-lti" vendor_code="turnitin.com" tool_proxy_guid="919aed61-ddb1-4834-a098-fdfac72af9ab"/>

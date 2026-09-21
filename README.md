@@ -112,6 +112,35 @@ rompe la importación en Canvas) y compara la fidelidad de las páginas contra l
 aulas hechas a mano. Suite de 6 cursos de referencia (~88% de páginas idénticas;
 el resto son decisiones editoriales que se resuelven en revisión).
 
+### Tests y cobertura
+
+```bash
+pytest tests/ --cov=maquetador --cov-report=xml   # correr la suite
+python scripts/cobertura.py                        # informe de cobertura
+```
+
+`scripts/cobertura.py` rankea los módulos por **líneas sin cubrir** (dónde está
+el riesgo real, no el porcentaje plano) y corta si la cobertura total baja del
+piso definido en el script. Corre igual en local y en CI, sin depender de
+ningún servicio externo. El piso es un trinquete: se sube a medida que la
+cobertura mejora, nunca se baja.
+
+### Curso sintético de prueba
+
+El material real de asesoría (`Aulas a generar/`) y los paquetes generados
+(`output/`) no se versionan. Para que la suite no dependa de tenerlos,
+`tests/fixtures/curso_sintetico.py` **construye por código** una entrega
+mínima pero completa —planilla, DOCX de dos módulos, foro, actividad, guion,
+figuras, foto del docente y material descartable— y de ahí se genera un
+`.imscc` real en cada corrida.
+
+Se genera en vez de commitearse porque un `.docx` es un ZIP: como binario
+sería un blob imposible de revisar en un diff o de ajustar sin abrir Word.
+
+Los tests usan el material real cuando está y el sintético cuando no, así que
+el flujo local no cambia. Quedan salteados solo los tests atados a cursos
+reales concretos, que no tiene sentido sintetizar.
+
 ## Notas
 
 - La elección del aula base es **siempre manual** (decisión del maquetador).

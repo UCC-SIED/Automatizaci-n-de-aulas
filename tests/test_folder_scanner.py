@@ -373,6 +373,134 @@ class TestAfiConGuionBajo:
             f"El AFI con guion bajo no se clasificó como actividad: {nombres}"
 
 
+class TestSiglaPropiaDelAsesorEnLaCarpetaDeActividades:
+    """Cada asesor abrevia como quiere: "AEO 1 - GRyI.docx" (actividad de
+    evaluación obligatoria) no dice "actividad" ni "AFI" en el nombre y caía
+    en `otros`. La planilla nombraba el archivo exacto, pero como no estaba
+    entre los candidatos la actividad obligatoria del módulo 2 terminaba
+    apuntando al AFI. Regresión real: Gestión del Riesgo y la Incertidumbre."""
+
+    def _curso(self, tmp_path):
+        raiz = tmp_path / "08. Gestión del Riesgo"
+        (raiz / "3. Actividades").mkdir(parents=True)
+        (raiz / "2. Desarrollo Teórico").mkdir(parents=True)
+        (raiz / "2. Desarrollo Teórico" / "Modulo 1 - GRyI.docx").write_text(
+            "x", encoding="utf-8")
+        for nombre in ("AEO 1 - GRyI.docx", "AEO 2 - GRyI.docx",
+                       "AFI - GRyI.docx", "Foro de Apertura - GRyI.docx"):
+            (raiz / "3. Actividades" / nombre).write_text("x", encoding="utf-8")
+        return raiz
+
+    def test_el_docx_de_la_carpeta_actividades_es_una_actividad(self, tmp_path):
+        inv = escanear(self._curso(tmp_path))
+        nombres = sorted(p.name for _n, p in inv.actividades)
+        assert nombres == ["AEO 1 - GRyI.docx", "AEO 2 - GRyI.docx",
+                           "AFI - GRyI.docx"]
+
+    def test_el_foro_sigue_siendo_foro(self, tmp_path):
+        inv = escanear(self._curso(tmp_path))
+        assert [p.name for _n, p in inv.foros] == ["Foro de Apertura - GRyI.docx"]
+
+    def test_solo_cuenta_la_carpeta_inmediata(self, tmp_path):
+        """En Gestión de la Calidad los módulos viven en "Etapa 2_ Materiales
+        multimediales y actividades/Material Multimedia": mirar la RUTA entera
+        encontraba "actividades" en el nombre de la etapa y se llevaba los DOCX
+        de módulo a la pila de actividades, dejando el curso sin módulos."""
+        raiz = tmp_path / "06. Gestión de la Calidad"
+        multimedia = raiz / "Etapa 2_ Materiales multimediales y actividades" / \
+            "Material Multimedia"
+        multimedia.mkdir(parents=True)
+        (multimedia / "Módulo 1 (Gestión de la Calidad).docx").write_text(
+            "x", encoding="utf-8")
+        actividades = raiz / "Etapa 2_ Materiales multimediales y actividades" / \
+            "Actividades y AFI"
+        actividades.mkdir(parents=True)
+        (actividades / "AFI (Gestión de la Calidad).docx").write_text(
+            "x", encoding="utf-8")
+        inv = escanear(raiz)
+        assert {n: p.name for n, p in inv.docx_modulos.items()} == \
+            {1: "Módulo 1 (Gestión de la Calidad).docx"}
+        assert [p.name for _n, p in inv.actividades] == \
+            ["AFI (Gestión de la Calidad).docx"]
+
+    def test_el_guion_de_video_se_reconoce_por_su_carpeta(self, tmp_path):
+        """"GRyI - V_M1.docx" tampoco dice "video" ni "guion": lo dice la
+        carpeta que lo contiene."""
+        raiz = self._curso(tmp_path)
+        (raiz / "5. Videos").mkdir()
+        (raiz / "5. Videos" / "GRyI - V_M1.docx").write_text("x", encoding="utf-8")
+        inv = escanear(raiz)
+        assert [(n, p.name) for n, p in inv.guiones_video] == \
+            [(1, "GRyI - V_M1.docx")]
+
+    def test_la_numeracion_de_la_actividad_no_es_la_del_modulo(self, tmp_path):
+        """El "1" de "AEO 1" es el número de actividad, no el del módulo: si
+        se lo tomara como módulo, la obligatoria del módulo 2 (que la planilla
+        manda a AEO 1) se filtraría fuera de los candidatos."""
+        inv = escanear(self._curso(tmp_path))
+        assert all(n is None for n, _p in inv.actividades)
+
+
+class TestFichaDeCasoNoEsElDesarrolloDelModulo:
+    """Las fichas de caso ("Modulo 1 - Caso_Starbucks.docx",
+    "M3 - Ficha_Caso_Quibi.docx") son anexos del módulo —el repositorio de
+    casos que pide la planilla—, no su desarrollo teórico. Regresión real
+    (Creación de Valor en la Economía de la Experiencia): competían por el
+    slot del módulo y le ganaban al multimedial real solo por orden
+    alfabético, así que los módulos 1 y 3 quedaban armados desde una ficha
+    de caso y ninguna de sus páginas de contenido se encontraba."""
+
+    def _curso(self, tmp_path):
+        raiz = tmp_path / "Creacion de Valor"
+        mod1 = raiz / "Materiales" / "Módulos" / "Módulo 1"
+        mod1.mkdir(parents=True)
+        (mod1 / "Modulo 1 - Caso_Cirque_du_Soleil.docx").write_text("x", encoding="utf-8")
+        (mod1 / "Modulo 1 - Ficha_Caso_Disney.docx").write_text("x", encoding="utf-8")
+        (mod1 / "Modulo 1 - Creación de Valor - Sepúlveda.docx").write_text("x", encoding="utf-8")
+        return raiz
+
+    def test_el_modulo_toma_el_multimedial_no_la_ficha(self, tmp_path):
+        inv = escanear(self._curso(tmp_path))
+        assert "Creación de Valor" in inv.docx_modulos[1].name
+
+    def test_las_fichas_quedan_en_casos(self, tmp_path):
+        inv = escanear(self._curso(tmp_path))
+        nombres = sorted(p.name for _n, p in inv.casos)
+        assert nombres == ["Modulo 1 - Caso_Cirque_du_Soleil.docx",
+                           "Modulo 1 - Ficha_Caso_Disney.docx"]
+
+    def test_el_pdf_de_la_ficha_tambien_va_a_casos(self, tmp_path):
+        """El PDF que sale de diseño es la versión publicable del caso."""
+        raiz = tmp_path / "Curso"
+        (raiz / "Diseño").mkdir(parents=True)
+        (raiz / "Diseño" / "Modulo 1 - Ficha_Caso_Disney.docx.pdf").write_text("x", encoding="utf-8")
+        inv = escanear(raiz)
+        assert [p.name for _n, p in inv.casos] == ["Modulo 1 - Ficha_Caso_Disney.docx.pdf"]
+
+    def test_descarta_los_informes_internos_de_similitud_y_uso_de_ia(self, tmp_path):
+        """Turnitin y la declaración GAIDeT acompañan al material pero son
+        control interno de la cátedra: no se publican ni cuentan como caso."""
+        raiz = tmp_path / "Curso"
+        (raiz / "Módulos" / "Módulo 1").mkdir(parents=True)
+        d = raiz / "Módulos" / "Módulo 1"
+        (d / "Modulo 1 - Ficha_Caso_Disney - Similitud.pdf").write_text("x", encoding="utf-8")
+        (d / "Modulo 1 - Ficha_Caso_Disney - Uso de IA.pdf").write_text("x", encoding="utf-8")
+        (d / "Modulo 1 - Desarrollo - Informe de uso de IA.pdf").write_text("x", encoding="utf-8")
+        (d / "Modulo 1 - Ficha_Caso_Disney.docx").write_text("x", encoding="utf-8")
+        inv = escanear(raiz)
+        assert [p.name for _n, p in inv.casos] == ["Modulo 1 - Ficha_Caso_Disney.docx"]
+
+    def test_un_titulo_que_solo_empieza_con_caso_sigue_siendo_contenido(self, tmp_path):
+        """'Casos de estudio'/'Caso práctico' pueden ser el desarrollo del
+        módulo: solo la forma de ficha ("Ficha_Caso…"/"Caso_…") es anexo."""
+        raiz = tmp_path / "Otro curso"
+        (raiz / "Módulos").mkdir(parents=True)
+        (raiz / "Módulos" / "Modulo 1 - Casos de estudio.docx").write_text("x", encoding="utf-8")
+        inv = escanear(raiz)
+        assert inv.docx_modulos.get(1) is not None
+        assert inv.casos == []
+
+
 class TestModuloConPrefijoM:
     """Los DOCX modulares a veces vienen como 'M1_Material multimedial…': el
     guion bajo tras el número no debe impedir extraer el módulo (regresión:

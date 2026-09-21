@@ -27,6 +27,8 @@ Elementos de las aulas/*
 # Scratch del proceso SDD / coverage (no se versiona)
 .superpowers/
 .coverage
+coverage.xml
+htmlcov/
 
 # Skills de terceros instaladas con `npx skills add` (no se versionan)
 .agents/

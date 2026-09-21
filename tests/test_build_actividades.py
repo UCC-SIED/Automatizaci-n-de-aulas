@@ -263,3 +263,172 @@ def test_foro_introductorio_carga_como_apertura(tmp_path):
     assert len(texto) > 300, (
         f"El Foro de apertura quedó con el placeholder ({len(texto)} chars): "
         "no cargó el 'Foro Introductorio.docx'.")
+
+
+def test_cuerpo_topic_con_diseno_deja_aire_al_final():
+    """El aula base cierra cada topic con un <p>&nbsp;</p> de aire debajo del
+    contenido; _cuerpo_topic_con_diseno lo quita (junto al resto de los
+    placeholders) para insertar el contenido real, pero tiene que devolverlo:
+    si no, el foro queda con el último párrafo pegado al borde del bloque."""
+    from maquetador.build.imscc_builder import GeneradorAula
+
+    base_body = (
+        '<div id="dp-wrapper"><div class="dp-content-block content-block">'
+        '<h2>Título</h2>'
+        '<p>&nbsp;</p><p>&nbsp;</p>'
+        '</div></div>')
+    resultado = GeneradorAula._cuerpo_topic_con_diseno(
+        None, base_body, "<p>¡Bienvenidos!</p>")
+    assert resultado.rstrip().endswith("<p>\xa0</p></div></div>")
+    assert "¡Bienvenidos!" in resultado
+
+
+def test_cuerpo_topic_con_diseno_encuentra_el_bloque_sin_la_clase_bare():
+    """El aula base NO siempre marca el bloque de contenido real con la
+    clase bare "content-block" (la variante que trae 'Foro de apertura'):
+    los foros obligatorios de módulo, por ejemplo, solo traen "kl_lectures2"
+    junto a "dp-content-block" (la única clase universal). Buscar solo por
+    "content-block" nunca encontraba ese bloque — el foro se armaba con el
+    wrapper mínimo, sin banner ni navegación del aula base, como si el
+    diseño no tuviera la estructura esperada."""
+    from maquetador.build.imscc_builder import GeneradorAula
+
+    base_body = (
+        '<div id="dp-wrapper">'
+        '<div class="dp-banner-image"><img src="banner.png"></div>'
+        '<div class="dp-content-block kl_introduction">'
+        '<p class="lead dp-progress-placeholder">placeholder oculto</p>'
+        '</div>'
+        '<div class="dp-content-block kl_lectures2">'
+        '<h2 class="dp-has-icon"></h2>'
+        '<p>&nbsp;</p><p>&nbsp;</p>'
+        '</div></div>')
+    resultado = GeneradorAula._cuerpo_topic_con_diseno(
+        None, base_body, "<p>Consigna del foro.</p>")
+    assert resultado is not None
+    assert "dp-banner-image" in resultado
+    assert "Consigna del foro." in resultado
+
+
+# --------------------------------------------------------------------------
+#  Actividad que se resuelve en una herramienta externa (Padlet, Mural, Miro)
+# --------------------------------------------------------------------------
+
+class TestHerramientaExterna:
+    """La planilla nombra la herramienta en la columna de referencia en vez de
+    un DOCX ("Actividad sugerida | Padlet"). No hay archivo que volcar, pero la
+    actividad existe. Regresión real: Gestión del Riesgo, módulo 1."""
+
+    def _item(self, referencia):
+        from maquetador.models import ItemCurso, TipoItem
+        return ItemCurso(titulo="Actividad sugerida", tipo=TipoItem.TAREA,
+                         detalle={"referencia": referencia})
+
+    def test_reconoce_las_herramientas_del_catalogo(self):
+        from maquetador.build.imscc_builder import _herramienta_externa
+        assert _herramienta_externa(self._item("Padlet")) == "Padlet"
+        assert _herramienta_externa(self._item("Mural colaborativo")) == "Mural"
+        assert _herramienta_externa(self._item("Miro")) == "Miro"
+
+    def test_un_docx_no_es_una_herramienta(self):
+        from maquetador.build.imscc_builder import _herramienta_externa
+        assert _herramienta_externa(self._item("AEO 1 - GRyI.docx")) == ""
+        assert _herramienta_externa(self._item("")) == ""
+
+    def test_no_confunde_una_consigna_larga_con_una_referencia(self):
+        """La referencia es el nombre de un archivo o de una herramienta, no un
+        párrafo: un texto largo que MENCIONE la herramienta no cuenta."""
+        from maquetador.build.imscc_builder import _herramienta_externa
+        largo = ("Participar del mural colaborativo que se abre al final del "
+                 "módulo, con la consigna que figura en el multimedial.")
+        assert _herramienta_externa(self._item(largo)) == ""
+
+
+class TestSlotDeActividadDelAulaBase:
+    """El aula base trae una sola Assignment por módulo, la obligatoria. Si la
+    planilla no pide obligatoria (Gestión del Riesgo pide solo una sugerida en
+    Padlet en el módulo 1), ese slot tiene que borrarse: dejarlo publica un
+    assignment vacío con el placeholder del aula base."""
+
+    def _generador(self):
+        from maquetador.build.imscc_builder import GeneradorAula
+        from maquetador.models import CourseSpec
+        gen = GeneradorAula.__new__(GeneradorAula)
+        gen.spec = CourseSpec(nombre="X")
+        return gen
+
+    def _modulo(self, *titulos):
+        from maquetador.models import ModuloCurso, ItemCurso, TipoItem
+        mod = ModuloCurso(numero=1, titulo="M1")
+        mod.items = [ItemCurso(titulo=t, tipo=TipoItem.TAREA) for t in titulos]
+        return mod
+
+    def test_solo_sugerida_no_reserva_el_slot_de_la_obligatoria(self):
+        quedan = self._generador()._recursos_que_pide_modulo(
+            self._modulo("Actividad sugerida"))
+        assert "Actividad obligatoria M1" not in quedan
+        assert "Actividad sugerida M1" in quedan
+
+    def test_con_obligatoria_el_slot_se_conserva(self):
+        quedan = self._generador()._recursos_que_pide_modulo(
+            self._modulo("Actividad sugerida (individual)",
+                         "Actividad obligatoria (individual)"))
+        assert "Actividad obligatoria M1" in quedan
+        assert "Actividad sugerida M1" in quedan
+
+    def test_una_actividad_sin_adjetivo_sigue_siendo_la_obligatoria(self):
+        quedan = self._generador()._recursos_que_pide_modulo(
+            self._modulo("Actividad"))
+        assert "Actividad obligatoria M1" in quedan
+
+
+class TestColorYAireDelPlaceholderDeActividad:
+    """El aula base de la AFI trae un banner fijo "¡Llegaste al final!" en
+    azul (#003087), siempre, sin importar el tema del curso, seguido de dos
+    párrafos vacíos antes de donde se inserta el título del caso. El título
+    que genera maquetar_actividad debía usar el mismo azul (no el del tema)
+    y el doble espacio debía reducirse a uno. Regresión real: AFI de "Gestión
+    de la Calidad" (tema posgrado, que por defecto usa #1b1e31)."""
+
+    from maquetador.build.imscc_builder import GeneradorAula as _GA
+
+    PLACEHOLDER_AFI = (
+        '<p class="" style="color: #003087;"><span style="font-size: 24pt;">'
+        '<strong>¡Llegaste al final!</strong></span></p>'
+        '<p><span style="font-size: 18pt;"><strong>Es tu momento de '
+        'demostrar lo aprendido.</strong></span></p>'
+        '<hr><p>&nbsp;</p><p>&nbsp;</p>')
+
+    def test_extrae_el_color_del_banner_fijo(self):
+        assert self._GA._color_del_placeholder(self.PLACEHOLDER_AFI) == "#003087"
+
+    def test_sin_banner_fijo_no_hay_color_que_extraer(self):
+        assert self._GA._color_del_placeholder(
+            '<h2 class="dp-has-icon"></h2><p>&nbsp;</p>') == ""
+
+    def test_el_doble_espacio_final_queda_en_uno_solo(self):
+        out = self._GA._sacar_un_espacio_final(self.PLACEHOLDER_AFI)
+        assert out.count("<p>&nbsp;</p>") == 1
+        assert "¡Llegaste al final!" in out    # el resto no se toca
+
+    def test_un_solo_espacio_final_no_se_toca(self):
+        """El resto de los assignments (Actividad obligatoria M1/M2, sin este
+        banner) solo traen un párrafo vacío: no hay nada que recortar."""
+        placeholder = '<h2 class="dp-has-icon"></h2><p>&nbsp;</p>'
+        assert self._GA._sacar_un_espacio_final(placeholder) == placeholder
+
+    def test_el_titulo_del_caso_usa_el_color_del_banner_no_el_del_tema(self):
+        from maquetador.build.snippets import maquetar_actividad
+        color = self._GA._color_del_placeholder(self.PLACEHOLDER_AFI)
+        out = maquetar_actividad(
+            "<h2>Analizá situaciones reales</h2><p>Cuerpo.</p>",
+            tema="posgrado", color_titulo=color)
+        assert 'style="color: #003087; text-align: center;"' in out
+        assert "#1b1e31" not in out   # el accent de posgrado no debe colarse
+
+    def test_sin_color_de_banner_sigue_usando_el_del_tema(self):
+        from maquetador.build.snippets import maquetar_actividad
+        out = maquetar_actividad(
+            "<h2>Proyecto de ampliación de una planta</h2><p>Cuerpo.</p>",
+            tema="posgrado")
+        assert "#1b1e31" in out

@@ -28,16 +28,15 @@
   <home_page_announcement_limit>3</home_page_announcement_limit>
   <enable_offline_web_export>true</enable_offline_web_export>
   <usage_rights_required>false</usage_rights_required>
-  <restrict_student_future_view>true</restrict_student_future_view>
-  <restrict_student_past_view>false</restrict_student_past_view>
   <restrict_enrollments_to_course_dates>false</restrict_enrollments_to_course_dates>
   <homeroom_course>false</homeroom_course>
   <horizon_course>false</horizon_course>
   <career_learning_library_only>false</career_learning_library_only>
   <conditional_release>false</conditional_release>
-  <content_library>false</content_library>
   <grading_standard_enabled>false</grading_standard_enabled>
   <storage_quota>500000000</storage_quota>
+  <restrict_student_future_view>true</restrict_student_future_view>
+  <restrict_student_past_view>false</restrict_student_past_view>
   <overridden_course_visibility/>
   <root_account_uuid>3gMBZiQJ1O0IXYDW8plQiJb6g2evo0eoKIhZn0gN</root_account_uuid>
   <default_post_policy>

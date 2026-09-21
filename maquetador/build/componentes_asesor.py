@@ -8,6 +8,8 @@ expander y flip card. Dos fuentes: una tabla de 1 columna con celdas alternadas
 
 import re
 
+from bs4 import BeautifulSoup
+
 _RE_NOMBRE_CONTENIDO = re.compile(r"^(.{2,60}?):\s+(.+)$", re.DOTALL)
 
 
@@ -44,14 +46,31 @@ def pares_de_tabla(tabla) -> list:
         # Fila 0 = rótulos cortos; fila 1 = descripciones, claramente más largas.
         fila_titulos = all(_es_titulo_corto(t) for t, _ in filas[0])
         fila_desc = _largo_medio(filas[1]) > _largo_medio(filas[0]) * 1.5
-        if fila_titulos and fila_desc:
+        # No alcanza con que el PROMEDIO de la fila crezca: eso también lo
+        # cumple una tabla de datos común (encabezados de columna cortos +
+        # una sola columna de texto largo), donde la columna que solo trae
+        # un código/número corto en cada fila en realidad se ACHICA de la
+        # fila 0 a la 1 ("Cláusula" → "4"). En una grilla título/descripción
+        # de verdad, CADA columna crece de su título a su descripción.
+        crece_por_columna = all(
+            len(desc) >= len(titulo)
+            for (titulo, _), (desc, _) in zip(filas[0], filas[1]))
+        if fila_titulos and fila_desc and crece_por_columna:
             pares = []
             for r in range(0, len(filas), 2):
                 for c in range(ncols):
                     pares.append((filas[r][c][0], filas[r + 1][c][1] or "&nbsp;"))
             return pares
+        # No es una grilla título/descripción real: es una tabla de datos
+        # común (encabezados de columna + filas de registros), que el "caso
+        # clásico" de abajo tampoco sabe interpretar (asume 1 columna, y
+        # aplanar una grilla de N columnas por ese camino empareja celdas de
+        # columnas distintas sin ninguna relación entre sí). No hay pares
+        # válidos que sacar de acá.
+        return []
 
-    # Caso clásico: celdas en orden, alternando título / contenido.
+    # Caso clásico: celdas en orden, alternando título / contenido (asume
+    # la geometría de 1 columna documentada arriba).
     plano = [c for f in filas for c in f]
     return [(plano[i][0], plano[i + 1][1] or "&nbsp;")
             for i in range(0, len(plano) - 1, 2)]
@@ -62,14 +81,209 @@ def pares_de_texto(parrafos: list) -> list:
     pares = []
     for p in parrafos:
         txt = p.get_text(" ", strip=True)
+        if _PAT_EPIGRAFE.match(txt):      # "Tabla 1: …" es epígrafe, no un par
+            continue
         m = _RE_NOMBRE_CONTENIDO.match(txt)
         if m:
             pares.append((m.group(1).strip(), m.group(2).strip()))
     return pares
 
 
-def extraer_pares(el):
+# Etiquetas que forman el flujo de contenido de una sección. Se corta en
+# cualquier otra cosa (un <div> ya es un componente armado: recuadro, panel…).
+_TAGS_FLUJO = ("p", "ul", "ol", "table", "blockquote", "h3", "h4", "h5", "h6")
+
+
+def _plano(texto: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", texto.lower())
+
+
+# Epígrafe de figura/tabla/esquema. Va en negrita como un subtítulo, pero NO es
+# un título de sección: si se lo toma como tal, el componente se traga la
+# figura (pasó con "Figura 5. Síntesis de enfoques", que terminó de título de
+# una solapa con la tabla adentro, y encima dejó sin ubicar la figura de
+# diseño que tenía que reemplazarla).
+_PAT_EPIGRAFE = re.compile(r"^(figura|tabla|esquema|nota)\s*\d*\s*[\.:]", re.I)
+
+
+def _titulo_en_negrita_al_inicio(el):
+    """Título que el asesor marcó poniendo en negrita SOLO las primeras
+    palabras del párrafo, no todo.
+
+    Caso real: "<strong>Principio N.° 1</strong>: Enfoque al cliente" — el
+    comentario pedía "TABS horizontal (palabras en negrita)". Devuelve
+    (titulo, resto_html) o (None, None).
+    """
+    if getattr(el, "name", None) != "p":
+        return None, None
+    hijos = [h for h in el.children
+             if getattr(h, "name", None) or str(h).strip()]
+    if not hijos or getattr(hijos[0], "name", None) not in ("strong", "b"):
+        return None, None
+    titulo = hijos[0].get_text(" ", strip=True)
+    if not (2 <= len(titulo) <= 60):
+        return None, None
+    resto = "".join(str(h) for h in hijos[1:]).lstrip(" :–—-")
+    texto_resto = BeautifulSoup(resto, "html.parser").get_text(strip=True)
+    if not texto_resto:
+        return None, None       # todo el párrafo era el título: no es prefijo
+    # Si lo que sigue al prefijo en negrita es corto, es la bajada que nombra
+    # el ítem del panel ("Principio N.° 1: Enfoque al cliente" → "Enfoque al
+    # cliente"), no el arranque del cuerpo: mismo trato que cualquier otra
+    # bajada de panel, negrita y letra un poco más grande, sin ser heading.
+    # Con texto largo (una oración de verdad, no una etiqueta) se deja como
+    # párrafo común — mismo umbral que el propio título.
+    if len(texto_resto) <= 60:
+        return titulo, f'<p class="lead dp-text-bold">{resto}</p>'
+    return titulo, f"<p>{resto}</p>"
+
+
+def _es_encabezado_de_seccion(el, modo: str = "auto") -> bool:
+    """¿El elemento abre una sección?
+
+    Tres formas de marcarlo, según lo que diga el comentario del asesor:
+      · "subrayado": todo el párrafo subrayado.
+      · "negrita":   el párrafo ARRANCA con las palabras en negrita y sigue
+                     con el contenido ("Principio N.° 1: Enfoque al cliente").
+      · "auto":      todo el párrafo subrayado o todo en negrita.
+    """
+    nombre = getattr(el, "name", None)
+    if nombre in ("h1", "h2", "h3", "h4", "h5", "h6"):
+        return modo != "subrayado"
+    if nombre in ("ul", "ol"):
+        # Mammoth a veces envuelve un subtítulo corto en negrita en una lista
+        # de un solo ítem ("<ul><li><strong>ISO 14001</strong></li></ul>") en
+        # vez de dejarlo como <p>, según la numeración interna de Word. Un
+        # ítem así, solo en su lista, es en los hechos el mismo párrafo suelto.
+        items = el.find_all("li", recursive=False)
+        if len(items) != 1:
+            return False
+        el = items[0]
+        nombre = "li"
+    if nombre not in ("p", "li"):
+        return False
+    texto = el.get_text(" ", strip=True)
+    if not texto or el.find("img") or _PAT_EPIGRAFE.match(texto):
+        return False
+
+    def _cubre(tags):
+        if not tags:
+            return False
+        return _plano(" ".join(t.get_text(" ", strip=True) for t in tags)) == _plano(texto)
+
+    if modo == "negrita" and _titulo_en_negrita_al_inicio(el)[0]:
+        return True
+    if len(texto) > 90:
+        return False
+    # El subrayado solo cuenta en modo "auto"/"subrayado": en "negrita" el
+    # asesor marcó los títulos con negrita a propósito, y un párrafo
+    # subrayado por otro motivo (p.ej. "Aplicación en proyectos"/"Caso
+    # aplicado:", subtítulos DENTRO de cada tab) no debe abrir una sección
+    # propia — pasaba con "Principio N.° 1: Enfoque al cliente", que
+    # terminaba con 3 tabs por principio en vez de 1.
+    if modo != "negrita" and _cubre(el.find_all("u")):
+        return True
+    if modo == "subrayado":
+        return False
+    return _cubre(el.find_all(["strong", "b"]))
+
+
+def pares_de_secciones(el, modo: str = "auto", hasta=None) -> tuple:
+    """Tramo de párrafos con subtítulos intercalados → (pares, consumidos).
+
+    El asesor no arma una tabla: escribe el contenido corrido y marca los
+    cortes. Cada subtítulo abre un panel y se lleva los párrafos que lo siguen.
+    `modo` dice cómo están marcados (ver _es_encabezado_de_seccion).
+    `hasta`, si se pasa, es el último elemento que debe entrar al componente
+    (inclusive): el asesor a veces marca con el mismo comentario el principio
+    Y el final del tramo, y sin este límite el armado sigue de largo por el
+    resto de la página.
+    """
+    elementos, actual = [], el
+    while actual is not None and getattr(actual, "name", None) in _TAGS_FLUJO:
+        elementos.append(actual)
+        # `hasta` puede ser un <li> adentro de un <ul>/<ol> (el ancla final
+        # cayó en un ítem de lista, no en un párrafo suelto): el propio <li>
+        # nunca es un hermano de nivel superior que este recorrido visite
+        # directo, así que hay que mirar también si es DESCENDIENTE de
+        # `actual` — si no, el corte nunca se cumple y el armado se sigue de
+        # largo por el resto de la página.
+        if hasta is not None and (actual is hasta
+                                  or any(a is actual for a in hasta.parents)):
+            break
+        actual = actual.find_next_sibling()
+
+    # Lo anterior al primer subtítulo es introducción: queda fuera del panel.
+    idx = next((i for i, e in enumerate(elementos)
+                if _es_encabezado_de_seccion(e, modo)), None)
+    if idx is None:
+        return [], []
+
+    pares, consumidos, titulo, cuerpo = [], [], None, []
+    titulo_es_marcador_corto = False
+    for e in elementos[idx:]:
+        abre = _es_encabezado_de_seccion(e, modo)
+        # Un título "marcador corto" —un "<ul><li><strong>…</strong></li>
+        # </ul>" (ver _es_encabezado_de_seccion) o un <hN> nativo de Word
+        # (estilo "Subtitle"/"Título N", que mammoth ya volcó a <hN> antes de
+        # que este código corra)— suele venir seguido, en el propio DOCX, de
+        # un párrafo TAMBIÉN con pinta de encabezado que es su bajada
+        # ("ISO 14001" → "Gestión ambiental"; "Calidad Total" → "La calidad
+        # como responsabilidad de toda la organización"): esa bajada es
+        # parte del MISMO título, no abre una sección nueva.
+        if abre and titulo_es_marcador_corto and not cuerpo:
+            abre = False
+        if abre:
+            if titulo is not None:
+                pares.append((titulo, "".join(cuerpo) or "&nbsp;"))
+            # Con el título en negrita al inicio, lo que sigue en ESE mismo
+            # párrafo ya es contenido del panel.
+            prefijo, resto = ((None, None) if modo != "negrita"
+                              else _titulo_en_negrita_al_inicio(e))
+            if prefijo:
+                titulo, cuerpo = prefijo, [resto]
+            else:
+                titulo, cuerpo = e.get_text(" ", strip=True), []
+            titulo_es_marcador_corto = getattr(e, "name", None) in (
+                "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6")
+        else:
+            cuerpo.append(str(e))
+        consumidos.append(e)
+    if titulo is not None:
+        pares.append((titulo, "".join(cuerpo) or "&nbsp;"))
+    return (pares, consumidos) if len(pares) >= 2 else ([], [])
+
+
+def _pares_dentro_de_celda(tabla) -> list:
+    """Caja de UNA sola celda: el asesor escribe adentro el nombre del
+    componente ("Expander", "Tabs (uno al lado del otro)") y debajo los ítems
+    con el título en negrita.
+
+    `pares_de_tabla` no ve pares ahí (hay una celda sola) y, sin esto, el
+    armado seguía de largo por los HERMANOS de la tabla: el componente se
+    armaba con el contenido de más abajo —en Gestión del Riesgo, con el
+    epígrafe "Tabla 1" y su tabla de escalas— que además desaparecía de la
+    página, mientras la caja real quedaba sin maquetar."""
+    celdas = tabla.find_all(["td", "th"])
+    if len(celdas) != 1:
+        return []
+    bloques = [b for b in celdas[0].children
+               if getattr(b, "name", None) in _TAGS_FLUJO]
+    if not bloques:
+        return []
+    for modo in ("negrita", "auto"):
+        pares, _consumidos = pares_de_secciones(bloques[0], modo=modo)
+        if len(pares) >= 2:
+            return pares
+    return []
+
+
+def extraer_pares(el, instruccion: str = "", hasta=None):
     """Desde el elemento anclado → (pares, consumidos). ([], []) si <2 pares.
+
+    `hasta`: último elemento que debe entrar al componente (inclusive), si el
+    comentario del asesor marca también el final del tramo (ver
+    pares_de_secciones).
 
     `consumidos` son los elementos del soup que el componente reemplaza: el
     primero se sustituye por el componente y el resto se elimina (así no quedan
@@ -89,6 +303,9 @@ def extraer_pares(el):
         pares = pares_de_tabla(tabla)
         if len(pares) >= 2:
             return pares, consumidos_tabla
+        pares = _pares_dentro_de_celda(tabla)
+        if len(pares) >= 2:
+            return pares, consumidos_tabla
 
     # 2) Lista <ul>/<ol> con ítems 'Nombre: contenido' cuando el asesor ancla el
     #    comentario SOBRE la lista misma o sobre uno de sus <li>. No se salta a
@@ -106,6 +323,34 @@ def extraer_pares(el):
             consumidos = [lista] if el in (lista, *lista.contents) else [el, lista]
             return pares, consumidos
 
+    # 2.5) Tramo de párrafos con subtítulos intercalados. Va ANTES del extractor
+    #      "Nombre: contenido" a propósito: un subtítulo como "El diagrama de
+    #      Ishikawa: explorar posibles causas" también encaja en ese patrón, y
+    #      salía un panel con el título cortado a la mitad y sin los párrafos
+    #      que le seguían.
+    # Cada asesor escribe el pedido distinto ("títulos subrayados", "palabras
+    # en negrita", "poner Principio 1 / Principio 2 y el título dentro del
+    # TAB"…). En vez de atarse a la redacción: si el comentario nombra una
+    # forma, se respeta; si no, se prueban todas y gana la que dé secciones.
+    plano = _plano(instruccion)
+    if "subrayad" in plano:
+        modos = ("subrayado",)
+    elif "negrita" in plano:
+        modos = ("negrita",)
+    else:
+        # "negrita" primero: es la marca más deliberada (un prefijo en
+        # negrita puntual, como "Principio N.° 1: Enfoque al cliente") y no
+        # debería perder frente a "auto", que también matchea cualquier
+        # párrafo TOTALMENTE subrayado —un subtítulo suelto dentro del
+        # cuerpo, como "Aplicación en proyectos"/"Caso aplicado:", puede
+        # colar antes y armar un tab por cada subtítulo interno en vez de
+        # uno por "Principio".
+        modos = ("negrita", "auto")
+    for modo in modos:
+        pares, consumidos = pares_de_secciones(el, modo=modo, hasta=hasta)
+        if len(pares) >= 2:
+            return pares, consumidos
+
     # 3) Texto
     parrafos, actual = [], el
     while actual is not None and getattr(actual, "name", None) in ("p", "li"):
@@ -120,31 +365,135 @@ def extraer_pares(el):
 
 
 def construir_panels(pares: list, variante: str = "dp-expander-default") -> str:
-    """Acordeón (dp-expander-default) / tabs (dp-tabs) / expander. Misma
-    estructura; cambia la clase del wrapper."""
+    """Panel colapsable CidiLabs. Misma estructura para acordeón
+    (dp-accordion-default), expander (dp-expander-default) y tabs
+    (dp-tabs-buttons / dp-tabs-buttons-vertical); cambia la variante.
+
+    Los colores son los del catálogo de snippets UCC y los de las aulas
+    maquetadas a mano: base primary, activo y hover secondary.
+    """
     grupos = "\n".join(
         '<div class="dp-panel-group">\n'
         f'<h3 class="dp-panel-heading">{t}</h3>\n'
         f'<div class="dp-panel-content">{c}</div>\n</div>'
         for t, c in pares)
+    # Las tabs horizontales SIEMPRE llevan "ancho completo" (catálogo UCC,
+    # docs/referencia-designplus-cidilabs-ucc.md): sin esta clase las
+    # solapas quedan angostas, del ancho del texto, en vez de repartirse
+    # todo el ancho disponible. Vertical/expander/acordeón no la llevan.
+    fill = " dp-panel-tab-width-fill" if variante == "dp-tabs-buttons" else ""
     return (f'<div class="dp-panels-wrapper {variante} '
-            'dp-panel-color-dp-secondary dp-panel-active-color-dp-primary" '
-            f'title="contenido insertado">\n{grupos}\n</div>')
+            'dp-panel-color-dp-primary dp-panel-active-color-dp-secondary '
+            f'dp-panel-hover-color-dp-secondary{fill}">\n'
+            f'{grupos}\n</div>')
+
+
+# El asesor a veces escribe frente/dorso como convención DENTRO de la propia
+# prosa, en vez de una tabla: "Tarjeta 1: Planificar (Plan)" en negrita al
+# inicio del párrafo (el prefijo lo agarra _titulo_en_negrita_al_inicio como
+# título), seguido de ". Reverso: descripción" en el resto del párrafo. Esas
+# etiquetas son la convención de escritura del asesor, no contenido real de
+# la tarjeta — se sacan antes de armar el HTML.
+_RE_TARJETA_PREFIJO = re.compile(r"^tarjeta\s*\d+\s*[:.\-–—]*\s*", re.I)
+_RE_REVERSO_PREFIJO = re.compile(r"^\.?\s*reverso\s*[:.]?\s*", re.I)
+
+
+def _limpiar_par_flipcard(titulo: str, contenido: str) -> tuple:
+    """(título, contenido) de extraer_pares → mismo par, sin las etiquetas
+    'Tarjeta N:'/'Reverso:' que a veces trae la prosa del asesor, y sin el
+    <p>…</p> de más que envuelve _titulo_en_negrita_al_inicio (si no se
+    saca, el molde de la tarjeta lo vuelve a envolver: <p><p>…</p></p>)."""
+    titulo = _RE_TARJETA_PREFIJO.sub("", titulo).strip()
+    contenido = contenido.strip()
+    m = re.match(r"^<p>(.*)</p>$", contenido, re.S)
+    interior = m.group(1) if m else contenido
+    interior = _RE_REVERSO_PREFIJO.sub("", interior.strip()).strip()
+    return titulo, (interior or "&nbsp;")
 
 
 def construir_flipcards(pares: list) -> str:
-    """Flip cards CidiLabs: frente = título (negrita), dorso = contenido."""
+    """Flip cards CidiLabs: frente = título (negrita, grande), dorso =
+    contenido. Snippet estándar UCC (grilla flex de 2 por fila, tarjetas de
+    altura pareja)."""
+    pares = [_limpiar_par_flipcard(t, c) for t, c in pares]
     cards = "\n".join(
-        '<div class="dp-flip-card">\n<div class="dp-flip-card-inner">\n'
-        '<div class="dp-front-card">'
-        '<div class="dp-card card h-100 dp-shadow-b3 text-center">'
-        f'<p><strong>{t}</strong></p></div></div>\n'
-        '<div class="dp-back-card">'
-        '<div class="dp-card card h-100 text-center dp-shadow-b3" style="padding: 16px;">'
-        f'<p style="text-align: left;">{c}</p></div></div>\n'
-        '</div>\n</div>'
+        '<div style="flex: 1 1 45%; min-width: 280px; max-width: 48%; '
+        'display: flex;">\n'
+        '<div class="dp-flip-card dp-flip-card-fast" style="width: 100%;">\n'
+        '<div class="dp-flip-card-inner">\n'
+        '<div class="dp-front-card">\n'
+        '<div class="dp-card card h-100 dp-shadow-b3" '
+        'style="min-height: 190px; display: flex; flex-direction: column;">\n'
+        '<div class="card-body" style="display: flex; align-items: center; '
+        'justify-content: center; min-height: 190px; text-align: center; '
+        'width: 100%; padding: 15px;">\n'
+        '<div style="width: 100%;">\n'
+        '<p class="card-text dp-heading-ignore" style="font-size: 1.1rem; '
+        f'margin: 0;"><span style="font-size: 18pt;"><strong>{t}</strong>'
+        '</span></p>\n</div>\n</div>\n</div>\n</div>\n'
+        '<div class="dp-back-card">\n'
+        '<div class="dp-card card h-100 dp-shadow-b3" '
+        'style="min-height: 190px; display: flex; flex-direction: column;">\n'
+        '<div class="card-body" style="display: flex; align-items: center; '
+        'justify-content: center; min-height: 190px; text-align: center; '
+        'width: 100%; padding: 15px;">\n'
+        '<div style="width: 100%;">\n'
+        f'<p class="card-text" style="margin: 0;">{c}</p>\n'
+        '</div>\n</div>\n</div>\n</div>\n'
+        '</div>\n</div>\n</div>'
         for t, c in pares)
-    return f'<div class="row justify-content-center">\n{cards}\n</div>'
+    return ('<p>&nbsp;</p>\n<div style="display: flex; flex-wrap: wrap; '
+            'justify-content: center; row-gap: 15px; column-gap: 15px; '
+            f'width: 100%; margin: 0 auto;">\n{cards}\n</div>\n<p>&nbsp;</p>')
+
+
+# Palabras que no aportan inicial a una sigla ("Sistema de Gestión de la
+# Calidad" → SGC).
+_VACIAS_SIGLA = {"de", "del", "la", "las", "el", "los", "y", "e", "en", "a",
+                 "para", "por", "con", "al"}
+
+
+def sigla_de(contenido: str) -> str:
+    """Sigla que forman las iniciales de un término ('SGC')."""
+    palabras = [w for w in re.findall(r"[^\W\d_]+", contenido, re.UNICODE)
+                if w.lower() not in _VACIAS_SIGLA]
+    return "".join(w[0].upper() for w in palabras)
+
+
+def disparador_tooltip(texto: str, contenido: str) -> str:
+    """Qué palabra del texto debe abrir el tooltip.
+
+    El asesor ancla el comentario sobre TODO el párrafo y escribe aparte qué
+    tiene que emerger. Lo que hay que marcar es el término que ese contenido
+    explica: primero la sigla que forman sus iniciales (SGC ← Sistema de
+    Gestión de la Calidad), y si no, el término escrito completo. Devuelve ""
+    si no aparece ninguno: marcar el párrafo entero como disparador —que es lo
+    que pasaba— deja la página con un párrafo convertido en link.
+    """
+    sigla = sigla_de(contenido)
+    if len(sigla) >= 2 and re.search(rf"\b{re.escape(sigla)}\b", texto):
+        return sigla
+    if contenido and contenido.lower() in texto.lower():
+        i = texto.lower().index(contenido.lower())
+        return texto[i:i + len(contenido)]
+    return ""
+
+
+def construir_tooltip(palabra: str, contenido: str, n: int) -> str:
+    """Tooltip CidiLabs: el globo gris chico que aparece sobre un término.
+
+    Distinto del popover (que es una ficha grande y se dispara con clic): el
+    disparador y el contenido van juntos dentro del mismo contenedor.
+    """
+    return (f'<span class="dp-tooltip-container">'
+            f'<a id="dpPopup{n}" class="dp-tooltip-trigger dp-popup-trigger" '
+            f'role="button" href="#dpPopup{n}tooltip" aria-describedby="" '
+            f'data-bs-toggle="tooltip">{palabra}</a> '
+            f'<span id="dpPopup{n}tooltip" '
+            'class="dp-tooltip-content dp-popup-content" '
+            'style="background-color: #545454; color: #ffffff; '
+            'padding: 2px 5px; border-radius: 3px;" role="tooltip">'
+            f'{contenido}</span></span>')
 
 
 def construir_popover(palabra: str, contenido: str, n: int) -> tuple:
@@ -159,6 +508,12 @@ def construir_popover(palabra: str, contenido: str, n: int) -> tuple:
 
 
 def aplicar_cita(el) -> None:
-    """Sangra el párrafo anclado (sin caja, pedido del usuario)."""
+    """Sangra el párrafo anclado (sin caja, pedido del usuario).
+
+    Doble sangría (izquierda Y derecha), como la cita textual larga en
+    formato APA: sangrar solo de un lado no alcanza, se ve como un párrafo
+    corrido con un margen cualquiera, no como una cita.
+    """
     estilo = el.get("style", "").rstrip("; ")
-    el["style"] = (estilo + "; " if estilo else "") + "margin-left: 40px;"
+    el["style"] = ((estilo + "; " if estilo else "")
+                   + "margin-left: 40px; margin-right: 40px;")
