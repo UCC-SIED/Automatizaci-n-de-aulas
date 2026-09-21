@@ -393,6 +393,47 @@ class TestNivelDeEncabezadosDelCaso:
         assert "<u>" not in out
         assert "<h4>Contexto del proyecto</h4>" in out
 
+    def test_el_h2_nativo_bajado_a_h3_lleva_espaciador_propio(self):
+        """Un h1/h2 nativo no pasa por el paso 5 de procesar_contenido (que
+        solo mira h3/h4, y acá llega sin bajar por bajar_h1_h2=False): sin
+        este espaciador propio, "Proyecto: <nombre del caso>" quedaba pegado
+        al párrafo del objetivo. Regresión real: Actividad obligatoria M2 y
+        AFI de Gestión de la Calidad."""
+        out = maquetar_actividad(
+            "<h2>Actividad obligatoria 2</h2>"
+            "<h3>Objetivo</h3><p>Identificar causas y proponer acciones.</p>"
+            '<h2>Proyecto: "Centro de formación Santa Elena"</h2>'
+            "<p>Descripción del proyecto.</p>")
+        assert ('acciones.</p><p>\xa0</p><h3>Proyecto: "Centro de formación '
+               'Santa Elena"</h3>') in out
+
+    def test_no_duplica_el_espaciador_si_ya_hay_uno(self):
+        out = maquetar_actividad(
+            "<h2>Actividad obligatoria 2</h2>"
+            "<h3>Objetivo</h3><p>Identificar causas.</p><p>&nbsp;</p>"
+            '<h2>Proyecto: "Centro de formación Santa Elena"</h2>'
+            "<p>Descripción del proyecto.</p>")
+        assert "<p>\xa0</p><p>\xa0</p>" not in out
+
+
+class TestFinalDePaginaDeActividad:
+    """Toda página termina con un párrafo de aire antes del borde del
+    content-block — misma convención que pagina_contenido para las páginas
+    de contenido —, pero maquetar_actividad nunca la aplicaba: el molde del
+    assignment inserta su salida directo contra el cierre del bloque.
+    Regresión real: Actividad obligatoria M2 de Gestión de la Calidad."""
+
+    def test_termina_con_espaciador(self):
+        out = maquetar_actividad(
+            "<h2>Actividad obligatoria 2</h2><p>Último párrafo del caso.</p>")
+        assert out.rstrip().endswith("<p>\xa0</p>")
+
+    def test_no_duplica_si_ya_termina_en_espaciador(self):
+        out = maquetar_actividad(
+            "<h2>Actividad obligatoria 2</h2><p>Último párrafo.</p>"
+            "<p>&nbsp;</p>")
+        assert not out.rstrip().endswith("<p>\xa0</p><p>\xa0</p>")
+
 
 class TestRotuloEnLineaYDisclaimerDeIA:
     def test_situacion_de_incertidumbre_se_destaca_sin_ser_encabezado(self):

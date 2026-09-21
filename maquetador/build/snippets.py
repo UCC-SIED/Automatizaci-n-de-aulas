@@ -1208,6 +1208,15 @@ def maquetar_actividad(html: str, tema: str = "", color_titulo: str = "") -> str
             continue
         _limpiar_encabezado(h)
         h.name = "h3"
+        # h1/h2 nativos no pasan por el paso 5 de procesar_contenido (que
+        # solo mira h3/h4, y acá llegan sin bajar por es_actividad=True):
+        # sin este espaciador propio, "Proyecto: <nombre del caso>" quedaba
+        # pegado al párrafo anterior.
+        previo = h.previous_sibling
+        while isinstance(previo, NavigableString) and not previo.strip():
+            previo = previo.previous_sibling
+        if previo is not None and not _es_espaciador(previo):
+            h.insert_before(BeautifulSoup("<p>&nbsp;</p>", "html.parser"))
 
     for p in list(soup.find_all("p")):
         texto = p.get_text(" ", strip=True)
@@ -1249,6 +1258,14 @@ def maquetar_actividad(html: str, tema: str = "", color_titulo: str = "") -> str
     for h3 in soup.find_all("h3"):
         if _norm(h3.get_text(" ", strip=True)) in _SECCIONES_ACTIVIDAD:
             _aire_antes(h3, soup)
+
+    # Toda página termina con un párrafo de aire antes del borde — misma
+    # convención que pagina_contenido, que acá no se aplicaba (el molde del
+    # assignment inserta esta salida directo contra el cierre del bloque).
+    ultimo = soup.find_all(recursive=False)
+    ultimo = ultimo[-1] if ultimo else None
+    if not (ultimo is not None and _es_espaciador(ultimo)):
+        soup.append(BeautifulSoup("<p>&nbsp;</p>", "html.parser"))
 
     return str(soup)
 
