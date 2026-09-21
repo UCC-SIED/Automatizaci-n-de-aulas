@@ -196,6 +196,61 @@ class TestIndiceDeFigurasDeDiseno:
         assert indice[("esquema",)].name == "M_Esquema.jpg"
 
 
+class TestAnchoSegunRelacionDeAspecto:
+    """Un ancho fijo no respeta la forma real de cada figura: una apaisada
+    (relación >1, tipo línea de tiempo o comparación de dos columnas) se ve
+    chica y angosta si se la achica al ancho de una casi cuadrada (un
+    esquema, un diagrama de flujo), y esa cuadrada, al mismo ancho fijo,
+    queda altísima y domina la página. Regresión real: en la misma revisión,
+    "Figura 1" (apaisada, 2336×856) pedía agrandarse y "Figura 3" (casi
+    cuadrada, 1479×1458) pedía achicarse — con un ancho fijo, satisfacer una
+    rompía la otra."""
+
+    def _figura(self, tmp_path, ancho_px, alto_px, nombre="fig.jpg"):
+        from PIL import Image
+        p = tmp_path / nombre
+        Image.new("RGB", (ancho_px, alto_px)).save(p)
+        return p
+
+    def test_una_figura_apaisada_llega_al_tope_horizontal(self):
+        from maquetador.build.snippets import (_ancho_de_figura,
+                                               _FIG_ANCHO_MAX)
+        import tempfile, pathlib
+        with tempfile.TemporaryDirectory() as d:
+            p = self._figura(pathlib.Path(d), 2336, 856)
+            assert _ancho_de_figura(p) == _FIG_ANCHO_MAX
+
+    def test_una_figura_casi_cuadrada_queda_mas_angosta(self):
+        from maquetador.build.snippets import (_ancho_de_figura,
+                                               _FIG_ANCHO_MAX, _FIG_ALTO_MAX)
+        import tempfile, pathlib
+        with tempfile.TemporaryDirectory() as d:
+            p = self._figura(pathlib.Path(d), 1479, 1458)
+            ancho = _ancho_de_figura(p)
+            assert ancho < _FIG_ANCHO_MAX
+            assert ancho == round(_FIG_ALTO_MAX * 1479 / 1458)
+
+    def test_sin_archivo_legible_usa_el_ancho_por_defecto(self):
+        from maquetador.build.snippets import (_ancho_de_figura,
+                                               _FIG_ANCHO_DEFECTO)
+        from pathlib import Path
+        assert _ancho_de_figura(Path("no existe.jpg")) == _FIG_ANCHO_DEFECTO
+
+    def test_reemplazar_figuras_diseno_usa_el_ancho_real(self):
+        """El ancho calculado llega hasta el HTML final, no solo a la
+        función auxiliar."""
+        from maquetador.build.snippets import reemplazar_figuras_diseno
+        import tempfile, pathlib
+        with tempfile.TemporaryDirectory() as d:
+            carpeta = pathlib.Path(d)
+            p = self._figura(carpeta, 1479, 1458, "M_1 fig 3.jpg")
+            html = "<p>Figura 3. Esquema</p>"
+            out = reemplazar_figuras_diseno(
+                html, 1, {(1, "figura", 3): p}, set())
+            assert "width: 700px" not in out
+            assert "width: 487px" in out
+
+
 class TestTablaQueSoloEnvuelveLaFigura:
     """El docente a veces mete la figura en una tabla de 1 columna sin
     bordes, junto con su epígrafe y su nota. Eso NO es un recuadro: al

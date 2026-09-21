@@ -24,6 +24,46 @@ BLOQUE = ('<p class="dp-heading-ignore" style="text-align: center;">'
           '</span></p>')
 
 
+class TestFiguraAmpliableConNotaSiguePudiendoAmpliarse:
+    """Regresión real: Figura 2 y Figura 5 de Gestión de la Calidad llegaban
+    con dp-popup-image (pedido de ampliarlas, ya resuelto en una corrección
+    anterior) pero al pasar por el armado del <figure>/<figcaption> (porque
+    además traían una "Nota. …" al pie) perdían el clic para ampliar: no
+    había cursor de lupa ni reacción — el navegador solo ve un <img> sin
+    ninguna clase, porque _nota_a_figcaption vaciaba img["class"] al mover
+    todo al <figure>."""
+
+    BLOQUE_AMPLIABLE = (
+        '<p class="dp-heading-ignore" style="text-align: center;">'
+        '<span style="font-size: 10pt;"><strong>Figura 2. Comparación'
+        '</strong></span></p>'
+        '<p><strong><img class="dp-max-width dp-popup-image '
+        'dp-image-rounded-10 dp-image-padded dp-image-bordered '
+        'dp-image-shadow" style="width: 700px; height: auto;" '
+        'src="__DISENO__/M_1 fig 2.jpg" alt="Cuadro comparativo"></strong></p>'
+        '<p class="dp-heading-ignore" style="text-align: center;">'
+        '<span style="font-size: 10pt;"><strong>Nota . Fuente: elaboración '
+        'propia.</strong></span></p>')
+
+    def test_dp_popup_image_se_queda_en_el_img(self):
+        soup = BeautifulSoup(
+            procesar_contenido(self.BLOQUE_AMPLIABLE), "html.parser")
+        img = soup.find("img")
+        assert "dp-popup-image" in (img.get("class") or [])
+
+    def test_el_resto_de_las_clases_de_imagen_tambien(self):
+        soup = BeautifulSoup(
+            procesar_contenido(self.BLOQUE_AMPLIABLE), "html.parser")
+        clases = " ".join(soup.find("img").get("class") or [])
+        assert "dp-image-shadow" in clases
+        assert "dp-image-bordered" in clases
+
+    def test_el_figure_solo_lleva_las_clases_de_layout(self):
+        soup = BeautifulSoup(
+            procesar_contenido(self.BLOQUE_AMPLIABLE), "html.parser")
+        assert soup.find("figure").get("class") == ["mx-auto", "d-block"]
+
+
 class TestNotaAFigcaption:
     def test_arma_un_figure(self):
         soup = BeautifulSoup(procesar_contenido(BLOQUE), "html.parser")
@@ -73,12 +113,17 @@ class TestNotaSueltaSinFigura:
         sueltos = [p for p in soup.find_all("p") if "Evans" in p.get_text()]
         assert sueltos == []
 
-    def test_las_clases_van_en_el_figure_y_la_imagen_queda_limpia(self):
+    def test_las_clases_de_estilo_se_quedan_en_la_imagen(self):
+        """dp-image-bordered/dp-popup-image… tienen que seguir en el <img>:
+        si se mueven al <figure> (como pasaba antes), una figura ampliable
+        pierde el clic para ampliarse — el marcador dp-popup-image queda en
+        un contenedor que DesignPLUS no mira. El <figure> solo lleva las
+        clases de layout propias (centrado de la caja)."""
         soup = BeautifulSoup(procesar_contenido(BLOQUE), "html.parser")
         fig = soup.find("figure")
-        assert "dp-image-bordered" in " ".join(fig.get("class", []))
+        assert "dp-image-bordered" in " ".join(soup.find("img").get("class", []))
         assert "text-align: center" in fig.get("style", "")
-        assert not soup.find("img").get("class")
+        assert fig.get("class") == ["mx-auto", "d-block"]
 
     def test_el_epigrafe_queda_afuera_y_arriba(self):
         out = procesar_contenido(BLOQUE)

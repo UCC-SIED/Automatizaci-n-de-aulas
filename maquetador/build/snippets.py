@@ -24,6 +24,7 @@ import re
 import unicodedata
 
 from bs4 import BeautifulSoup, NavigableString
+from PIL import Image, UnidentifiedImageError
 from maquetador.build.componentes_asesor import (construir_flipcards,
                                                    construir_panels, aplicar_cita)
 
@@ -526,6 +527,30 @@ _FIG_CLASES_ESTATICA = "dp-max-width dp-image-rounded-10 dp-image-bordered"
 _FIG_CLASES_EXPANDIBLE = ("dp-max-width dp-popup-image dp-image-rounded-10 "
                           "dp-image-padded dp-image-bordered dp-image-shadow")
 
+# Un ancho fijo para toda figura no respeta su forma real: una figura
+# apaisada (una línea de tiempo, una comparación de dos columnas) se ve
+# chica y angosta si se la achica al mismo ancho que una casi cuadrada (un
+# esquema, un diagrama de flujo), y esa cuadrada, al mismo ancho fijo, queda
+# altísima y domina la página. Se calcula el ancho a partir de la relación
+# de aspecto real del archivo: tope horizontal (el ancho que ocuparía
+# apaisada al máximo) y tope vertical (para que una figura cuadrada/vertical
+# no crezca más alto que eso) — el más chico de los dos manda.
+_FIG_ANCHO_MAX = 800
+_FIG_ALTO_MAX = 480
+_FIG_ANCHO_DEFECTO = 700   # si no se puede leer el archivo (formato raro, …)
+
+
+def _ancho_de_figura(path) -> int:
+    """Ancho en px para esta figura, según su relación de aspecto real."""
+    try:
+        with Image.open(path) as img:
+            ancho_px, alto_px = img.size
+    except (OSError, UnidentifiedImageError):
+        return _FIG_ANCHO_DEFECTO
+    if not (ancho_px and alto_px):
+        return _FIG_ANCHO_DEFECTO
+    return round(min(_FIG_ANCHO_MAX, _FIG_ALTO_MAX * ancho_px / alto_px))
+
 
 def indexar_figuras_diseno(archivos: list) -> dict:
     """{(modulo, 'figura'|'tabla', n): Path} a partir de los archivos de DISEÑO."""
@@ -647,6 +672,7 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
         clase, vecino = _vecino_reemplazable(p)
         if clase == "img":
             vecino["src"] = f"__DISENO__/{path.name}"
+            vecino["style"] = f"width: {_ancho_de_figura(path)}px; height: auto;"
             usadas.add(path)
         elif clase == "table":
             # Una figura de diseño que reemplaza una TABLA de datos es, por
@@ -655,7 +681,7 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
             # lo haya pedido el asesor o no — mismo criterio que
             # _FIG_EXPANDIBLE_KW para las figuras que solo dejan un marcador.
             clase_img = _FIG_CLASES_EXPANDIBLE
-            ancho = 700
+            ancho = _ancho_de_figura(path)
             nueva = BeautifulSoup(
                 f'<p style="text-align: center;"><img class="{clase_img}" '
                 f'style="width: {ancho}px; height: auto;" '
@@ -674,11 +700,7 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
             # Visuales y Datos" y las aulas a mano); salía invertido.
             expandible = _figura_diseno_es_expandible(p)
             clase_img = _FIG_CLASES_EXPANDIBLE if expandible else _FIG_CLASES_ESTATICA
-            # 700px para estática y ampliable por igual (pedido del usuario:
-            # "un poquito más grande" el ancho por defecto de 600 se veía
-            # chico); lo que las distingue es la clase (borde vs.
-            # sombra+zoom), no el tamaño.
-            ancho = 700
+            ancho = _ancho_de_figura(path)
             brief = _brief_de_figura(p)
             resto = texto[m.end():].strip(" .:–—-")
             img_html = ""
@@ -1763,17 +1785,29 @@ def _desheadear_dentro_de_panel(soup):
 
 
 def _espaciar_destacados(soup):
-    """Aire arriba de la frase destacada (estilo lead), no abajo.
+    """Aire alrededor de la frase destacada (estilo lead), según su rol.
 
-    Es una bajada/etiqueta —nombra lo que sigue ("¿Cuándo conviene utilizar
-    Ishikawa?", "Enfoque al cliente")—, no un párrafo suelto: separarla del
-    texto que la precede tiene sentido, pero separarla de SU PROPIA
-    explicación (que va justo debajo) se ve como un corte en el medio de la
-    misma idea. Verificado en Canvas."""
+    Dentro de un panel es una bajada/etiqueta —nombra lo que sigue
+    ("¿Cuándo conviene utilizar Ishikawa?", "Enfoque al cliente")—, no un
+    párrafo suelto: separarla del texto que la precede tiene sentido, pero
+    separarla de SU PROPIA explicación (que va justo debajo) se ve como un
+    corte en el medio de la misma idea — aire arriba, no abajo. Verificado
+    en Canvas.
+
+    Fuera de un panel es una frase destacada en medio de la prosa (p.ej.
+    "detectar defectos → controlar procesos → asegurar consistencia →
+    generar valor", introducida por "…desplazamiento progresivo:"): ahí SÍ
+    corta la lectura de lo que sigue, como una cita — aire corto (el
+    shift+enter) arriba y abajo, igual que un recuadro simple. También
+    verificado en Canvas."""
     for p in soup.find_all("p", class_="lead"):
         if p.parent is None or "dp-text-bold" not in (p.get("class") or []):
             continue
-        _aire_antes(p, soup)
+        if p.find_parent("div", class_="dp-panel-content") is not None:
+            _aire_antes(p, soup)
+        else:
+            _aire_corto_antes(p)
+            _aire_corto_despues(p)
 
 
 def _introducido_por_dos_puntos(p) -> bool:
@@ -1868,17 +1902,22 @@ def _nota_a_figcaption(soup):
 
         contenedor = img.find_parent("p") or img
         fig = soup.new_tag("figure")
-        # bs4 devuelve la clase como lista o como string según cómo se haya
-        # seteado; se normaliza a lista antes de sumarle nada.
-        clases = img.get("class") or []
-        if isinstance(clases, str):
-            clases = clases.split()
         # mx-auto d-block centra la CAJA de la figura. Sin eso queda pegada a
         # la izquierda por más text-align que tenga: el text-align solo alinea
-        # lo de adentro, no el <figure>, que es un bloque de ancho fijo.
-        fig["class"] = (["mx-auto", "d-block"]
-                        + (clases or _FIG_CLASES_ESTATICA.split()))
-        fig["style"] = "width: 700px; height: auto; text-align: center;"
+        # lo de adentro, no el <figure>, que es un bloque de ancho fijo. Solo
+        # estas dos clases van al <figure>: las demás (dp-popup-image,
+        # dp-image-bordered…) se QUEDAN en el <img>, donde ya estaban — el
+        # click para ampliar depende de que dp-popup-image esté en la
+        # imagen misma, no en un contenedor. Antes se las vaciaba con
+        # img["class"] = "" al moverlas acá, y la figura quedaba con el
+        # aspecto correcto pero sin poder ampliarse al clic.
+        fig["class"] = ["mx-auto", "d-block"]
+        # El ancho ya lo calculó un paso anterior según la relación de
+        # aspecto real de la figura; se reusa en vez de pisarlo con un
+        # valor fijo.
+        m_ancho = re.search(r"width:\s*(\d+)px", img.get("style") or "")
+        ancho = int(m_ancho.group(1)) if m_ancho else _FIG_ANCHO_DEFECTO
+        fig["style"] = f"width: {ancho}px; height: auto; text-align: center;"
 
         cap = soup.new_tag("figcaption")
         interior = BeautifulSoup(
@@ -1888,7 +1927,6 @@ def _nota_a_figcaption(soup):
 
         contenedor.insert_before(fig)
         fig.append(img.extract())
-        img["class"] = ""
         fig.append(cap)
         if contenedor is not img and not contenedor.get_text(strip=True)                 and not contenedor.find("img"):
             contenedor.decompose()
@@ -2282,9 +2320,12 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
             img["class"] = (_FIG_CLASES_EXPANDIBLE if expandible
                             else _FIG_CLASES_ESTATICA)
             if not img.get("style"):
-                # 700px para estática y ampliable por igual (ver la misma
-                # nota en reemplazar_figuras_diseno).
-                img["style"] = "width: 700px; height: auto;"
+                # Sin archivo de diseño con el que calcular la relación de
+                # aspecto real (es una imagen embebida en el DOCX, sin
+                # reemplazo): se usa el ancho por defecto. Cuando SÍ hay
+                # archivo de diseño, reemplazar_figuras_diseno ya dejó el
+                # ancho puesto (ver _ancho_de_figura) y este paso no lo toca.
+                img["style"] = f"width: {_FIG_ANCHO_DEFECTO}px; height: auto;"
         # Centrar el párrafo contenedor aunque Word haya envuelto la imagen en
         # <strong>/<span>: hay que subir hasta el <p>, no mirar el padre directo.
         contenedor = img.find_parent("p")
