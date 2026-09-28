@@ -176,7 +176,11 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     # "ampliar" no se lleve la figura a un panel.
     if re.search(r"(pop\s*-?\s*up|lupa)", n) and "ampli" in n:
         return "figura_expandible"
-    if any(k in n for k in ("expander", "expandible", "expandir")):
+    # "Recurso desplegable" es como llaman algunos asesores al expander (el
+    # panel que se despliega al hacer clic). Va después de "tabs": "recurso
+    # desplegable. Tabs" pide tabs, y ahí manda la segunda palabra.
+    if any(k in n for k in ("expander", "expandible", "expandir",
+                            "desplegable", "desplegar")):
         return "expander"
     if any(k in n for k in ("flip card", "flipcard", "flip-card", "tarjeta",
                             "se dan vuelta", "se da vuelta")):
@@ -357,24 +361,29 @@ def extraer_comentarios(docx_path) -> list:
     for cid, instr in textos.items():
         anc = "".join(anclado.get(cid, [])).strip()
         accion = _clasificar(instr, anc)
+        # "Diseño: imagen interactiva …" es el pedido AL diseñador, no una
+        # instrucción de maquetación; si el diseñador ya respondió con el
+        # div/iframe armado, ESO es lo que se publica: el texto anclado (el
+        # brief) se reemplaza por el embed real en vez de quedar publicado
+        # como si fuera contenido de la página. La respuesta con el recurso
+        # terminado manda sobre lo que diga el brief: en Selección y
+        # Optimización de Inversiones el brief describía el recurso ("en el
+        # medio hay un recuadro para reflexión") y esa palabra lo clasificaba
+        # como recuadro simple, así que el Genially ya entregado no se usaba
+        # y la página salía con el pedido al diseñador a la vista.
+        html_listo = next(
+            (r for r in respuestas.get(cid, [])
+             if _PAT_GENIALLY_URL.search(r)), None)
+        if html_listo:
+            out.append({
+                "instruccion": re.sub(r"\s+", " ", instr).strip(),
+                "anclado": _ancla(cid),
+                "accion": "genially_listo",
+                "autor": autores.get(cid, ""),
+                "_html_genially": html_listo,
+            })
+            continue
         if not accion:
-            # "Para diseño: … Genially …" no es un pedido de maquetación en
-            # sí (se excluye arriba, en _clasificar), pero si el diseñador
-            # ya respondió con el div/iframe armado, ESO sí hay que usarlo:
-            # el texto anclado (el brief para el diseñador) se reemplaza por
-            # el embed real en vez de quedar publicado como si fuera
-            # contenido de la página.
-            html_listo = next(
-                (r for r in respuestas.get(cid, [])
-                 if _PAT_GENIALLY_URL.search(r)), None)
-            if html_listo:
-                out.append({
-                    "instruccion": re.sub(r"\s+", " ", instr).strip(),
-                    "anclado": _ancla(cid),
-                    "accion": "genially_listo",
-                    "autor": autores.get(cid, ""),
-                    "_html_genially": html_listo,
-                })
             continue   # charla interna / confirmación, no es instrucción
         out.append({
             "instruccion": re.sub(r"\s+", " ", instr).strip(),

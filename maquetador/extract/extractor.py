@@ -122,7 +122,8 @@ def extraer_contenido(spec: CourseSpec) -> dict:
             extras = {k: v.replace("__MEDIA__/", f"__MEDIA__/m{modulo.numero}_")
                       if k in ("intro", "objetivos") else v
                       for k, v in secciones.items()
-                      if k in ("conclusion", "referencias", "intro", "objetivos") and v}
+                      if k in ("conclusion", "referencias", "intro",
+                               "objetivos", "transparencia") and v}
             if extras:
                 modulo_extras = getattr(modulo, "extras", {})
                 modulo_extras.update(extras)

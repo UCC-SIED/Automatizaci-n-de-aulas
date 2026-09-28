@@ -540,3 +540,32 @@ class TestDescartables:
         assert not any(n.startswith("ELIMINAR") for n in todos), todos
         assert not any(n == "Video introductorio.docx" for n in todos), \
             "No se descartó la carpeta 'Versiones anteriores'"
+
+
+class TestImagenesSinExtension:
+    """Regresión real (Selección y Optimización de Inversiones): diseño
+    entregó las figuras SIN extensión ("Figura 1, m. 1"). pathlib llama
+    "extensión" a lo que sigue al último punto (acá, ".1"), así que no
+    entraban por la rama de imágenes y terminaban en `otros`: la página se
+    publicaba con la imagen embebida del DOCX, de baja calidad y sin aviso."""
+
+    def _curso(self, tmp_path):
+        from PIL import Image
+        raiz = tmp_path / "Curso Y"
+        diseno = raiz / "Etapa 4_ Maquetacion" / "Diseño"
+        diseno.mkdir(parents=True)
+        Image.new("RGB", (800, 400)).save(diseno / "Figura 1, m. 1", "JPEG")
+        Image.new("RGB", (800, 400)).save(diseno / "M_1 fig 5.jpg")
+        (diseno / "notas del asesor").write_text("no soy una imagen",
+                                                 encoding="utf-8")
+        return raiz
+
+    def test_la_figura_sin_extension_entra_como_imagen_de_diseno(self, tmp_path):
+        inv = escanear(self._curso(tmp_path))
+        nombres = [p.name for p in inv.imagenes_diseno]
+        assert "Figura 1, m. 1" in nombres, nombres
+        assert "M_1 fig 5.jpg" in nombres, nombres
+
+    def test_un_archivo_que_no_es_imagen_no_se_confunde(self, tmp_path):
+        inv = escanear(self._curso(tmp_path))
+        assert "notas del asesor" not in [p.name for p in inv.imagenes_diseno]

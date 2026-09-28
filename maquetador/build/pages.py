@@ -53,7 +53,8 @@ def _banner(banner_src: str, alt: str = "") -> str:
 
 
 def pagina_intro(titulo: str, intro_html: str, objetivos_html: str,
-                 banner_src: str, identifier: str, tema: str = "") -> str:
+                 banner_src: str, identifier: str, tema: str = "",
+                 video_html: str = "") -> str:
     """Página 'Introducción MN' del módulo."""
     # Los objetivos no son solo la lista: el asesor puede dejar debajo un
     # recuadro del catálogo (en Gestión del Riesgo, el "Auriculares on" que
@@ -63,6 +64,10 @@ def pagina_intro(titulo: str, intro_html: str, objetivos_html: str,
     # objetivos: es un content-block propio, hermano al mismo nivel.
     objetivos, bloque_video = separar_bloque_de_video(procesar_contenido(
         sanear_lista_objetivos(limpiar_anclas_vacias(objetivos_html)), tema))
+    # Si el DOCX no marca el video del módulo, lo declara la planilla ("Video
+    # conceptual: p. 2 luego de los objetivos"): el bloque va igual, acá.
+    if not bloque_video:
+        bloque_video = video_html
     return f"""{_cabecera(titulo, identifier)}
 <div id="dp-wrapper" class="{DP_WRAPPER_CLASSES}" {_attrs_str(DP_WRAPPER_ATTRS)}>
 <div id="dp-wrapper_1" class="undefined">

@@ -95,3 +95,17 @@ class TestClasificarComponentesExtra:
         # 'acordeon-simple' debe ser capturado por la rama 'acordeon', no 'expander'
         assert _clasificar("acordeon-simple") == "acordeon"
         assert _clasificar("expander") == "expander"
+
+
+class TestRecursoDesplegable:
+    """Regresión real (Selección y Optimización de Inversiones): el asesor
+    llama "recurso desplegable" al expander. Sin reconocerlo, el pedido caía
+    en "revisar" y el componente quedaba sin armar, como texto corrido."""
+
+    def test_recurso_desplegable_es_un_expander(self):
+        assert _clasificar(
+            "Maquetación: recurso desplegable lo que aparece en negrita: "
+            "La primera..... La segunda...") == "expander"
+
+    def test_si_ademas_dice_tabs_manda_tabs(self):
+        assert _clasificar("Maquetación: recurso desplegable. Tabs") == "tabs"

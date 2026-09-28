@@ -122,6 +122,30 @@ def _sin_marcador_video(html: str) -> str:
     return _PAT_MARCADOR_VIDEO_FINAL.sub("", html, count=1)
 
 
+# El asesor pega en la planilla el enlace de EDICIÓN del video ya subido a
+# Canvas Studio:
+#   .../collections/user/perspectives/<token>/caption/edit/<id>
+#   .../collections/shared/2282/perspectives/<token>/caption/edit/<id>
+# Sirve para saber QUÉ video va en cada hueco, no para incrustarlo: se probó
+# usar el <token> como custom_arc_media_id del embed LTI y el reproductor no
+# carga. Los embeds que genera Canvas usan otra forma de id (un UUID v4 más
+# un número, p.ej. "7a0bdca8-…-799772975463-1113"), y el token no es ese UUID
+# —decodificado en base64url no da una UUID válida—. Hasta tener de dónde
+# sacar ese id, el bloque de video queda armado y vacío, con el enlace en el
+# comentario para quien pegue el embed a mano.
+_PAT_STUDIO = re.compile(
+    r"instructuremedia\.com/collections/\S*?/perspectives/"
+    r"([A-Za-z0-9_-]+)(?:\S*?/(\d+))?", re.I)
+
+
+def token_de_studio(url: str) -> tuple:
+    """(token, id numérico) del enlace de Canvas Studio; ('', '') si no lo es."""
+    m = _PAT_STUDIO.search(url or "")
+    if not m:
+        return ("", "")
+    return (m.group(1), m.group(2) or "")
+
+
 def bloque_video_studio(body_html: str = "", referencia: str = "") -> str:
     """Bloque de video propio de la UCC (Canvas Studio).
 
@@ -136,9 +160,10 @@ def bloque_video_studio(body_html: str = "", referencia: str = "") -> str:
     """
     intro = f'{body_html}<p>&nbsp;</p>' if body_html else ""
     cual = f": {referencia}" if referencia else ""
+    adentro = f"<!-- Pegar aquí el embed de Canvas Studio{cual} -->"
     return f"""<div class="dp-content-block" data-title="Video" data-category="+UCC">
 <h2 class="dp-has-icon"><i class="dp-icon fab fa-youtube" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i></h2>
-{intro}<div class="dp-embed-wrapper mx-auto d-block" style="text-align: center;"><!-- Pegar aquí el embed de Canvas Studio{cual} --></div>
+{intro}<div class="dp-embed-wrapper mx-auto d-block" style="text-align: center;">{adentro}</div>
 <p>&nbsp;</p>
 </div>"""
 
@@ -300,7 +325,11 @@ def _clasificar_recuadro(etiqueta: str, texto_completo: str) -> tuple:
         # "Para pensar") al único título oficial del snippet UCC — no hay
         # variantes "Para pensar"/"Para saber más", ver catálogo de snippets.
         return "profundizacion", "Una pausa para reflexionar"
-    if "lectura" in n or "te invito a leer" in nt \
+    # "Descubrí leyendo" es el TÍTULO oficial del CTA: cuando el asesor ya lo
+    # escribe así en la etiqueta (en vez de poner "Lectura"), no había ninguna
+    # regla que lo tomara y la caja salía de recuadro simple, sin barra de
+    # título ni ícono de libro. Mismo caso que "Auriculares on", más abajo.
+    if "lectura" in n or "descubri leyendo" in n or "te invito a leer" in nt \
             or "invitamos a leer" in nt or "te invito a la lectura" in nt:
         return "lectura", "Descubrí leyendo"
     if "auriculares" in n:
@@ -317,7 +346,11 @@ def _clasificar_recuadro(etiqueta: str, texto_completo: str) -> tuple:
         return "podcast", "Auriculares on"
     if "imagen" in n:
         return "imagen", "Miralo con lupa"
-    if "atencion" in n or "importante" in n:
+    # "No pases de largo" es el título oficial del recuadro de atención: si
+    # el asesor lo escribe directo como etiqueta, sin la palabra
+    # "importante", la caja salía de recuadro simple —sin el triángulo ni el
+    # rojo— y el aviso perdía todo su peso.
+    if "atencion" in n or "importante" in n or "no pases de largo" in n:
         return "atencion", "No pases de largo"
     if "ejemplo" in n:
         return "ejemplo", "Ejemplos que iluminan"
@@ -486,7 +519,13 @@ def _tabla_a_recuadro(tabla) -> str:
 </div>"""
     if tipo == "profundizacion":
         return resaltado_profundizacion(titulo, body)
-    if tipo in ("lectura", "video", "podcast", "imagen", "mural"):
+    if tipo == "lectura":
+        # Un solo "Descubrí leyendo" en todo el curso: el mismo snippet que
+        # arma _procesar_citas_con_link cuando el CTA sale de una cita con
+        # link. Con el genérico quedaban dos versiones del mismo recuadro,
+        # con distinto ícono, según cómo lo hubiera escrito el asesor.
+        return cta_descubri_leyendo(body)
+    if tipo in ("video", "podcast", "imagen", "mural"):
         return cta_titulo(titulo, body, ICONOS.get(tipo, ""))
     if tipo == "atencion":
         return resaltado_atencion(body, titulo)
@@ -506,19 +545,58 @@ def _tabla_a_recuadro(tabla) -> str:
 # solo, sin descripción en el mismo párrafo). NO alcanza con "no sea letra":
 # un espacio tampoco lo es, y agarraría cualquier oración que arranque con
 # "Tabla "/"Figura " como palabra suelta ("Tabla de contenidos…").
+# Word deja imágenes de 1x1 píxel (transparentes) como espaciador, arriba de
+# todo y entre bloques. Publicadas quedan como una caja vacía con borde al
+# ancho de una figura: en Gestión del Riesgo, el foro de apertura abría con
+# un recuadro vacío sin sentido. ImagenInline las marca con este src y
+# procesar_contenido las saca.
+SRC_ESPACIADOR = "__MEDIA_ESPACIADOR__"
+
 _PAT_FIG_CAPTION = re.compile(
     r"^(figura|esquema|tabla)\s*(\d+)?\s*(?:[\.:]|[-–—]|$)", re.I)
 # Nombres reales observados: "M_1 Fig 4.jpg", "M1 Figura 2.jpg",
-# "Figura 4 M3.png", "Tabla 1 M2.jpg", "Esquema.jpg", "M1 - Figura 1.png".
+# "Figura 4 M3.png", "Tabla 1 M2.jpg", "Esquema.jpg", "M1 - Figura 1.png",
+# "Figura 1, m. 1" (sin extensión).
 # El separador entre el módulo y el tipo varía por curso (espacio, guion
-# bajo, guion medio o una mezcla): con `\s*` a secas, "M1 - Figura 1.png"
-# no matcheaba y la figura quedaba sin indexar —silenciosamente, sin aviso.
-_SEP_FIG = r"[\s_\-–—]*"
+# bajo, guion medio, coma, punto, o una mezcla): con `\s*` a secas,
+# "M1 - Figura 1.png" no matcheaba y la figura quedaba sin indexar
+# —silenciosamente, sin aviso.
+_SEP_FIG = r"[\s_\-–—.,]*"
 _PAT_FIG_FILE = re.compile(
-    rf"(?:m[_\s\-]?(\d+){_SEP_FIG}fig(?:ura)?{_SEP_FIG}(\d+))"
-    rf"|(?:fig(?:ura)?{_SEP_FIG}(\d+){_SEP_FIG}m[_\s\-]?(\d+))"
-    rf"|(?:tabla{_SEP_FIG}(\d+){_SEP_FIG}m[_\s\-]?(\d+))"
-    rf"|(?:m[_\s\-]?(\d+){_SEP_FIG}tabla{_SEP_FIG}(\d+))", re.I)
+    rf"(?:m{_SEP_FIG}(\d+){_SEP_FIG}fig(?:ura)?{_SEP_FIG}(\d+))"
+    rf"|(?:fig(?:ura)?{_SEP_FIG}(\d+){_SEP_FIG}m{_SEP_FIG}(\d+))"
+    rf"|(?:tabla{_SEP_FIG}(\d+){_SEP_FIG}m{_SEP_FIG}(\d+))"
+    rf"|(?:m{_SEP_FIG}(\d+){_SEP_FIG}tabla{_SEP_FIG}(\d+))", re.I)
+
+# Extensiones de imagen de verdad. Se necesita la lista porque pathlib llama
+# "extensión" a todo lo que sigue al último punto, y estos nombres los tienen
+# adentro: el stem de "Figura 1, m. 1" es "Figura 1, m" — se pierde el módulo.
+_EXT_IMAGEN = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
+# Formato real (Pillow) → extensión con la que se publica el archivo.
+_EXT_POR_FORMATO = {"JPEG": ".jpg", "PNG": ".png", "GIF": ".gif",
+                    "WEBP": ".webp", "BMP": ".bmp"}
+
+
+def _nombre_sin_extension(path) -> str:
+    """El nombre del archivo sin su extensión REAL (ver _EXT_IMAGEN)."""
+    return path.stem if path.suffix.lower() in _EXT_IMAGEN else path.name
+
+
+def nombre_publicado_de_figura(path) -> str:
+    """Nombre con el que la figura se publica adentro del paquete.
+
+    Diseño a veces entrega los archivos SIN extensión ("Figura 1, m. 1"):
+    Canvas necesita la extensión para servirlos como imagen, si no el
+    navegador los descarga en vez de mostrarlos. Se detecta el formato real
+    del archivo y se la agrega."""
+    if path.suffix.lower() in _EXT_IMAGEN:
+        return path.name
+    try:
+        with Image.open(path) as img:
+            ext = _EXT_POR_FORMATO.get(img.format or "")
+    except (OSError, UnidentifiedImageError):
+        return path.name
+    return path.name + ext if ext else path.name
 
 # "Estándares para Recursos Visuales y Datos": la figura estática lleva otro
 # borde que la expandible. La estática es el caso por defecto; el estilo con
@@ -556,7 +634,7 @@ def indexar_figuras_diseno(archivos: list) -> dict:
     """{(modulo, 'figura'|'tabla', n): Path} a partir de los archivos de DISEÑO."""
     indice = {}
     for path in archivos:
-        nombre = _norm(path.stem)
+        nombre = _norm(_nombre_sin_extension(path))
         m = _PAT_FIG_FILE.search(nombre)
         if m:
             g = m.groups()
@@ -568,6 +646,50 @@ def indexar_figuras_diseno(archivos: list) -> dict:
         elif "esquema" in nombre:
             indice.setdefault(("esquema",), path)
     return indice
+
+
+def referencias_de_figuras(html: str) -> set:
+    """{('figura'|'tabla', n)} que este HTML pide con un epígrafe."""
+    if not html:
+        return set()
+    refs = set()
+    for p in BeautifulSoup(html, "html.parser").find_all("p"):
+        m = _PAT_FIG_CAPTION.match(p.get_text(" ", strip=True))
+        if m and m.group(2):
+            tipo = "tabla" if m.group(1).lower() == "tabla" else "figura"
+            refs.add((tipo, int(m.group(2))))
+    return refs
+
+
+def reconciliar_figuras_diseno(indice: dict, referencias: dict) -> list:
+    """Adopta para un módulo las figuras que DISEÑO nombró con otro módulo.
+
+    Pasa seguido que el archivo viene mal rotulado: el contenido del módulo 1
+    pide "Figura 2." y en la carpeta de DISEÑO ese archivo se llama
+    "Figura 2, m.2" —el asesor se equivocó de módulo al nombrarlo—. Sin esta
+    conciliación la página se queda con la imagen embebida (de baja calidad)
+    del DOCX y el archivo bueno no se usa nunca, en silencio.
+
+    Solo se adopta cuando no hay ninguna duda: el módulo que pide la figura
+    no la tiene, el módulo que dice el nombre del archivo NO la pide, y hay
+    un único candidato. MUTA `indice` y devuelve la lista de adopciones
+    [(modulo_destino, tipo, num, modulo_del_nombre, path)] para dejar aviso."""
+    adopciones = []
+    for modulo, refs in sorted(referencias.items()):
+        for tipo, num in sorted(refs):
+            if (modulo, tipo, num) in indice:
+                continue
+            candidatos = [k for k in indice
+                          if len(k) == 3 and k[1] == tipo and k[2] == num
+                          and k[0] != modulo
+                          and (tipo, num) not in referencias.get(k[0], set())]
+            if len(candidatos) != 1:
+                continue
+            origen = candidatos[0]
+            path = indice.pop(origen)
+            indice[(modulo, tipo, num)] = path
+            adopciones.append((modulo, tipo, num, origen[0], path))
+    return adopciones
 
 
 def _figura_diseno_es_expandible(p) -> bool:
@@ -634,13 +756,21 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
             if i < len(prev):
                 cercanos.append(prev[i])
 
+        def _es_src_reemplazable(src: str) -> bool:
+            # La imagen espaciadora de Word (1x1) que quedó junto al epígrafe
+            # es justamente el hueco donde va la figura: el asesor borró la
+            # imagen provisoria y dejó su ancla. Si no se la toma como
+            # vecina, el reemplazo se va a buscar la TABLA de al lado —que
+            # suele ser un recuadro de contenido— y la pisa con la figura.
+            return "__MEDIA__" in (src or "") or (src or "") == SRC_ESPACIADOR
+
         def _img_embebida(vecino):
             nombre = getattr(vecino, "name", "")
             if nombre in ("p", "div"):
                 img = vecino.find("img")
-                if img and "__MEDIA__" in (img.get("src") or ""):
+                if img and _es_src_reemplazable(img.get("src")):
                     return img
-            elif nombre == "img" and "__MEDIA__" in (vecino.get("src") or ""):
+            elif nombre == "img" and _es_src_reemplazable(vecino.get("src")):
                 return vecino
             return None
 
@@ -671,7 +801,7 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
             continue
         clase, vecino = _vecino_reemplazable(p)
         if clase == "img":
-            vecino["src"] = f"__DISENO__/{path.name}"
+            vecino["src"] = f"__DISENO__/{nombre_publicado_de_figura(path)}"
             vecino["style"] = f"width: {_ancho_de_figura(path)}px; height: auto;"
             usadas.add(path)
         elif clase == "table":
@@ -685,7 +815,8 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
             nueva = BeautifulSoup(
                 f'<p style="text-align: center;"><img class="{clase_img}" '
                 f'style="width: {ancho}px; height: auto;" '
-                f'src="__DISENO__/{path.name}" alt="{texto[:120]}" '
+                f'src="__DISENO__/{nombre_publicado_de_figura(path)}" '
+                f'alt="{texto[:120]}" '
                 f'loading="lazy"></p>', "html.parser")
             vecino.replace_with(nueva)
             usadas.add(path)
@@ -712,7 +843,8 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
             img_html += (
                 f'<p style="text-align: center;"><img class="{clase_img}" '
                 f'style="width: {ancho}px; height: auto;" '
-                f'src="__DISENO__/{path.name}" alt="{texto[:120]}" '
+                f'src="__DISENO__/{nombre_publicado_de_figura(path)}" '
+                f'alt="{texto[:120]}" '
                 f'loading="lazy"></p>')
             p.replace_with(BeautifulSoup(img_html, "html.parser"))
             for bloque in brief:
@@ -730,6 +862,90 @@ _SENALES_CONSIGNA_FORO = (
     "comenta en las respuestas", "comenta las respuestas",
     "participa del foro respondiendo", "no mas de", "en un maximo de",
 )
+
+
+# "Foro de consulta(s) de la actividad final integradora": el asesor escribe
+# la consigna de ese foro al final del MISMO DOCX de la AFI, como párrafos
+# sueltos (no en una caja, así que separar_consignas no la ve). Sin
+# separarla, la invitación al foro queda publicada al pie de la consigna de
+# la actividad y el foro del aula base sale vacío.
+_PAT_TITULO_FORO_CONSULTAS = re.compile(
+    r"^foro\s+de\s+consultas?\b", re.I)
+
+
+# Notas al pie de Word: mammoth deja la llamada como
+# "<sup><sup><a href="#footnote-0" id="footnote-ref-0">[1]</a></sup></sup>" y
+# el texto de la nota como "<ol><li id="footnote-0">…". En el aula no hay a
+# dónde saltar (cada sección se publica en su propia página), así que un
+# "[1]" suelto no le sirve a nadie. Cuando la nota es solo una URL —el caso
+# de siempre: la herramienta de IA que se declara en la transparencia—, esa
+# URL se convierte en el enlace de la palabra que la llamaba.
+_PAT_ID_NOTA = re.compile(r"^footnote-\d+$")
+_PAT_URL_SOLA = re.compile(r"^\s*(https?://\S+?)\s*↑?\s*$")
+
+
+def urls_de_notas_al_pie(html: str) -> dict:
+    """{'footnote-0': 'https://…'} de las notas al pie que son solo una URL."""
+    if not html or "footnote-" not in html:
+        return {}
+    urls = {}
+    for li in BeautifulSoup(html, "html.parser").find_all("li", id=_PAT_ID_NOTA):
+        m = _PAT_URL_SOLA.match(li.get_text(" ", strip=True))
+        if m:
+            urls[li["id"]] = m.group(1)
+    return urls
+
+
+def enlazar_notas_al_pie(html: str, urls: dict) -> str:
+    """Cambia cada llamada "[N]" por el enlace de su nota sobre la palabra
+    anterior; las llamadas sin URL conocida se borran."""
+    if not html or "footnote-ref-" not in html:
+        return html
+    soup = BeautifulSoup(html, "html.parser")
+    for a in soup.find_all("a", href=re.compile(r"^#footnote-\d+$")):
+        url = urls.get(a["href"].lstrip("#"), "")
+        sup = a.find_parent("sup")
+        while sup is not None and sup.parent is not None \
+                and sup.parent.name == "sup":
+            sup = sup.parent
+        marca = sup if sup is not None else a
+        previo = marca.previous_sibling
+        if url and isinstance(previo, NavigableString) and previo.strip():
+            texto = str(previo)
+            cuerpo, _, palabra = texto.rstrip().rpartition(" ")
+            if palabra:
+                enlace = soup.new_tag("a", href=url, target="_blank")
+                enlace["class"] = "inline_disabled dp-ext-ignore"
+                enlace.string = palabra
+                previo.replace_with(cuerpo + " " if cuerpo else "")
+                marca.replace_with(enlace)
+                continue
+        marca.decompose()
+    return str(soup)
+
+
+def separar_foro_de_consultas(html: str) -> tuple:
+    """(html_sin_el_foro, titulo, cuerpo_del_foro). Cuerpo '' si no hay."""
+    if not html or "foro de consulta" not in html.lower():
+        return html, "", ""
+    soup = BeautifulSoup(html, "html.parser")
+    titulo_el = next(
+        (el for el in soup.find_all(["p", "h1", "h2", "h3", "h4"])
+         if _PAT_TITULO_FORO_CONSULTAS.match(el.get_text(" ", strip=True))),
+        None)
+    if titulo_el is None:
+        return html, "", ""
+    titulo = titulo_el.get_text(" ", strip=True)
+    cuerpo = []
+    for hermano in titulo_el.find_next_siblings():
+        cuerpo.append(str(hermano))
+        hermano.extract()
+    titulo_el.extract()
+    cuerpo_html = "\n".join(c for c in cuerpo
+                            if BeautifulSoup(c, "html.parser").get_text(strip=True))
+    if not cuerpo_html:
+        return html, "", ""
+    return str(soup), titulo, cuerpo_html
 
 
 def separar_consignas(html: str) -> tuple:
@@ -990,6 +1206,126 @@ def _procesar_cues_parrafo(soup):
         cita.decompose()
 
 
+# Sub-ítem de una lista: una etiqueta corta, dos puntos y su explicación
+# ("Técnicos: especialistas del proceso o del producto.").
+_PAT_SUBITEM = re.compile(r"^[^:]{2,45}:\s+\S")
+_MIN_SUBITEMS = 2
+
+
+def _anidar_subitems(soup):
+    """Los ítems que cuelgan de otro que termina en ":" van adentro de él.
+
+    Word no anida: el asesor escribe "…al área más competente para su
+    gestión:" y debajo, al mismo nivel, "Técnicos: …", "De gestión: …". Sin
+    anidarlos se publican todos como hermanos y se pierde que los de abajo
+    son el desglose del de arriba."""
+    for lista in soup.find_all(["ul", "ol"]):
+        items = lista.find_all("li", recursive=False)
+        for i, li in enumerate(items):
+            texto = li.get_text(" ", strip=True)
+            if not texto.endswith(":") or _PAT_SUBITEM.match(texto):
+                continue
+            sub = []
+            for otro in items[i + 1:]:
+                if not _PAT_SUBITEM.match(otro.get_text(" ", strip=True)):
+                    break
+                sub.append(otro)
+            if len(sub) < _MIN_SUBITEMS:
+                continue
+            anidada = soup.new_tag("ul")
+            for otro in sub:
+                anidada.append(otro.extract())
+            li.append(anidada)
+
+
+_LARGO_MAX_BAJADA = 120
+
+
+def _bajada_de_recuadro(soup):
+    """El renglón en negrita con el que abre un recuadro es su bajada.
+
+    El asesor escribe el título del ejemplo ("Un mismo riesgo, tres
+    decisiones distintas") como un párrafo en negrita debajo del título del
+    recuadro. Publicado como negrita común no se distingue del cuerpo; el
+    equipo lo agranda —pero SIN convertirlo en encabezado, porque el
+    recuadro ya tiene el suyo y un h3 adentro rompe la jerarquía."""
+    for caja in soup.find_all(class_="dp-callout"):
+        cuerpo = caja.find(class_="card-body")
+        if cuerpo is None:
+            continue
+        parrafos = [x for x in cuerpo.find_all(["p", "h3", "h4"], recursive=False)
+                    if x.get_text(strip=True)]
+        titulo = 1 if parrafos and "card-title" in (parrafos[0].get("class") or []) \
+            else 0
+        if len(parrafos) < titulo + 2:
+            continue      # sin cuerpo debajo no es una bajada, es el texto
+        p = parrafos[titulo]
+        if p.name != "p" or p.get("class"):
+            continue
+        strong = p.find("strong")
+        if strong is None or strong.get_text(" ", strip=True) != \
+                p.get_text(" ", strip=True):
+            continue
+        texto = p.get_text(" ", strip=True)
+        if not texto or len(texto) > _LARGO_MAX_BAJADA:
+            continue
+        p["class"] = "lead"
+        p["style"] = f"color: {ACCENT};"
+        p.clear()
+        p.append(BeautifulSoup(
+            f'<span style="font-size: 18pt;"><strong>{texto}</strong></span>',
+            "html.parser"))
+
+
+_PAT_ES_ARTICULO = re.compile(r"\bart[íi]culos?\b|\barticles?\b|\bpapers?\b", re.I)
+
+
+def _texto_de_acceso(contexto: str) -> str:
+    """"Acceso al artículo" / "Acceso al documento" según de qué se hable."""
+    return ("Acceso al artículo" if _PAT_ES_ARTICULO.search(contexto)
+            else "Acceso al documento")
+
+
+def _renombrar_links_crudos(soup):
+    """Dentro de un recuadro, la URL cruda al final de la oración pasa a ser
+    un renglón propio con el texto "Acceso al documento"/"Acceso al artículo".
+
+    La URL pelada no le dice nada a nadie y rompe el renglón; el equipo la
+    renombra SIEMPRE. `_procesar_citas_con_link` hace lo mismo fuera de los
+    recuadros, pero se saltea los que ya están adentro de uno (armaría un CTA
+    anidado): ahí la URL quedaba publicada tal cual."""
+    for caja in soup.find_all(class_="dp-callout"):
+        for p in list(caja.find_all("p")):
+            link = next((a for a in p.find_all("a")
+                         if a.get("href", "").startswith("http")
+                         and a.get_text(strip=True) == a.get("href", "")), None)
+            if link is None:
+                continue
+            link.extract()
+            link.clear()
+            link.string = _texto_de_acceso(p.get_text(" ", strip=True))
+            if p.get_text(strip=True):
+                # La intro se queda en su párrafo y el link baja a uno nuevo.
+                for hijo in list(p.children):
+                    if isinstance(hijo, NavigableString) and not hijo.strip():
+                        hijo.extract()
+                nuevo = BeautifulSoup("<p></p>", "html.parser").p
+                nuevo.append(link)
+                p.insert_after(nuevo)
+                _sacar_puntuacion_final(p)
+            else:
+                p.append(link)
+
+
+def _sacar_puntuacion_final(p):
+    """Deja la intro sin los dos puntos/guion con que colgaba de la URL."""
+    ultimo = p.contents[-1] if p.contents else None
+    if isinstance(ultimo, NavigableString):
+        limpio = str(ultimo).rstrip()
+        if limpio.endswith((":", "-", "–", "—")):
+            ultimo.replace_with(limpio[:-1].rstrip() + ":")
+
+
 def _procesar_citas_con_link(soup):
     """Párrafo con una mención/cita + un link suelto (autolinkeado, texto del
     link = la URL) → recuadro 'Descubrí leyendo', reemplazando la URL cruda
@@ -1029,6 +1365,38 @@ def _procesar_citas_con_link(soup):
 # ---------------------------------------------------------------------- #
 
 _PAT_CAPTION = re.compile(r"^(figura|tabla|esquema)\s*\d*\s*(?:[\.:]|[-–—]|$)", re.I)
+# El epígrafe partido en dos párrafos: el número solo ("Figura 1") y, debajo,
+# su título ("Riesgo, incertidumbre y complejidad"). Es como lo escribe medio
+# mundo en Word y NO son dos cosas: es un único epígrafe. Partido, el título
+# quedaba como un párrafo suelto de texto normal y el aire de la figura caía
+# entre el título y la imagen en vez de arriba del epígrafe.
+_PAT_CAPTION_SOLO = re.compile(r"^(figura|tabla|esquema)\s*\d*\s*[.:]?\s*$", re.I)
+_LARGO_MAX_TITULO_FIGURA = 200
+
+
+def _unir_epigrafe_partido(soup):
+    """"Figura 1" + "Riesgo, incertidumbre…" → "Figura 1. Riesgo, incertidumbre…"."""
+    for p in soup.find_all("p"):
+        texto = p.get_text(" ", strip=True)
+        if not _PAT_CAPTION_SOLO.match(texto):
+            continue
+        sig = p.find_next_sibling()
+        if sig is None or getattr(sig, "name", "") != "p" or sig.find("img"):
+            continue
+        desc = sig.get_text(" ", strip=True)
+        if (not desc or len(desc) > _LARGO_MAX_TITULO_FIGURA
+                or _PAT_CAPTION.match(desc) or _PAT_PIE_DE_FIGURA.match(desc)):
+            continue
+        hijos = [x.extract() for x in list(sig.children)]
+        p.clear()
+        # El rótulo queda en negrita: así lo escribe el asesor y así lo
+        # reconocen los pasos que distinguen un epígrafe de un título de
+        # panel (_indices_de_epigrafe mira el primer <strong> del párrafo).
+        p.append(BeautifulSoup(
+            f"<strong>{texto.rstrip(' .:')}. </strong>", "html.parser"))
+        for hijo in hijos:
+            p.append(hijo)
+        sig.decompose()
 _NO_H3 = re.compile(r"^(figura|tabla|esquema|nota\s*[\.:]|fuente\s*[\.:])", re.I)
 _PAT_URL = re.compile(r"(https?://[^\s<>\"')\]]+)")
 
@@ -2099,6 +2467,22 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
         return html
     soup = BeautifulSoup(html, "html.parser")
 
+    # 0.0 Imágenes espaciadoras de Word (1x1 transparente): no son contenido
+    #     y publicadas quedan como una caja vacía con borde al ancho de una
+    #     figura (ver ImagenInline). Se va la imagen y, si el párrafo no
+    #     tenía nada más, también el párrafo.
+    for img in soup.find_all("img", src=SRC_ESPACIADOR):
+        padre = img.parent
+        img.decompose()
+        if padre is not None and padre.name == "p" \
+                and not padre.get_text(strip=True) and not padre.find("img"):
+            padre.decompose()
+
+    # 0.1 Epígrafe partido en dos párrafos ("Figura 1" / su título): se une
+    #     antes que nada, porque de él dependen el estilo del epígrafe y el
+    #     aire que lleva la figura arriba.
+    _unir_epigrafe_partido(soup)
+
     # 0. Anclas internas de Word/Google Docs (ruido de la conversión).
     for a in soup.find_all("a"):
         if not a.get("href") and not a.get_text(strip=True) and not a.find("img"):
@@ -2362,6 +2746,9 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
     # 3.6 Cita/mención + link suelto (no epígrafe, no párrafo-solo-link) →
     #     CTA 'Descubrí leyendo' con 'Acceso al documento' en vez de la URL.
     _procesar_citas_con_link(soup)
+    _renombrar_links_crudos(soup)
+    _bajada_de_recuadro(soup)
+    _anidar_subitems(soup)
     # Este recuadro se arma DESPUÉS del paso 3 (_espaciar_recuadros): sin este
     # segundo pasaje se quedaba sin el aire de párrafo completo que llevan
     # todos los recuadros con título (pasaba en Bibliografía, con el "Descubrí

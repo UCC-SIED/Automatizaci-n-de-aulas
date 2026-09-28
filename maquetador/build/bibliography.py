@@ -9,7 +9,7 @@ El aula base usa el bloque kl_custom_block_0:
       <div class="col-md-11 col-xs-10"> texto + URL + &nbsp; </div>
     </div>
   </div>
-  <h4>Sugerida y referente</h4>
+  <h4>Sugerida y complementaria</h4>
   ...
 
 Este módulo toma el HTML crudo de la sección "referencias" del DOCX (lista
@@ -121,10 +121,14 @@ def construir_bibliografia(refs_html: str) -> str:
     if not refs_html:
         return ""
     soup = BeautifulSoup(refs_html, "html.parser")
-    # Solo <p>: las citas APA vienen como párrafos. Los <li> son anotaciones
-    # o listas de Word que no deben interpretarse como referencias.
+    # Solo <p> de primer nivel: las citas APA vienen como párrafos sueltos.
+    # Los <li> son anotaciones o listas de Word que no deben interpretarse
+    # como referencias —y el <p> que Word mete DENTRO de un <li> tampoco: la
+    # nota al pie de la transparencia ("https://gemini.google.com/ ↑") salía
+    # publicada como una referencia más, con su iconito de lectura.
     parrafos = [p for p in soup.find_all("p")
-                if p.get_text(strip=True)]
+                if p.get_text(strip=True)
+                and p.find_parent(["li", "ol", "ul"]) is None]
     if not parrafos:
         return ""
 
@@ -167,6 +171,7 @@ def construir_bibliografia(refs_html: str) -> str:
         partes.append('<h4 style="text-align: left;">Obligatoria</h4>')
         partes.append(_bloque_columnas(obligatoria))
     if sugerida:
-        partes.append('<h4 style="text-align: left;">Sugerida y referente</h4>')
+        partes.append(
+            '<h4 style="text-align: left;">Sugerida y complementaria</h4>')
         partes.append(_bloque_columnas(sugerida))
     return "\n".join(partes)

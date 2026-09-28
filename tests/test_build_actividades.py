@@ -432,3 +432,46 @@ class TestColorYAireDelPlaceholderDeActividad:
             "<h2>Proyecto de ampliación de una planta</h2><p>Cuerpo.</p>",
             tema="posgrado")
         assert "#1b1e31" in out
+
+
+class TestForoDeConsultasAlFinalDeLaAFI:
+    """Regresión real (Selección y Optimización de Inversiones): el asesor
+    escribe la consigna del foro de consultas al final del MISMO DOCX de la
+    AFI, como párrafos sueltos (no en una caja, así que separar_consignas no
+    la ve). Sin separarla, la invitación al foro quedaba publicada al pie de
+    la consigna de la actividad y el foro del aula base salía vacío."""
+
+    CONSIGNA = ("<p>Criterios de evaluación:</p>"
+                "<p>-Seleccionar información relevante.</p>"
+                "<p>Foro de consulta de la actividad final integradora</p>"
+                "<p>¡Bienvenidos al foro de la actividad final integradora! "
+                "Aguardamos sus intervenciones. ¡Los esperamos!</p>")
+
+    def _separar(self, html):
+        from maquetador.build.snippets import separar_foro_de_consultas
+        return separar_foro_de_consultas(html)
+
+    def test_saca_el_foro_del_final_de_la_actividad(self):
+        resto, titulo, cuerpo = self._separar(self.CONSIGNA)
+        assert titulo == "Foro de consulta de la actividad final integradora"
+        assert "¡Los esperamos!" in cuerpo
+        assert "Foro de consulta" not in resto
+        assert "¡Los esperamos!" not in resto
+        # lo que es consigna de la actividad no se toca
+        assert "Criterios de evaluación:" in resto
+        assert "-Seleccionar información relevante." in resto
+
+    def test_sin_foro_devuelve_el_html_intacto(self):
+        html = "<p>Consigna:</p><p>Analizar una empresa cotizante.</p>"
+        assert self._separar(html) == (html, "", "")
+
+    def test_un_titulo_sin_cuerpo_no_se_separa(self):
+        # El título solo, sin nada debajo, no es una consigna: sacarlo
+        # dejaría el foro vacío y borraría un renglón de la actividad.
+        html = "<p>Consigna:</p><p>Foro de consultas</p>"
+        assert self._separar(html) == (html, "", "")
+
+    def test_una_mencion_en_medio_del_texto_no_dispara(self):
+        html = ("<p>Podés usar el foro de consultas para cualquier duda.</p>"
+                "<p>Entrega: 10 páginas.</p>")
+        assert self._separar(html) == (html, "", "")

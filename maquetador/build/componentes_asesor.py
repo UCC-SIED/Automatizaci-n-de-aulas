@@ -123,7 +123,9 @@ def _titulo_en_negrita_al_inicio(el):
     titulo = hijos[0].get_text(" ", strip=True)
     if not (2 <= len(titulo) <= 60):
         return None, None
-    resto = "".join(str(h) for h in hijos[1:]).lstrip(" :–—-")
+    # El punto también separa el título del cuerpo ("<strong>Zona roja</strong>.
+    # Concentra los riesgos…"): sin sacarlo, el panel abría con un "." suelto.
+    resto = "".join(str(h) for h in hijos[1:]).lstrip(" .:–—-")
     texto_resto = BeautifulSoup(resto, "html.parser").get_text(strip=True)
     if not texto_resto:
         return None, None       # todo el párrafo era el título: no es prefijo

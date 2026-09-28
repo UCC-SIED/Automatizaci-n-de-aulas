@@ -196,6 +196,69 @@ class TestIndiceDeFigurasDeDiseno:
         assert indice[("esquema",)].name == "M_Esquema.jpg"
 
 
+    def test_figuras_sin_extension_en_el_nombre(self):
+        """Regresión real (Selección y Optimización de Inversiones): diseño
+        entregó "Figura 1, m. 1" sin extensión. pathlib llama "extensión" a
+        lo que sigue al último punto, así que el stem era "Figura 1, m" y el
+        número de módulo se perdía: la figura no se indexaba nunca."""
+        indice = self._indice(["Figura 1, m. 1", "Figura 8, m.1_",
+                               "Figura 3, m. 3"])
+        assert indice[(1, "figura", 1)].name == "Figura 1, m. 1"
+        assert indice[(1, "figura", 8)].name == "Figura 8, m.1_"
+        assert indice[(3, "figura", 3)].name == "Figura 3, m. 3"
+
+
+class TestFigurasMalRotuladasPorDiseno:
+    """Regresión real (Selección y Optimización de Inversiones): el contenido
+    del módulo 1 pide la Figura 2 y la Figura 3, pero en la carpeta de DISEÑO
+    esos archivos se llaman "Figura 2, m.2" y "Figura 3, m. 3" —el asesor se
+    equivocó de módulo al nombrarlos—. Sin conciliar, la página se quedaba
+    con la imagen embebida del DOCX (baja calidad) y el archivo bueno no se
+    usaba nunca, en silencio."""
+
+    def _armar(self, nombres, referencias):
+        from pathlib import Path
+        from maquetador.build.snippets import (indexar_figuras_diseno,
+                                               reconciliar_figuras_diseno)
+        indice = indexar_figuras_diseno([Path(n) for n in nombres])
+        return indice, reconciliar_figuras_diseno(indice, referencias)
+
+    def test_adopta_la_figura_que_el_otro_modulo_no_pide(self):
+        indice, adopciones = self._armar(
+            ["Figura 1, m. 1", "Figura 2, m.2", "Figura 3, m. 3"],
+            {1: {("figura", 1), ("figura", 2), ("figura", 3)}, 2: set(),
+             3: set()})
+        assert indice[(1, "figura", 2)].name == "Figura 2, m.2"
+        assert indice[(1, "figura", 3)].name == "Figura 3, m. 3"
+        # la figura se MUEVE: nadie más la puede reclamar después
+        assert (2, "figura", 2) not in indice
+        assert {a[:4] for a in adopciones} == {(1, "figura", 2, 2),
+                                               (1, "figura", 3, 3)}
+
+    def test_no_le_roba_la_figura_al_modulo_que_si_la_usa(self):
+        indice, adopciones = self._armar(
+            ["M1 Figura 1.jpg", "M2 Figura 2.jpg"],
+            {1: {("figura", 1), ("figura", 2)}, 2: {("figura", 2)}})
+        assert indice[(2, "figura", 2)].name == "M2 Figura 2.jpg"
+        assert (1, "figura", 2) not in indice
+        assert adopciones == []
+
+    def test_con_dos_candidatos_no_adivina(self):
+        indice, adopciones = self._armar(
+            ["M2 Figura 5.jpg", "M3 Figura 5.jpg"],
+            {1: {("figura", 5)}, 2: set(), 3: set()})
+        assert (1, "figura", 5) not in indice
+        assert adopciones == []
+
+    def test_las_referencias_salen_de_los_epigrafes(self):
+        from maquetador.build.snippets import referencias_de_figuras
+        html = ("<p>Figura 2. Curva de indiferencia</p><p>texto</p>"
+                "<p>Tabla 1: Flujos</p><p>Tabla de contenidos</p>"
+                "<p>Figura 10 - VAN</p>")
+        assert referencias_de_figuras(html) == {
+            ("figura", 2), ("tabla", 1), ("figura", 10)}
+
+
 class TestAnchoSegunRelacionDeAspecto:
     """Un ancho fijo no respeta la forma real de cada figura: una apaisada
     (relación >1, tipo línea de tiempo o comparación de dos columnas) se ve

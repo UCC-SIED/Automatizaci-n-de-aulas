@@ -76,18 +76,35 @@ def _extraer_metadata_nuevo(filas: list, spec: CourseSpec):
             spec.docentes.append(valor)
 
 
-_PAT_NUM_TITULO = re.compile(r"^(\d+(?:\.\d+)*)\.?[ \t]+(.*)", re.DOTALL)
+# La numeración de una página es SIEMPRE "N.N." (y "N.N.N." si hay un nivel
+# más): número, punto, número, punto. Cada asesor la escribe distinto en la
+# planilla —"1.1", "2.1 - ", "1-1.", "1.2.1-", "1.1.3,"— y todas esas formas
+# salieron publicadas alguna vez. Acá se reduce cualquiera de ellas a la
+# convención única.
+_PAT_NUM_TITULO = re.compile(
+    r"^(\d+)((?:\s*[.\-–—]\s*\d+)*)[\s.\-–—:,;]*(.*)", re.DOTALL)
+_PAT_NIVELES = re.compile(r"\d+")
 
 
 def _normalizar_numeracion_titulo(titulo: str) -> str:
-    """"1.1.1 Título"/"1.4.1<TAB>Título" → "1.1.1. Título" (con el punto
-    después del número). La planilla nunca trae el punto, pero el equipo
-    SIEMPRE lo agrega a mano al título de la página, en todos los niveles
-    de numeración — es la convención de título UCC, no algo opcional."""
+    """"1.1 Título" / "2.1 - Título" / "1-1. Título" / "1.2.1- Título" →
+    "1.1. Título" (y "1.2.1. Título").
+
+    El equipo agrega SIEMPRE el punto final en todos los niveles de
+    numeración: es la convención de título UCC, no algo opcional. Y entre el
+    número y el texto no va ningún otro separador (ni guion, ni coma)."""
     m = _PAT_NUM_TITULO.match(titulo.strip())
     if not m:
         return titulo
-    return f"{m.group(1)}. {m.group(2).strip()}"
+    niveles = [m.group(1)] + _PAT_NIVELES.findall(m.group(2) or "")
+    resto = m.group(3).strip()
+    if len(niveles) == 1 and not re.match(r"^\s*\d+\s*[.\-–—:,;]", titulo.strip()):
+        # Un número suelto SIN puntuación detrás no es numeración de página:
+        # es el arranque del propio título ("2020 fue un año bisagra…").
+        return titulo
+    if not resto:
+        return titulo
+    return ".".join(niveles) + ". " + resto
 
 
 def _clasificar_item(texto: str, seccion_actual: str) -> TipoItem:

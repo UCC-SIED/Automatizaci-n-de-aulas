@@ -44,15 +44,20 @@ class TestBloqueEsquema:
         assert "fa-network-wired" in html
         assert "Visión General</h2>" in html
 
-    def test_la_imagen_va_centrada_y_con_borde_estatico(self, tmp_path):
+    def test_la_imagen_va_centrada_y_expandible(self, tmp_path):
+        """El esquema es un mapa conceptual lleno de texto chico: sin lupa no
+        se lee. Regresión real (Gestión del Riesgo): salía estático y a
+        600px, y hubo que agrandarlo y hacerlo expandible a mano."""
         html = _generador(tmp_path, "M_Esquema.jpg")._bloque_esquema()
         assert '<p style="text-align: center;">' in html
         assert "dp-image-rounded-10" in html and "dp-image-bordered" in html
-        assert "dp-popup-image" not in html
+        assert "dp-popup-image" in html
+        assert "dp-image-shadow" in html
 
-    def test_la_imagen_tiene_width_600_para_no_quedar_estirada(self, tmp_path):
+    def test_la_imagen_va_al_ancho_maximo(self, tmp_path):
         html = _generador(tmp_path, "M_Esquema.jpg")._bloque_esquema()
-        assert "width: 600px; height: auto;" in html
+        assert "width: 800px; height: auto;" in html
+        assert 'width="800"' in html
 
     def test_tiene_texto_alternativo(self, tmp_path):
         html = _generador(tmp_path, "M_Esquema.jpg")._bloque_esquema()

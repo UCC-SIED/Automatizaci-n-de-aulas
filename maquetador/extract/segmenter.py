@@ -21,9 +21,11 @@ from pathlib import Path
 
 import mammoth
 from bs4 import BeautifulSoup
+from PIL import Image, UnidentifiedImageError
 
 from maquetador.ingest.folder_scanner import normalizar
 from maquetador.ingest.docx_comments import extraer_comentarios, aplicar_comentarios
+from maquetador.build.snippets import SRC_ESPACIADOR
 
 logger = logging.getLogger("segmenter")
 
@@ -45,6 +47,12 @@ _MAMMOTH_STYLE_MAP = "p[style-name='Subtitle'] => h3:fresh\nu => u"
 _PAT_NUM = re.compile(r"^(\d+(?:\.\d+)+)\.?\s*")
 
 
+# Las imágenes espaciadoras de Word (1x1 transparente) no son contenido: se
+# descartan acá mismo, marcadas con SRC_ESPACIADOR para que procesar_contenido
+# saque también el párrafo que las envolvía.
+_LADO_MINIMO_IMAGEN = 8
+
+
 class ImagenInline:
     """Acumula las imágenes embebidas del DOCX para empaquetarlas después."""
 
@@ -54,6 +62,8 @@ class ImagenInline:
     def handler(self, image):
         with image.open() as f:
             data = f.read()
+        if _es_espaciador(data):
+            return {"src": SRC_ESPACIADOR}
         ext = (image.content_type or "image/png").split("/")[-1]
         ext = {"jpeg": "jpg"}.get(ext, ext)
         nombre = f"img_{len(self.imagenes) + 1}.{ext}"
@@ -62,8 +72,27 @@ class ImagenInline:
         return {"src": f"__MEDIA__/{nombre}"}
 
 
+def _es_espaciador(data: bytes) -> bool:
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            ancho, alto = img.size
+    except (OSError, UnidentifiedImageError, ValueError):
+        return False
+    return ancho <= _LADO_MINIMO_IMAGEN or alto <= _LADO_MINIMO_IMAGEN
+
+
 def _texto_norm(el) -> str:
     return normalizar(el.get_text(" ", strip=True))
+
+
+# "Figura 4" / "Tabla 1." solos: el número sin su título, que el asesor
+# escribe en el renglón de abajo.
+_PAT_EPIGRAFE_PELADO = re.compile(r"^(figura|tabla|esquema)\s*\d*\s*[.:]?$")
+
+
+def _es_epigrafe_pelado(el) -> bool:
+    return (el is not None and getattr(el, "name", None) == "p"
+            and bool(_PAT_EPIGRAFE_PELADO.match(_texto_norm(el))))
 
 
 _PAT_NOTA = re.compile(r"\[\d+\]")
@@ -151,13 +180,18 @@ _MARCAS_ESPECIALES = (
     ("agenda", re.compile(r"^contenidos?\s*:?\s*$|^temario\b|^agenda\b")),
     ("conclusion", re.compile(r"^conclusi[óo]n|^cierre\b|^reflexi[óo]n final")),
     ("referencias", re.compile(r"^referencias?\b|^bibliograf[íi]a")),
+    # "Transparencia del presente documento": la declaración de uso de IA que
+    # el docente pone arriba de todo, antes de la Introducción. No es
+    # contenido del módulo (viene igual en los tres) y se publica una sola
+    # vez, como bloque propio en el Programa.
+    ("transparencia", re.compile(r"^transparencia\b")),
 )
 
 # Marcadores que solo abren el módulo (van ANTES de la primera sección numerada).
 # Una vez que empezó una página real, un texto como "Objetivo financiero" es un
 # sub-título del cuerpo, no el bloque "Objetivos" del módulo: no debe cambiar de
 # sección. (Conclusión/referencias sí aparecen después de las secciones.)
-_MARCAS_APERTURA = {"intro", "objetivos", "agenda"}
+_MARCAS_APERTURA = {"intro", "objetivos", "agenda", "transparencia"}
 
 
 def segmentar_docx(docx_path: Path, marcadores: dict) -> tuple:
@@ -204,6 +238,13 @@ def segmentar_docx(docx_path: Path, marcadores: dict) -> tuple:
         # ¿Es el título de una sección pedida?
         if len(tn) < 200:
             clave = _clave_de_titulo(tn, marcadores)
+            # Un título que viene justo debajo de "Figura N"/"Tabla N" es el
+            # TÍTULO DE ESA FIGURA, no el arranque de la sección: en Gestión
+            # del Riesgo la Figura 4 se llamaba igual que la página 1.3
+            # ("Apetito, tolerancia y umbral de riesgo") y el renglón
+            # desaparecía del aula, tomado por un segundo título de sección.
+            if clave and _es_epigrafe_pelado(acumulado[-1] if acumulado else None):
+                clave = ""
             if clave:
                 _guardar()
                 clave_actual = clave
@@ -215,6 +256,14 @@ def segmentar_docx(docx_path: Path, marcadores: dict) -> tuple:
                              if pat.match(tn)), "")
             # Los marcadores de apertura no valen una vez dentro de una página.
             if especial in _MARCAS_APERTURA and en_seccion_real:
+                especial = ""
+            # Dentro de las referencias, "Bibliografía obligatoria" y
+            # "Bibliografía sugerida y complementaria" NO abren otra sección:
+            # son los subtítulos que separan una de otra. Tomándolos como
+            # marcador se perdían los dos rótulos y las dos listas quedaban
+            # pegadas en un único bloque sin clasificar — la bibliografía
+            # salía sin la división obligatoria/sugerida en todo el curso.
+            if especial == "referencias" and clave_actual == "referencias":
                 especial = ""
             if especial and len(tn) < 60:
                 _guardar()

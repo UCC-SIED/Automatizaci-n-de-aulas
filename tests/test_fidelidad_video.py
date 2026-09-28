@@ -312,3 +312,66 @@ class TestVideoEnLaPaginaDeIntroduccion:
         soup = BeautifulSoup(out, "html.parser")
         objetivos = soup.find("div", class_="kl_readings2")
         assert "Diferenciar riesgo e incertidumbre." in objetivos.get_text()
+
+
+class TestVideoDeclaradoEnLaPlanilla:
+    """Regresión real (Selección y Optimización de Inversiones): los videos
+    ya estaban subidos a Canvas Studio y el DOCX no marcaba dónde iban; lo
+    decía la planilla, en una fila de tipo VIDEO con el enlace de edición del
+    medio. Sin mirarla, el módulo salía sin bloque de video: ni siquiera
+    quedaba el lugar para pegar el embed.
+
+    El embed NO se arma desde ese enlace: se probó usar su token como
+    custom_arc_media_id y el reproductor no carga (los embeds de Canvas usan
+    un UUID v4 + un número, que el token no contiene). Queda el hueco, con el
+    enlace en el comentario para quien lo pegue a mano."""
+
+    URL = ("https://uccor.instructuremedia.com/collections/user/perspectives/"
+           "u2Ebsi80p4GHX6Z6RT79pQ/caption/edit/1064")
+    URL_COMPARTIDA = ("https://uccor.instructuremedia.com/collections/shared/"
+                      "2282/perspectives/D4l3w0t1-n-volcKAsZgpw/caption/edit/1065")
+
+    def test_reconoce_el_enlace_de_studio(self):
+        from maquetador.build.snippets import token_de_studio
+        assert token_de_studio(self.URL) == ("u2Ebsi80p4GHX6Z6RT79pQ", "1064")
+        assert token_de_studio(self.URL_COMPARTIDA) == (
+            "D4l3w0t1-n-volcKAsZgpw", "1065")
+
+    def test_lo_que_no_es_de_studio_no_lo_confunde(self):
+        from maquetador.build.snippets import token_de_studio
+        assert token_de_studio(
+            "https://drive.google.com/file/d/1AUg/view") == ("", "")
+        assert token_de_studio("https://youtu.be/abc123") == ("", "")
+        assert token_de_studio("") == ("", "")
+
+    def test_el_hueco_nombra_de_que_video_se_trata(self):
+        from maquetador.build.snippets import bloque_video_studio
+        out = bloque_video_studio(referencia=self.URL)
+        assert 'data-title="Video"' in out
+        assert "dp-embed-wrapper" in out
+        assert "Pegar aqu" in out and self.URL in out
+        assert "<iframe" not in out
+
+    def test_la_pagina_de_introduccion_lo_pone_tras_los_objetivos(self):
+        from maquetador.build.pages import pagina_intro
+        from maquetador.build.snippets import bloque_video_studio
+        out = pagina_intro(titulo="Introducción M1",
+                           intro_html="<p>Texto introductorio.</p>",
+                           objetivos_html="<ul><li>Objetivo uno.</li></ul>",
+                           banner_src="banner.png", identifier="g1",
+                           video_html=bloque_video_studio(referencia=self.URL))
+        assert out.index("Objetivos") < out.index('data-title="Video"')
+        # el bloque de video es hermano del de objetivos, no va anidado
+        assert ('</div>' + chr(10) + '<div class="dp-content-block" '
+                'data-title="Video"') in out
+
+    def test_si_el_docx_ya_trae_el_video_no_se_duplica(self):
+        from maquetador.build.pages import pagina_intro
+        from maquetador.build.snippets import bloque_video_studio
+        out = pagina_intro(titulo="Introducción M1",
+                           intro_html="<p>Texto.</p>",
+                           objetivos_html=("<ul><li>Objetivo uno.</li></ul>"
+                                           "<p>Mirá el video. VIDEO M1.</p>"),
+                           banner_src="b.png", identifier="g1",
+                           video_html=bloque_video_studio(referencia=self.URL))
+        assert out.count('data-title="Video"') == 1

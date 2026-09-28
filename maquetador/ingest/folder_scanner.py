@@ -17,7 +17,31 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from PIL import Image, UnidentifiedImageError
+
 from maquetador.models import Issue, Severidad
+
+# Extensiones que el escáner sabe clasificar por sí solas. Lo que no está
+# acá se husmea con Pillow: diseño a veces entrega las figuras SIN extensión
+# ("Figura 1, m. 1"), y pathlib llama "extensión" a lo que sigue al último
+# punto (acá, ".1"), así que sin husmear quedaban en `otros` —la página se
+# publicaba con la imagen embebida del DOCX, de baja calidad, sin aviso.
+_EXT_CONOCIDAS = {".docx", ".doc", ".pdf", ".xlsx", ".xls", ".pptx", ".ppt",
+                  ".txt", ".csv", ".zip", ".rar", ".7z", ".mp4", ".mov",
+                  ".avi", ".mkv", ".mp3", ".wav", ".m4a", ".jpg", ".jpeg",
+                  ".png", ".gif", ".webp", ".bmp", ".svg", ".tif", ".tiff",
+                  ".url", ".lnk", ".html", ".htm", ".xml", ".json", ".ini"}
+_EXT_POR_FORMATO_PIL = {"JPEG": ".jpg", "PNG": ".png", "GIF": ".gif",
+                        "WEBP": ".webp", "BMP": ".bmp", "TIFF": ".tiff"}
+
+
+def _extension_husmeada(path: Path) -> Optional[str]:
+    """Extensión real de una imagen cuyo nombre no la declara, o None."""
+    try:
+        with Image.open(path) as img:
+            return _EXT_POR_FORMATO_PIL.get(img.format or "")
+    except (OSError, UnidentifiedImageError, ValueError):
+        return None
 
 
 def normalizar(texto: str) -> str:
@@ -177,6 +201,8 @@ def escanear(carpeta: Path) -> InventarioCurso:
         carpeta_inmediata = re.sub(r"^\s*\d+\s*[-._)]\s*", "",
                                    normalizar(path.parent.name))
         ext = path.suffix.lower()
+        if ext not in _EXT_CONOCIDAS:
+            ext = _extension_husmeada(path) or ext
         num = _numero_modulo(path.name)
 
         # --- Planilla de estructura (la lleva la etapa de maquetación) ---
