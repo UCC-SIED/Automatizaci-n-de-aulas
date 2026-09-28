@@ -119,6 +119,21 @@ _HERRAMIENTAS_EXTERNAS = ("padlet", "mural", "miro", "jamboard", "wooclap",
                           "mentimeter", "flipgrid", "genially")
 
 
+_PIDE_INTERVENIR = ("coment", "aporte", "respond", "particip", "intervenc")
+
+
+def _consigna_es_de_foro(html: str) -> bool:
+    """¿Esta consigna es la de un foro, más allá de cómo esté rotulada?
+
+    El asesor rotula la caja "Voces que construyen (Mural colaborativo)" pero
+    adentro invita a participar de un foro y a comentar los aportes de los
+    colegas. Lo que define el destino es la consigna, no la etiqueta."""
+    if not html:
+        return False
+    texto = normalizar(BeautifulSoup(html, "html.parser").get_text(" ", strip=True))
+    return "foro" in texto and any(k in texto for k in _PIDE_INTERVENIR)
+
+
 def _herramienta_externa(item) -> str:
     """Nombre de la herramienta que la planilla puso como referencia, o ""."""
     ref = normalizar(item.detalle.get("referencia", "") or "")
@@ -1263,6 +1278,16 @@ class GeneradorAula:
         que el asesor dejó en el multimedial y el contenedor listo para pegar
         el embebido."""
         n = modulo.numero
+        consigna = self._consigna_de_mural(modulo)
+        # La etiqueta del recuadro dice "Mural colaborativo", pero manda lo que
+        # pide la consigna: cuando invita a participar de un FORO y a comentar
+        # los aportes de los demás, es un foro y va al espacio del foro del
+        # módulo, no a un buzón de entrega. Pasó en Gestión del Riesgo: el
+        # "Voces que construyen" del módulo 1 salía de actividad sugerida.
+        if _consigna_es_de_foro(consigna):
+            self._inyectar_consigna_foro(
+                n, [(item.titulo, consigna)], ctx)
+            return
         rid = self._clonar_actividad_sugerida(n)
         if not rid:
             item.issues.append(Issue(Severidad.AVISO,
@@ -1270,7 +1295,6 @@ class GeneradorAula:
                 "pude clonar un assignment para ella: crearla a mano en Canvas.",
                 item.titulo))
             return
-        consigna = self._consigna_de_mural(modulo)
         cuerpo = (consigna + bloque_recurso_incrustado(titulo=herramienta)).strip()
         if self._escribir_assignment(rid, self._rutear_media(cuerpo), ctx):
             item.issues.append(Issue(Severidad.INFO,
@@ -2152,7 +2176,12 @@ class GeneradorAula:
                     if titulo in quedan:
                         continue
                     rref = self._rid_en_meta(content_type, re.escape(titulo))
-                    if rref:
+                    # Un recurso que la planilla no pide pero que YA se llenó
+                    # no es sobrante: la consigna llegó desde el contenido del
+                    # multimedial, no desde una fila. En Gestión del Riesgo el
+                    # foro del módulo 1 se cargaba y se borraba a continuación.
+                    if rref and rref not in self.topics_escritos \
+                            and rref not in self.assignments_escritos:
                         self._eliminar_item_por_rref(rref)
                         logger.info(f"  [M{n}] recurso no pedido eliminado: {titulo}")
 
