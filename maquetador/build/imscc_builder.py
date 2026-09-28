@@ -446,7 +446,10 @@ class GeneradorAula:
                     consignas.extend(cs)
         foros_emb = [(t, b) for tipo, t, b in consignas if tipo == "foro"]
         if foros_emb:
-            self._inyectar_consigna_foro(n, foros_emb, ctx)
+            self._inyectar_consigna_foro(
+                n, foros_emb, ctx,
+                obligatorio=any("obligatori" in normalizar(t)
+                                for t, _ in foros_emb))
         # Un DOCX dedicado de actividad (p.ej. "Actividad obligatoria I.docx")
         # manda sobre un puntero embebido en el texto ("te invito a realizar la
         # actividad obligatoria…"): si el módulo trae el archivo, se deja el slot
@@ -1233,12 +1236,13 @@ class GeneradorAula:
             return self._rid_en_meta(
                 "Assignment", r"[^<]*[Aa]ctividad final[^<]*"), "Actividad final integradora"
         if "sugerida" in ne or "optativa" in ne:
+            # La no calificable se llama "Actividad MN" (así la nombra el
+            # equipo en Canvas); también se acepta como la escribía antes.
             rid = self._rid_en_meta(
-                "Assignment", rf"[^<]*[Aa]ctividad (sugerida|optativa)[^<]*M{n}[^<]*")
+                "Assignment", rf"[^<]*[Aa]ctividad (?:sugerida |optativa )?M{n}[^<]*")
             if rid:
-                return rid, f"Actividad sugerida M{n}"
-        return self._rid_en_meta(
-            "Assignment", rf"[^<]*[Aa]ctividad[^<]*M{n}[^<]*"), f"Actividad obligatoria M{n}"
+                return rid, f"Actividad M{n}"
+        return self._rid_obligatoria(n), f"Actividad obligatoria M{n}"
 
     def _consigna_de_mural(self, modulo) -> str:
         """Consigna del recuadro de mural colaborativo del módulo, si lo hay.
@@ -1299,7 +1303,7 @@ class GeneradorAula:
         if self._escribir_assignment(rid, self._rutear_media(cuerpo), ctx):
             item.issues.append(Issue(Severidad.INFO,
                 f"'{item.titulo[:50]}' se resuelve en {herramienta}: creé el "
-                f"assignment 'Actividad sugerida M{n}' (Completo/Incompleto, no "
+                f"assignment 'Actividad M{n}' (Completo/Incompleto, no "
                 f"cuenta para la nota final) con el hueco para pegar el "
                 f"{herramienta}. La consigna sigue además en el multimedial.",
                 item.titulo))
@@ -1494,13 +1498,12 @@ class GeneradorAula:
                         self.rid_por_archivo.setdefault(archivo.name, rid_sug)
                         item.issues.append(Issue(Severidad.INFO,
                             f"Contenido de '{archivo.name}' cargado en un "
-                            f"assignment nuevo 'Actividad sugerida M{n}' "
+                            f"assignment nuevo 'Actividad M{n}' "
                             "(Completo/Incompleto, no cuenta para la nota "
                             "final). Verificar en Canvas.", item.titulo))
                         logger.info(f"  [M{n}] Actividad sugerida (nueva) ← {archivo.name}")
                     continue
-                rid = self._rid_en_meta(
-                    "Assignment", rf"[^<]*[Aa]ctividad[^<]*M{n}[^<]*")
+                rid = self._rid_obligatoria(n)
                 if not rid or rid in self.assignments_escritos:
                     continue
                 html = self._docx_a_html(archivo, f"act_m{n}", es_actividad=True)
@@ -1702,9 +1705,14 @@ class GeneradorAula:
             "AFI"))
 
     # ------------------------------------------------------------------ #
-    def _inyectar_consigna_foro(self, n: int, consignas: list, ctx: str):
+    def _inyectar_consigna_foro(self, n: int, consignas: list, ctx: str,
+                                obligatorio: bool = False):
         """Escribe la consigna extraída del DOCX dentro del DiscussionTopic
-        'Foro (obligatorio) MN' del aula base."""
+        'Foro (obligatorio) MN' del aula base.
+
+        `obligatorio` distingue el foro calificable del de participación: el
+        aula base los trae todos rotulados "Foro obligatorio MN", y el de
+        participación se publica con el nombre corto que usa el equipo."""
         recurso_id, topic_path = self._topic_del_aula_base(
             rf"[^<]*[Ff]oro[^<]*M{n}[^<]*")
         if recurso_id is None:
@@ -1735,10 +1743,49 @@ class GeneradorAula:
             topic_xml, count=1, flags=re.DOTALL)
         _escribir(topic_path, topic_xml)
         self.topics_escritos.add(recurso_id)
+        if not obligatorio:
+            self._renombrar_recurso(recurso_id, topic_path,
+                                    self._nombre_de_foro(n))
         logger.info(f"  [M{n}] Consigna del foro inyectada en {topic_path.name}")
         self.spec.issues.append(Issue(Severidad.INFO,
             f"La consigna '{titulo[:60]}' se quitó de la página de contenido "
             f"y se cargó en el foro del módulo {n}.", ctx))
+
+    def _nombre_de_foro(self, n: int) -> str:
+        """Cómo se llama el foro de participación del módulo en cada aula.
+
+        El aula base los trae todos como "Foro obligatorio MN", pero ese
+        nombre es solo del calificable: en posgrado el de participación es
+        "Foro MN" y en educación "Foro sugerido MN"."""
+        return (f"Foro sugerido M{n}" if normalizar(self.spec.tema) == "educacion"
+                else f"Foro M{n}")
+
+    def _renombrar_recurso(self, rref: str, ruta_xml, nuevo: str):
+        """Cambia el título de un recurso en sus cuatro lugares: el <item> de
+        module_meta, el de organizations, el XML del topic y el de su meta."""
+        escapado = xml_escape(nuevo)
+        self.meta = re.sub(
+            rf'(<item identifier="[^"]+">(?:(?!</item>).)*?<title>)[^<]*'
+            rf'(</title>(?:(?!</item>).)*?<identifierref>{rref}</identifierref>)',
+            lambda m: m.group(1) + escapado + m.group(2), self.meta,
+            count=1, flags=re.DOTALL)
+        self.manifest = re.sub(
+            rf'(<item identifier="[^"]+" identifierref="{rref}">\s*<title>)[^<]*',
+            lambda m: m.group(1) + escapado, self.manifest, count=1)
+        # El topic y su "topicMeta" (la dependencia del recurso) llevan cada
+        # uno su propio <title>: con renombrar solo uno, Canvas seguía
+        # mostrando el viejo.
+        m_dep = re.search(rf'<resource[^>]*identifier="{rref}"[^>]*>.*?'
+                          r'<dependency identifierref="([^"]+)"',
+                          self.manifest, re.DOTALL)
+        archivos = [ruta_xml, self.working / f"{rref}.xml"]
+        if m_dep:
+            archivos.append(self.working / f"{m_dep.group(1)}.xml")
+        for archivo in archivos:
+            if archivo is not None and archivo.exists():
+                _escribir(archivo, re.sub(r"(<title>)[^<]*(</title>)",
+                                          lambda m: m.group(1) + escapado
+                                          + m.group(2), _leer(archivo), count=1))
 
     # ------------------------------------------------------------------ #
     def _asegurar_modulos(self):
@@ -1809,6 +1856,18 @@ class GeneradorAula:
         else:
             shutil.copy2(src, dst)
 
+    def _rid_obligatoria(self, n: int) -> str:
+        """El assignment calificable del módulo, nombrándolo explícitamente.
+
+        Desde que la actividad no calificable se agrega ARRIBA de la
+        obligatoria, un patrón genérico ("Actividad … MN") se queda con la
+        de más arriba: la consigna calificable no se cargaba y el buzón
+        obligatorio quedaba con el placeholder del aula base."""
+        return (self._rid_en_meta(
+                    "Assignment", rf"[^<]*[Aa]ctividad obligatoria[^<]*M{n}[^<]*")
+                or self._rid_en_meta(
+                    "Assignment", rf"[^<]*[Aa]ctividad[^<]*M{n}[^<]*"))
+
     def _clonar_actividad_sugerida(self, n: int) -> str:
         """Clona el assignment 'Actividad obligatoria M{n}' del aula base como
         'Actividad sugerida M{n}': mismo diseño/wrapper, pero SIN calificar
@@ -1823,7 +1882,7 @@ class GeneradorAula:
         <organizations> (simple: identifier+identifierref+title, el estándar
         Common Cartridge). Hay que clonar los dos, más el <resource> y los
         archivos de la carpeta del assignment."""
-        rid_base = self._rid_en_meta("Assignment", rf"[^<]*[Aa]ctividad[^<]*M{n}[^<]*")
+        rid_base = self._rid_obligatoria(n)
         if not rid_base:
             return ""
         bloque_res = self._resource_block(rid_base)
@@ -1863,7 +1922,7 @@ class GeneradorAula:
             xml = _leer(settings)
             xml = xml.replace(f'identifier="{rid_base}"', f'identifier="{nuevo_rid}"', 1)
             xml = re.sub(r"<title>[^<]*</title>",
-                        f"<title>Actividad sugerida M{n}</title>", xml, count=1)
+                        f"<title>Actividad M{n}</title>", xml, count=1)
             xml = re.sub(r"<grading_type>[^<]*</grading_type>",
                         "<grading_type>pass_fail</grading_type>", xml)
             xml = re.sub(r"<points_possible>[^<]*</points_possible>",
@@ -1882,19 +1941,21 @@ class GeneradorAula:
             f"<identifierref>{rid_base}</identifierref>",
             f"<identifierref>{nuevo_rid}</identifierref>")
         nuevo_meta_item = re.sub(r"<title>[^<]*</title>",
-                                 f"<title>Actividad sugerida M{n}</title>",
+                                 f"<title>Actividad M{n}</title>",
                                  nuevo_meta_item, count=1)
+        # La entrega no calificable prepara la obligatoria: va ARRIBA de ella,
+        # como la ubica el equipo en Canvas.
         self.meta = self.meta.replace(
-            bloque_meta_item, bloque_meta_item + "\n      " + nuevo_meta_item, 1)
+            bloque_meta_item, nuevo_meta_item + "\n      " + bloque_meta_item, 1)
 
         nuevo_org_item = m_org_item.group(0).replace(
             f'identifier="{item_id_base}" identifierref="{rid_base}"',
             f'identifier="{nuevo_item_id}" identifierref="{nuevo_rid}"', 1)
         nuevo_org_item = re.sub(r"<title>[^<]*</title>",
-                                f"<title>Actividad sugerida M{n}</title>",
+                                f"<title>Actividad M{n}</title>",
                                 nuevo_org_item, count=1)
         self.manifest = self.manifest.replace(
-            m_org_item.group(0), m_org_item.group(0) + "\n            " + nuevo_org_item, 1)
+            m_org_item.group(0), nuevo_org_item + "\n            " + m_org_item.group(0), 1)
         return nuevo_rid
 
     def _clonar_modulo(self, template: int, nuevo: int):
@@ -2320,7 +2381,7 @@ class GeneradorAula:
                     # obligatoria (en Gestión del Riesgo, el módulo 1 solo
                     # tiene una sugerida en Padlet), ese slot se queda vacío y
                     # hay que borrarlo, no dejarlo con el placeholder.
-                    quedan.add(f"Actividad sugerida M{n}")
+                    quedan.add(f"Actividad M{n}")
                 else:
                     quedan.add(f"Actividad obligatoria M{n}")
         return quedan

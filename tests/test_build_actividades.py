@@ -367,14 +367,14 @@ class TestSlotDeActividadDelAulaBase:
         quedan = self._generador()._recursos_que_pide_modulo(
             self._modulo("Actividad sugerida"))
         assert "Actividad obligatoria M1" not in quedan
-        assert "Actividad sugerida M1" in quedan
+        assert "Actividad M1" in quedan
 
     def test_con_obligatoria_el_slot_se_conserva(self):
         quedan = self._generador()._recursos_que_pide_modulo(
             self._modulo("Actividad sugerida (individual)",
                          "Actividad obligatoria (individual)"))
         assert "Actividad obligatoria M1" in quedan
-        assert "Actividad sugerida M1" in quedan
+        assert "Actividad M1" in quedan
 
     def test_una_actividad_sin_adjetivo_sigue_siendo_la_obligatoria(self):
         quedan = self._generador()._recursos_que_pide_modulo(

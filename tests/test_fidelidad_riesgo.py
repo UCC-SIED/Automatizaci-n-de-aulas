@@ -246,3 +246,42 @@ class TestNotasAlPieConUrl:
             '<p>Texto<sup><a href="#footnote-9" id="footnote-ref-9">[3]</a>'
             "</sup> y sigue.</p>", {})
         assert "[3]" not in out and "footnote" not in out
+
+
+class TestNombresYOrdenDeLosItemsDelModulo:
+    """Cómo se llaman y dónde van los ítems que el generador agrega al aula
+    base, según cómo los deja el equipo en Canvas (capturas del aula de
+    Gestión del Riesgo ya maquetada)."""
+
+    def _generador(self, tema="posgrado"):
+        from maquetador.models import CourseSpec
+        from maquetador.build.imscc_builder import GeneradorAula
+        from pathlib import Path
+        return GeneradorAula(CourseSpec(nombre="X", tema=tema), {}, Path("."))
+
+    def test_el_foro_de_participacion_de_posgrado_es_foro_mn(self):
+        """El aula base rotula TODOS los foros de módulo como "Foro obligatorio
+        MN", pero ese nombre es solo del calificable."""
+        assert self._generador()._nombre_de_foro(2) == "Foro M2"
+
+    def test_en_educacion_es_foro_sugerido_mn(self):
+        assert self._generador("educacion")._nombre_de_foro(2) == "Foro sugerido M2"
+
+    def test_la_consigna_calificable_no_va_al_buzon_no_calificable(self):
+        """La actividad no calificable se agrega ARRIBA de la obligatoria: con
+        un patrón genérico, la consigna calificable se volcaba en la primera
+        que encontrara, que pasó a ser la no calificable."""
+        g = self._generador()
+        g.meta = (
+            '<item identifier="a"><content_type>Assignment</content_type>'
+            "<workflow_state>active</workflow_state><title>Actividad M2</title>"
+            "<identifierref>rid-no-calificable</identifierref></item>"
+            '<item identifier="b"><content_type>Assignment</content_type>'
+            "<workflow_state>active</workflow_state>"
+            "<title>Actividad obligatoria M2</title>"
+            "<identifierref>rid-obligatoria</identifierref></item>")
+        assert g._rid_obligatoria(2) == "rid-obligatoria"
+        assert g._rid_actividad(2, "Actividad obligatoria") == (
+            "rid-obligatoria", "Actividad obligatoria M2")
+        assert g._rid_actividad(2, "Actividad sugerida") == (
+            "rid-no-calificable", "Actividad M2")
