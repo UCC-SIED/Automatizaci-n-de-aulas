@@ -51,6 +51,7 @@ from maquetador.build.snippets import (separar_consignas, procesar_contenido,
                                        nombre_publicado_de_figura,
                                        bloque_video_studio,
                                        token_de_studio,
+                                       contenido_declara_video,
                                        bloque_recurso_incrustado,
                                        _FIG_CLASES_EXPANDIBLE, _FIG_ANCHO_MAX)
 from maquetador.build.bibliography import construir_bibliografia
@@ -371,17 +372,27 @@ class GeneradorAula:
         medio y su token no sirve como id del reproductor (ver
         `token_de_studio`). Queda el hueco con el enlace en el comentario,
         que es como se venía entregando."""
+        if any(contenido_declara_video(i.fuente.html) for i in items):
+            return ""      # el DOCX ya dice dónde va: no se duplica el bloque
         for item in items:
             if item.tipo != TipoItem.VIDEO:
                 continue
             url = (item.detalle or {}).get("referencia", "")
-            if not token_de_studio(url)[0]:
-                continue
+            if token_de_studio(url)[0]:
+                self.spec.issues.append(Issue(Severidad.AVISO,
+                    f"El video de este módulo ya está en Canvas Studio ({url}), "
+                    "pero el embed se pega a mano: quedó el hueco en la página "
+                    "de Introducción, debajo de los Objetivos.", ctx))
+                return bloque_video_studio(referencia=url)
+            # Sin enlace todavía (la fila está "Pendiente", el video se graba
+            # o se sube después): el hueco va igual. Que el video no esté
+            # subido no cambia dónde va, y sin el bloque nadie se acuerda de
+            # ubicarlo cuando llega.
             self.spec.issues.append(Issue(Severidad.AVISO,
-                f"El video de este módulo ya está en Canvas Studio ({url}), "
-                "pero el embed se pega a mano: quedó el hueco en la página de "
-                "Introducción, debajo de los Objetivos.", ctx))
-            return bloque_video_studio(referencia=url)
+                f"'{item.titulo[:60]}': la planilla lo declara pero todavía no "
+                "tiene el enlace de Canvas Studio. Dejé el hueco en la página "
+                "de Introducción, debajo de los Objetivos.", ctx))
+            return bloque_video_studio(referencia=item.titulo)
         return ""
 
     # ------------------------------------------------------------------ #
@@ -1515,6 +1526,38 @@ class GeneradorAula:
                         f"Actividad obligatoria M{n}.", item.titulo))
                     logger.info(f"  [M{n}] Actividad obligatoria ← {archivo.name}")
 
+    def _herramienta_html_incrustada(self) -> str:
+        """Publica la herramienta HTML de la AFI y devuelve su bloque embebido.
+
+        El asesor entrega la actividad como un .html autónomo (con su CSS y
+        su JS adentro). Va a los archivos del aula, en la carpeta "Recursos",
+        y se incrusta en la página de la AFI apuntando a ese archivo: es el
+        "instrumento de aplicación" que la consigna manda usar, así que tiene
+        que estar a la vista y además quedar accesible por su cuenta."""
+        from urllib.parse import quote
+        recursos = list(getattr(self.spec, "recursos_html", []) or [])
+        if not recursos:
+            return ""
+        bloques = []
+        for path in recursos:
+            destino_rel = f"web_resources/Recursos/{path.name}"
+            (self.working / "web_resources" / "Recursos").mkdir(
+                parents=True, exist_ok=True)
+            shutil.copy2(path, self.working / destino_rel)
+            self.recursos_nuevos.append((_gen_id(), destino_rel))
+            url = "$IMS-CC-FILEBASE$/Recursos/" + quote(path.name)
+            iframe = (f'<iframe src="{url}" width="100%" height="100%" '
+                      'style="position: absolute; top: 0; left: 0; width: 100%; '
+                      'height: 100%;" frameborder="0" allowfullscreen="true" '
+                      f'title="{xml_escape(path.stem)}" loading="lazy"></iframe>')
+            bloques.append("<p>&nbsp;</p>\n"
+                           + bloque_recurso_incrustado(iframe))
+            self.spec.issues.append(Issue(Severidad.INFO,
+                f"'{path.name}' se publicó en los archivos del aula "
+                f"(Recursos/) y quedó incrustado en la Actividad final "
+                "integradora.", "AFI"))
+        return "\n".join(bloques)
+
     def _inyectar_afi(self):
         # Foro de consultas de la AFI con la consigna escrita en la planilla:
         # el aula base no trae un foro de AFI, así que se avisa para crearlo a
@@ -1544,6 +1587,7 @@ class GeneradorAula:
         html, titulo_foro, cuerpo_foro = separar_foro_de_consultas(html)
         if cuerpo_foro:
             self._inyectar_foro_de_consultas_afi(titulo_foro, cuerpo_foro)
+        html += self._herramienta_html_incrustada()
         if self._escribir_assignment(rid, html, "AFI"):
             self.rid_por_archivo[item.fuente.archivo.name] = rid
             item.issues.append(Issue(Severidad.INFO,

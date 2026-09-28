@@ -2798,6 +2798,26 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
     return aplicar_acento_del_tema(str(soup), tema)
 
 
+def contenido_declara_video(html: str) -> bool:
+    """¿Este HTML ya marca dónde va el video propio del módulo?
+
+    El asesor lo señala de tres formas en el cuerpo: con la marca de
+    maquetación ("Embeber video: GRyI - V_M1"), con el marcador suelto
+    ("VIDEO M2.") o invitando a verlo ("te invito a ver el siguiente
+    video"). De cualquiera de ellas sale el bloque en la página que
+    corresponda. Cuando eso pasa, el hueco que declara la planilla ya está
+    puesto: agregar otro en la Introducción deja el módulo con dos."""
+    if not html:
+        return False
+    for el in BeautifulSoup(html, "html.parser").find_all(["p", "td", "th"]):
+        texto = el.get_text(" ", strip=True)
+        if (_PAT_EMBEBER_VIDEO.match(texto) or _PAT_MARCADOR_VIDEO.match(texto)
+                or (_PAT_VIDEO_INVIT.search(texto)
+                    and not _PAT_URL_VIDEO.search(texto))):
+            return True
+    return False
+
+
 def separar_bloque_de_video(html: str) -> tuple:
     """El bloque "Video" (bloque_video_studio, cuando queda abierto y
     absorbe el resto de la página — ver _procesar_cues_parrafo) NO va

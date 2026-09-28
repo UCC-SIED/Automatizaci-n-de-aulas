@@ -84,6 +84,14 @@ _CARPETAS_DESCARTAR = ("borrador", "borradores", "devoluciones",
 # integrador"), que sí puede ser el desarrollo del módulo.
 _PAT_FICHA_CASO = re.compile(r"(?:^|[-_\s])(?:ficha[_\s-]*caso|caso_)", re.I)
 
+# El DOCX de desarrollo teórico nombrado con el módulo adelante ("M1 Luis
+# Roldán - …", "Módulo 2 - …"). Cuando el archivo abre así no hace falta que
+# la carpeta lo confirme: es el material del módulo y nada más. Sin esto, la
+# materia que guarda los tres DOCX sueltos en la etapa (sin subcarpeta
+# "Material Multimedia") quedaba sin desarrollo teórico y con las páginas de
+# contenido vacías.
+_PAT_ABRE_CON_MODULO = re.compile(r"^m(?:[oó]dulo)?\s*[-_.]?\s*\d+\b", re.I)
+
 _PAT_MODULO_NUM = re.compile(
     r"(?:m[óo]dul[a-z]*[\s_]*(\d+)|(?:^|[-_\s])m[\s_]?(\d+)(?![a-z0-9])|"
     r"\bm(\d+)(?![a-z0-9]))", re.I)
@@ -134,6 +142,7 @@ class InventarioCurso:
     imagenes_diseno: list = field(default_factory=list)   # figuras/esquemas/tablas
     esquema: list = field(default_factory=list)           # esquema introductorio
     casos: list = field(default_factory=list)             # [(n|None, Path)] fichas de caso
+    recursos_html: list = field(default_factory=list)      # herramientas HTML
     otros: list = field(default_factory=list)
     issues: list = field(default_factory=list)
 
@@ -150,7 +159,7 @@ class InventarioCurso:
             "hoja_de_ruta": _l(self.hoja_de_ruta), "biografia": _l(self.biografia),
             "fotos_docente": _l(self.fotos_docente),
             "imagenes_diseno": _l(self.imagenes_diseno), "esquema": _l(self.esquema),
-            "casos": _l(self.casos),
+            "casos": _l(self.casos), "recursos_html": _l(self.recursos_html),
             "issues": [i.to_dict() for i in self.issues],
         }
 
@@ -248,10 +257,14 @@ def escanear(carpeta: Path) -> InventarioCurso:
             elif "biograf" in nombre or "biodata" in nombre \
                     or "curriculum" in nombre \
                     or re.search(r"\bcv\b", nombre) \
+                    or "bio" in carpeta_inmediata \
                     or "presentacion" in nombre and "foro" not in nombre:
                 # "biodata" es como lo nombra la planilla en varios cursos y
                 # quedaba sin clasificar: la titulación del docente salía
                 # "sin fuente" aunque el archivo estuviera en la carpeta.
+                # La CARPETA también alcanza: en "Bio y Foto" el DOCX suele
+                # llamarse con el nombre del docente y nada más
+                # ("LUIS ROLDÁN GONZÁLEZ DE LAS CUEVAS.docx").
                 inv.biografia.append(path)
             elif "hoja de ruta" in nombre or "hoja_de_ruta" in nombre:
                 inv.hoja_de_ruta.append(path)
@@ -264,8 +277,10 @@ def escanear(carpeta: Path) -> InventarioCurso:
                 inv.otros.append(path)
             elif ("modulo" in nombre or "multimedial" in nombre or num is not None) \
                     and ("multimedial" in carpeta_padre or "modulo" in carpeta_padre
-                         or "desarrollo" in carpeta_padre or "multimedial" in nombre
-                         or "modulo" in nombre):
+                         or "desarrollo" in carpeta_padre
+                         or "material" in carpeta_padre
+                         or "multimedial" in nombre or "modulo" in nombre
+                         or _PAT_ABRE_CON_MODULO.match(nombre)):
                 if num is None:
                     num = _numero_modulo(carpeta_padre) or 0
                 if num in inv.docx_modulos:
@@ -292,6 +307,14 @@ def escanear(carpeta: Path) -> InventarioCurso:
             continue
 
         # --- PDFs ---
+        # --- Herramienta HTML suelta ---
+        # El asesor entrega una actividad interactiva como un .html autónomo
+        # ("AFI_PiramideDelNeurolider_2.html", hecho con IA): no es una
+        # página del aula, es un recurso que el alumno usa aparte.
+        if ext in (".html", ".htm"):
+            inv.recursos_html.append((num, path))
+            continue
+
         if ext == ".pdf":
             if "programa" in nombre and "10a" not in nombre:
                 inv.programa.append(path)
@@ -315,10 +338,11 @@ def escanear(carpeta: Path) -> InventarioCurso:
                 inv.imagenes_diseno.append(path)
             elif "grabaci" in carpeta_padre or "maquetaci" in carpeta_padre \
                     or "etapa 3" in carpeta_padre or "etapa 4" in carpeta_padre \
-                    or ("foto" in carpeta_padre and "docente" in carpeta_padre):
+                    or ("foto" in carpeta_padre
+                        and ("docente" in carpeta_padre or "bio" in carpeta_padre)):
                 # La foto del docente viene con el material de grabación, en
-                # la etapa de maquetación, o en una carpeta dedicada "Foto (y
-                # CV) docente". En esas carpetas conviven con capturas y
+                # la etapa de maquetación, o en una carpeta dedicada: "Foto (y
+                # CV) docente", "Bio y Foto". En esas carpetas conviven con capturas y
                 # miniaturas de video: si el nombre delata que no es un
                 # retrato, no puede terminar de foto del docente (ya pasó:
                 # "video-01.jpg" salió publicado como la foto del profesor).

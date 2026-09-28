@@ -75,6 +75,8 @@ def extraer_contenido(spec: CourseSpec) -> dict:
                 etiqueta = {"acordeon": "armar un ACORDEÓN (editor DesignPLUS)",
                             "flip_card": "armar una FLIP CARD (editor DesignPLUS)",
                             "tabs": "armar TABS (editor DesignPLUS)",
+                            "tabs_vertical": "armar TABS VERTICALES "
+                                             "(editor DesignPLUS)",
                             "expander": "armar un EXPANDER",
                             "tooltip": "armar un TOOLTIP",
                             "cita": "marcar como CITA",

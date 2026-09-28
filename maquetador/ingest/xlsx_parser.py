@@ -251,6 +251,15 @@ def parsear_estructura(path: Path) -> CourseSpec:
             seccion_actual = sep
             continue
 
+        # La planilla trae la grilla completa de ítems posibles (Tarea, Foro,
+        # Autoevaluación, Evaluación por módulo) y el asesor marca con "No
+        # Aplica" los que esta materia no usa. Esas filas no son ítems: sin
+        # saltearlas, el aula salía con una decena de actividades y foros
+        # vacíos y el plan con un aviso por cada uno ("no pude asociar esta
+        # actividad con un DOCX"), tapando los avisos que sí importan.
+        if "no aplica" in normalizar(fila.estado):
+            continue
+
         # --- Ítem real ---
         orden += 1
         tipo = _clasificar_item(fila.item, seccion_actual)

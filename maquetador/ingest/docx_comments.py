@@ -189,12 +189,20 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
             or (("clic" in n or "click" in n)
                 and ("emerj" in n or "emerge" in n or "aparezca" in n))):
         return "tooltip"
-    if any(k in n for k in ("es una cita", "esto es una cita", "es cita", "como cita")):
+    # "Para maquetación: cita" a secas: el asesor nombra el componente,
+    # no arma una frase. Sin la palabra suelta caía en "revisar".
+    if any(k in n for k in ("es una cita", "esto es una cita", "es cita",
+                            "como cita")) or re.search(r"\bcitas?\b", n):
         return "cita"
     # Quiz / autoevaluación (Quick check, verdadero o falso): se crean a mano en
     # Canvas; nunca se auto-maquetan como recuadro.
-    if any(k in n for k in ("quic check", "quick check", "autoevaluacion",
-                            "verdadero o falso", "checklist de autoevaluacion")):
+    # "quick check" viaja con toda clase de erratas ("quic check",
+    # "quick chek"): se acepta la forma con o sin cada letra dudosa.
+    if re.search(r"\bqu[ií]c?k?\s*ch[eé]?c?k\b", n) \
+            or any(k in n for k in ("quic check", "quick check",
+                                    "autoevaluacion",
+                                    "verdadero o falso",
+                                    "checklist de autoevaluacion")):
         return "quiz"
     if any(k in n for k in ("quitar", "sacar", "eliminar", "borrar")):
         return "quitar"
@@ -291,6 +299,11 @@ def extraer_comentarios(docx_path) -> list:
         textos[cid] = " ".join(t.text or "" for t in c.iter(f"{_W}t")).strip()
         autores[cid] = c.get(f"{_W}author", "")
     respuestas = _respuestas_por_cid(croot, ext_xml)
+    # Una respuesta también es un comentario y vuelve a aparecer en el
+    # recorrido: sin descontarla, el embed que el diseñador dejó como
+    # respuesta se tomaría dos veces (una por el globo padre y otra por la
+    # respuesta suelta) y saldrían dos recursos donde va uno.
+    _textos_de_respuestas = {t for lista in respuestas.values() for t in lista}
 
     # Texto anclado: lo que está entre commentRangeStart/End (en orden de doc).
     droot = ET.fromstring(document_xml)
@@ -360,6 +373,13 @@ def extraer_comentarios(docx_path) -> list:
     out = []
     for cid, instr in textos.items():
         anc = "".join(anclado.get(cid, [])).strip()
+        # Una respuesta vuelve a aparecer en el recorrido como comentario
+        # suelto. No es un pedido propio: es la vuelta de otro globo, y el
+        # padre ya la usó. Tomándola aparte, el div del Genially que dejó el
+        # diseñador se leía como una instrucción y el `title="Subtítulo"` de
+        # su iframe lo clasificaba como un pedido de subtítulo.
+        if instr in _textos_de_respuestas:
+            continue
         accion = _clasificar(instr, anc)
         # "Diseño: imagen interactiva …" es el pedido AL diseñador, no una
         # instrucción de maquetación; si el diseñador ya respondió con el
@@ -371,8 +391,11 @@ def extraer_comentarios(docx_path) -> list:
         # medio hay un recuadro para reflexión") y esa palabra lo clasificaba
         # como recuadro simple, así que el Genially ya entregado no se usaba
         # y la página salía con el pedido al diseñador a la vista.
+        # El diseñador a veces no responde el globo: pega el div/iframe ya
+        # armado como un comentario propio, sobre el texto que reemplaza.
+        # Vale igual que una respuesta.
         html_listo = next(
-            (r for r in respuestas.get(cid, [])
+            (r for r in list(respuestas.get(cid, [])) + [instr]
              if _PAT_GENIALLY_URL.search(r)), None)
         if html_listo:
             out.append({
