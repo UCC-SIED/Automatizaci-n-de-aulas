@@ -318,6 +318,7 @@ class GeneradorAula:
         self._personalizar_inicio()
         self._construir_syllabus()
         self._empaquetar_media()
+        self._publicar_material_suelto()
         self._unificar_tema_wrapper()
         self._registrar_recursos()
         self._renumerar_posiciones()
@@ -1376,6 +1377,15 @@ class GeneradorAula:
             html = "".join(f"<p>{xml_escape(linea.strip())}</p>"
                            for linea in texto.splitlines() if linea.strip())
             if self._escribir_topic(rid, html, ctx):
+                # El aula base rotula todos los foros de módulo como "Foro
+                # obligatorio MN". Lo que decide es la FILA de la planilla,
+                # no el cuerpo de la consigna: un foro de consultas habla de
+                # la actividad obligatoria sin ser él mismo calificable.
+                if destino != "Foro de apertura" \
+                        and "obligatori" not in normalizar(
+                            item.detalle.get("item_planilla", "") + " "
+                            + item.titulo):
+                    self._renombrar_recurso(rid, None, self._nombre_de_foro(n))
                 item.issues.append(Issue(Severidad.INFO,
                     f"Consigna del foro (escrita en la planilla) cargada en "
                     f"{destino}.", item.titulo))
@@ -1525,6 +1535,57 @@ class GeneradorAula:
                         f"Contenido de '{archivo.name}' cargado en la "
                         f"Actividad obligatoria M{n}.", item.titulo))
                     logger.info(f"  [M{n}] Actividad obligatoria ← {archivo.name}")
+
+    # Material que viaja en la carpeta del curso sin una fila en la planilla:
+    # los casos que el docente usa en las actividades, planillas de apoyo,
+    # una imagen conceptual. No se pueden ubicar solos (nadie dice dónde van)
+    # pero tampoco se tiran: se publican en los archivos del aula para que el
+    # equipo los enlace desde donde corresponda.
+    # El .pptx queda afuera a propósito: cuando aparece es el archivo fuente
+    # de algo que ya se publica hecho (el esquema, las placas del video).
+    _EXT_PUBLICABLES = {".pdf", ".xlsx", ".xls", ".docx",
+                        ".jpg", ".jpeg", ".png", ".gif", ".webp"}
+    # Las etapas de producción (guiones, grabación) son material interno: sus
+    # PPT y PDF no son para el estudiante.
+    _ETAPAS_INTERNAS = ("guion", "grabaci", "maquetaci", "etapa 3", "etapa 4")
+    # Papeles del proceso editorial que viajan en la misma carpeta y NO son
+    # material de cursada: plantillas vacías, el cronograma interno, el plan
+    # de estudios de la carrera, las declaraciones de uso de IA.
+    _NO_PUBLICABLE = re.compile(
+        r"plantilla|cronograma|protocolo|gaidet|plan de estudio|"
+        r"\brr\b|uso de ia|similitud|resoluci[oó]n|^ejemplo\b|[-–—]\s*ejemplo",
+        re.I)
+
+    def _publicar_material_suelto(self):
+        """Sube a 'Recursos/' el material de la carpeta que nadie referenció."""
+        from urllib.parse import quote
+        raiz = self.spec.carpeta_origen
+        sueltos = []
+        for path in getattr(self.spec, "material_suelto", []) or []:
+            if path.suffix.lower() not in self._EXT_PUBLICABLES \
+                    or self._NO_PUBLICABLE.search(path.name):
+                continue
+            try:
+                relativa = normalizar(str(path.parent.relative_to(raiz)))
+            except (ValueError, TypeError):
+                continue
+            if relativa in (".", "") or any(e in relativa
+                                            for e in self._ETAPAS_INTERNAS):
+                continue      # la raíz guarda papeles administrativos
+            sueltos.append(path)
+        if not sueltos:
+            return
+        destino = self.working / "web_resources" / "Recursos"
+        destino.mkdir(parents=True, exist_ok=True)
+        for path in sueltos:
+            shutil.copy2(path, destino / path.name)
+            self.recursos_nuevos.append(
+                (_gen_id(), f"web_resources/Recursos/{path.name}"))
+        self.spec.issues.append(Issue(Severidad.AVISO,
+            "Material de la carpeta que la planilla no ubica: lo publiqué en "
+            "los archivos del aula (Recursos/) para enlazarlo desde donde "
+            "corresponda — " + ", ".join(p.name for p in sueltos) + ".",
+            "Archivos del aula"))
 
     def _herramienta_html_incrustada(self) -> str:
         """Publica la herramienta HTML de la AFI y devuelve su bloque embebido.

@@ -99,6 +99,7 @@ def reconciliar(spec: CourseSpec, inv: InventarioCurso) -> CourseSpec:
     spec.casos = [p for _n, p in inv.casos
                   if p.suffix.lower() == ".pdf" or _clave_caso(p) not in _con_pdf]
     spec.recursos_html = [p for _n, p in inv.recursos_html]
+    spec.material_suelto = list(inv.otros)
 
     perfiles = {}  # {num_modulo: PerfilDocx}
     for num, path in inv.docx_modulos.items():

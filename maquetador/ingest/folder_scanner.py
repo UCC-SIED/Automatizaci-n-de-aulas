@@ -68,6 +68,14 @@ _NO_ES_RETRATO = re.compile(
     r"slide|placeholder|plantilla)([-_\s]|\d|$)", re.I)
 
 
+# El archivo que se nombra a sí mismo como la foto del docente.
+_PAT_FOTO_DOCENTE = re.compile(
+    # El guion bajo es carácter de palabra, así que \b no sirve de corte:
+    # "fotografia_de_la_profesora" no tiene frontera después de la "a".
+    r"\bfoto(?:graf[ií]as?)?(?![a-z])[\s_-]*(?:del?[\s_-]*(?:la[\s_-]*)?)?"
+    r"(?:docente|profesora?|contenidista)", re.I)
+
+
 def _PARECE_RETRATO(nombre_normalizado: str) -> bool:
     """¿El nombre del archivo es compatible con una foto de docente?"""
     return not _NO_ES_RETRATO.search(nombre_normalizado)
@@ -330,7 +338,14 @@ def escanear(carpeta: Path) -> InventarioCurso:
 
         # --- Imágenes ---
         if ext in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
-            if re.search(r"(figura|fig\b|fig\s|tabla|m_?\d)", nombre):
+            # El nombre del archivo lo dice sin lugar a dudas ("Fotografía del
+            # profesor.jpg"): no hace falta que la carpeta lo confirme. Va
+            # PRIMERO porque "del profesor" no es una figura ni un esquema, y
+            # la carpeta donde suele estar (la etapa del programa) no entra en
+            # ninguna de las ramas de abajo.
+            if _PAT_FOTO_DOCENTE.search(nombre):
+                inv.fotos_docente.append(path)
+            elif re.search(r"(figura|fig\b|fig\s|tabla|m_?\d)", nombre):
                 inv.imagenes_diseno.append(path)
             elif "esquema" in nombre:
                 inv.esquema.append(path)

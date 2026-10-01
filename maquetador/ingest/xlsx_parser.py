@@ -141,8 +141,11 @@ _SECCIONES = {
     "contenidos": "contenidos",
 }
 
+# "Texto:" a secas también abre la consigna escrita en la planilla: es como
+# la encabeza parte de asesoría, y sin reconocerla el foro del módulo salía
+# vacío aunque su texto estuviera ahí, a la vista, en la misma fila.
 _PREFIJOS_TEXTO_INLINE = ("texto del foro", "texto de la actividad",
-                          "texto de la consigna", "consigna:")
+                          "texto de la consigna", "consigna:", "texto:")
 
 
 def _texto_inline(fila) -> str:
