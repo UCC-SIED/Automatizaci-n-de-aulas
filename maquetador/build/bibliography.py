@@ -2,14 +2,14 @@
 """Constructor de la página de Bibliografía con la estructura oficial UCC.
 
 El aula base usa el bloque kl_custom_block_0:
-  <h3>Obligatoria</h3>
+  <h4>Obligatoria</h4>
   <div class="dp-columns-container container-fluid">
     <div class="row">  (una por referencia)
       <div class="col-md-1 col-xs-2"> icono lectura (link si hay URL) </div>
       <div class="col-md-11 col-xs-10"> texto + URL + &nbsp; </div>
     </div>
   </div>
-  <h3>Sugerida y referente</h3>
+  <h4>Sugerida y complementaria</h4>
   ...
 
 Este módulo toma el HTML crudo de la sección "referencias" del DOCX (lista
@@ -59,7 +59,11 @@ def _fila_referencia(ref_html: str, url: str) -> str:
     else:
         icono = (f'<img role="presentation" src="{ICONO_LECTURA}" alt="" '
                  f'loading="lazy">')
-        link_p = ""
+        # Sin URL, la fila queda dos líneas más corta que sus vecinas con
+        # link (texto + link + aire, contra solo texto + aire): sin este
+        # renglón de aire de más en su lugar, las referencias sin link
+        # quedan apelmazadas contra la siguiente.
+        link_p = '<p class="text-break" style="margin: 0; padding: 0;">&nbsp;</p>'
     return f"""<div class="row">
 <div class="col-md-1 col-xs-2">{icono}</div>
 <div class="col-md-11 col-xs-10">
@@ -117,10 +121,14 @@ def construir_bibliografia(refs_html: str) -> str:
     if not refs_html:
         return ""
     soup = BeautifulSoup(refs_html, "html.parser")
-    # Solo <p>: las citas APA vienen como párrafos. Los <li> son anotaciones
-    # o listas de Word que no deben interpretarse como referencias.
+    # Solo <p> de primer nivel: las citas APA vienen como párrafos sueltos.
+    # Los <li> son anotaciones o listas de Word que no deben interpretarse
+    # como referencias —y el <p> que Word mete DENTRO de un <li> tampoco: la
+    # nota al pie de la transparencia ("https://gemini.google.com/ ↑") salía
+    # publicada como una referencia más, con su iconito de lectura.
     parrafos = [p for p in soup.find_all("p")
-                if p.get_text(strip=True)]
+                if p.get_text(strip=True)
+                and p.find_parent(["li", "ol", "ul"]) is None]
     if not parrafos:
         return ""
 
@@ -160,9 +168,10 @@ def construir_bibliografia(refs_html: str) -> str:
 
     partes = []
     if obligatoria:
-        partes.append('<h3 style="text-align: left;">Obligatoria</h3>')
+        partes.append('<h4 style="text-align: left;">Obligatoria</h4>')
         partes.append(_bloque_columnas(obligatoria))
     if sugerida:
-        partes.append('<h3 style="text-align: left;">Sugerida y referente</h3>')
+        partes.append(
+            '<h4 style="text-align: left;">Sugerida y complementaria</h4>')
         partes.append(_bloque_columnas(sugerida))
     return "\n".join(partes)

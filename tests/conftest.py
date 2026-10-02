@@ -4,12 +4,65 @@
 import pytest
 from pathlib import Path
 from maquetador.models import CourseSpec, ModuloCurso, ItemCurso, TipoItem
+from tests.fixtures.curso_sintetico import construir as construir_curso_sintetico
+
+
+@pytest.fixture(scope="session")
+def curso_sintetico(tmp_path_factory):
+    """Curso de prueba generado por código, equivalente a una entrega de
+    asesoría. Ver tests/fixtures/curso_sintetico.py."""
+    destino = tmp_path_factory.mktemp("aulas_a_generar")
+    construir_curso_sintetico(destino)
+    return destino
+
+
+@pytest.fixture(scope="session")
+def paquete_sintetico(curso_sintetico, tmp_path_factory):
+    """Genera un .imscc de verdad a partir del curso sintético.
+
+    Es lo que hace que el generador —`imscc_builder.py`, el corazón del
+    proyecto— se ejercite en cada corrida. Sin esto solo se ejecutaba en la
+    máquina de quien tuviera el material de asesoría, nunca en CI.
+    """
+    from maquetador.cli import analizar_curso
+    from maquetador.extract.extractor import extraer_contenido
+    from maquetador.build.imscc_builder import generar_imscc
+
+    curso = next(p for p in curso_sintetico.iterdir() if p.is_dir())
+    spec = analizar_curso(curso, "posgrado")
+    media = extraer_contenido(spec)
+    return generar_imscc(spec, media, tmp_path_factory.mktemp("salida_imscc"))
+
+
+@pytest.fixture(scope="session")
+def paquetes_imscc(request):
+    """Paquetes .imscc a validar.
+
+    El sintético va SIEMPRE: es el único que ejercita el generador de punta a
+    punta, así que si se saltara, la validación pasaría sin haber generado
+    nada. (Pasó: con un paquete real en output/ la cobertura del builder cayó
+    de 64% a 10% sin que ningún test fallara.)
+
+    Los paquetes que el equipo haya dejado en output/ se validan además, por
+    ser material real de cátedra.
+    """
+    reales = sorted((Path(__file__).parent.parent / "output").glob("*.imscc"))
+    return [request.getfixturevalue("paquete_sintetico"), *reales]
 
 
 @pytest.fixture
-def casos_dir():
-    """Retorna la ruta del directorio 'Aulas a generar/' con archivos XLSX de prueba."""
-    return Path(__file__).parent.parent / "Aulas a generar"
+def casos_dir(curso_sintetico):
+    """Directorio con carpetas de curso para escanear.
+
+    Prioriza el material real de asesoría ('Aulas a generar/'), que es local y
+    no se versiona por peso y por tratarse de contenido de cátedra. Cuando no
+    está —CI, o un clon limpio— cae al curso sintético, para que la suite
+    corra igual en todos lados en vez de saltearse media docena de módulos.
+    """
+    real = Path(__file__).parent.parent / "Aulas a generar"
+    if real.is_dir() and any(p.is_dir() for p in real.iterdir()):
+        return real
+    return curso_sintetico
 
 
 @pytest.fixture

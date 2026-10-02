@@ -2,9 +2,10 @@
 <topicMeta identifier="g92d3462570c47a6d959e4f155825118e" xmlns="http://canvas.instructure.com/xsd/cccv1p0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://canvas.instructure.com/xsd/cccv1p0 https://canvas.instructure.com/xsd/cccv1p0.xsd">
   <topic_id>gaf321598bbb10f89c6980715c02af5c6</topic_id>
   <title>Foro de apertura</title>
-  <position/>
+  <position>1</position>
   <type>topic</type>
   <discussion_type>threaded</discussion_type>
+  <pinned>true</pinned>
   <has_group_category>false</has_group_category>
   <workflow_state>active</workflow_state>
   <module_locked>false</module_locked>

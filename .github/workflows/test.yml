@@ -2,29 +2,38 @@ name: Tests CI
 
 on:
   push:
-    branches: [main, "claude/*"]
+    branches: [main, develop, "claude/*"]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Windows a propósito: el maquetador se usa exclusivamente en Windows, y
+    # sus problemas históricos son de ese entorno (rutas que superan MAX_PATH
+    # en los nombres de página del aula base). Un runner Linux daría verde sin
+    # ejercitar nada de eso.
+    runs-on: windows-latest
     strategy:
       matrix:
         python-version: ["3.11"]
 
     steps:
-    - uses: actions/checkout@v4
+    # El aula base tiene nombres de archivo que superan los 260 caracteres:
+    # sin esto, el propio checkout falla con "Filename too long".
+    - name: Habilitar rutas largas en Git
+      run: git config --global core.longpaths true
+
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v7
       with:
         python-version: ${{ matrix.python-version }}
 
     - name: Cache Python dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v6
       with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
@@ -39,19 +48,17 @@ jobs:
 
     - name: Run pytest with coverage
       run: |
-        pytest tests/ -v --cov=maquetador --cov-report=term-missing --cov-report=html
+        pytest tests/ -v --cov=maquetador --cov-report=term-missing --cov-report=html --cov-report=xml
 
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        files: ./coverage.xml
-        flags: unittests
-        name: codecov-umbrella
-        fail_ci_if_error: false
-        verbose: true
+    # Informe propio: sin servicios externos, sin cuentas ni tokens.
+    # Rankea los módulos por líneas sin cubrir (dónde está el riesgo real,
+    # no el porcentaje plano) y corta el build si la cobertura baja del piso.
+    - name: Informe de cobertura
+      if: always()
+      run: python scripts/cobertura.py
 
     - name: Store coverage HTML report
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: coverage-report-${{ matrix.python-version }}

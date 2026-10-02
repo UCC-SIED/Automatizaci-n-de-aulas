@@ -12,7 +12,7 @@
       <lomimscc:lifeCycle>
         <lomimscc:contribute>
           <lomimscc:date>
-            <lomimscc:dateTime>2026-05-10</lomimscc:dateTime>
+            <lomimscc:dateTime>2026-09-10</lomimscc:dateTime>
           </lomimscc:date>
         </lomimscc:contribute>
       </lomimscc:lifeCycle>
@@ -97,7 +97,7 @@
         </item>
         <item identifier="g34445962547d25b79430fcdbafc2cd59">
           <title>Encuesta de valoración final</title>
-          <item identifier="g06abfef8754331f085d323ad130a0710" identifierref="gb644adab91d5999f0c2290696dddb259">
+          <item identifier="gec2430a53e664008c6772e5ffc1da215" identifierref="gb644adab91d5999f0c2290696dddb259">
             <title>Encuesta de valoración final</title>
           </item>
         </item>
@@ -211,6 +211,13 @@
     <resource identifier="g1e22bdca027ce0c24ac2eab7ef3cbe28" type="associatedcontent/imscc_xmlv1p1/learning-application-resource" href="g1e22bdca027ce0c24ac2eab7ef3cbe28/actividad-obligatoria-m3.html">
       <file href="g1e22bdca027ce0c24ac2eab7ef3cbe28/actividad-obligatoria-m3.html"/>
       <file href="g1e22bdca027ce0c24ac2eab7ef3cbe28/assignment_settings.xml"/>
+    </resource>
+    <resource identifier="g5e509b9d5d77982ac6643572e2b8678b" type="imsdt_xmlv1p1">
+      <file href="g5e509b9d5d77982ac6643572e2b8678b.xml"/>
+      <dependency identifierref="gea05acf6ffe50a57e32c9bf1770a6a61"/>
+    </resource>
+    <resource identifier="gea05acf6ffe50a57e32c9bf1770a6a61" type="associatedcontent/imscc_xmlv1p1/learning-application-resource" href="gea05acf6ffe50a57e32c9bf1770a6a61.xml">
+      <file href="gea05acf6ffe50a57e32c9bf1770a6a61.xml"/>
     </resource>
     <resource identifier="g84c5b2cd659c7b72c4a7cb52785fc14a" type="imsdt_xmlv1p1">
       <file href="g84c5b2cd659c7b72c4a7cb52785fc14a.xml"/>
@@ -412,6 +419,21 @@
     </resource>
     <resource type="webcontent" identifier="gae8db3594264ecfa028fc45391978600" href="web_resources/Multimedia cargada/2.1. La enseñanza y el profesor. Ser docente hoy. Sus trayectorias e incidencia en las prácticas docentes. Una mirada multidimensional trabajo, oficio, artesanía, profesión..png">
       <file href="web_resources/Multimedia cargada/2.1. La enseñanza y el profesor. Ser docente hoy. Sus trayectorias e incidencia en las prácticas docentes. Una mirada multidimensional trabajo, oficio, artesanía, profesión..png"/>
+    </resource>
+    <resource type="webcontent" identifier="gef08a0468f6e018f25a2168085ccfc4a" href="web_resources/Multimedia cargada/image.png">
+      <file href="web_resources/Multimedia cargada/image.png"/>
+    </resource>
+    <resource type="webcontent" identifier="g978723f6aeedf1096368f14d1d029829" href="web_resources/Multimedia cargada/image-1.png">
+      <file href="web_resources/Multimedia cargada/image-1.png"/>
+    </resource>
+    <resource type="webcontent" identifier="g17c36bc88ee840f3a4ad25ca8ffb82fd" href="web_resources/Multimedia cargada/image-2.png">
+      <file href="web_resources/Multimedia cargada/image-2.png"/>
+    </resource>
+    <resource type="webcontent" identifier="g44f748b2b571765516fa51c3f3ce36b8" href="web_resources/Multimedia cargada/image-3.png">
+      <file href="web_resources/Multimedia cargada/image-3.png"/>
+    </resource>
+    <resource type="webcontent" identifier="g9baa1041cb9d74ec0c3508edde16fb95" href="web_resources/Multimedia cargada/foroAFI (2).png">
+      <file href="web_resources/Multimedia cargada/foroAFI (2).png"/>
     </resource>
     <resource type="webcontent" identifier="g5da14f6c1815234f926abb75846ad15d" href="web_resources/course_image/Maquetacion.png">
       <file href="web_resources/course_image/Maquetacion.png"/>

@@ -412,3 +412,47 @@ class TestIntegracion:
             i for i in spec.todos_los_items() if i.detalle.get("modalidad")
         ]
         assert len(items_con_modalidad) > 0
+
+
+class TestNumeracionDeLasPaginas:
+    """La numeración de una página es SIEMPRE "N.N." (y "N.N.N." si hay otro
+    nivel): número, punto, número, punto, y nada más entre el número y el
+    texto. Cada asesor la escribe distinto en la planilla y todas esas formas
+    ("1.1", "2.1 - ", "1-1.", "1.2.1-", "1.1.3,") salieron publicadas alguna
+    vez tal cual."""
+
+    def _norm(self, titulo):
+        from maquetador.ingest.xlsx_parser import _normalizar_numeracion_titulo
+        return _normalizar_numeracion_titulo(titulo)
+
+    @pytest.mark.parametrize("entrada,esperado", [
+        ("1.1 Metodología", "1.1. Metodología"),
+        ("1.1. - Planificación financiera", "1.1. Planificación financiera"),
+        ("2.1 - Valuación de empresas.", "2.1. Valuación de empresas."),
+        ("1-1. Algo", "1.1. Algo"),
+        ("1.1 – Con raya", "1.1. Con raya"),
+        ("1.1.Sin espacio", "1.1. Sin espacio"),
+        ("4.2.  Doble espacio", "4.2. Doble espacio"),
+        ("1.1.1\tCon tab", "1.1.1. Con tab"),
+    ])
+    def test_todo_termina_en_la_convencion_unica(self, entrada, esperado):
+        assert self._norm(entrada) == esperado
+
+    @pytest.mark.parametrize("entrada,esperado", [
+        ("1.1.2 Sub tema", "1.1.2. Sub tema"),
+        ("1.2.1- Otro", "1.2.1. Otro"),
+        ("1.1.3, Coma", "1.1.3. Coma"),
+    ])
+    def test_el_tercer_nivel_tambien_lleva_punto(self, entrada, esperado):
+        assert self._norm(entrada) == esperado
+
+    @pytest.mark.parametrize("titulo", [
+        "Texto introductorio + OBJETIVOS",
+        "Módulo 2: Valuación de empresas",
+        "Foro de apertura",
+        # Un número suelto SIN puntuación detrás es el arranque del título,
+        # no una numeración de página.
+        "2020 fue un año bisagra para el sector",
+    ])
+    def test_lo_que_no_esta_numerado_no_se_toca(self, titulo):
+        assert self._norm(titulo) == titulo

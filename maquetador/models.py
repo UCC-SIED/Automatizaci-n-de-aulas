@@ -98,6 +98,8 @@ class CourseSpec:
     modulos: list = field(default_factory=list)        # list[ModuloCurso]
     afi: list = field(default_factory=list)            # actividad final integradora
     issues: list = field(default_factory=list)         # issues globales del curso
+    recursos_html: list = field(default_factory=list)  # herramientas .html sueltas
+    material_suelto: list = field(default_factory=list)  # sin fila en la planilla
 
     def todos_los_items(self):
         for it in self.items_inicio:

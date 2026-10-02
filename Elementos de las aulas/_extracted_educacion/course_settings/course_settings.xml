@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <course identifier="g9f481186288e65dc6339300ddcae6828" xmlns="http://canvas.instructure.com/xsd/cccv1p0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://canvas.instructure.com/xsd/cccv1p0 https://canvas.instructure.com/xsd/cccv1p0.xsd">
-  <title>Aula base Educación a distancia</title>
-  <course_code>Aula base Educación a distancia</course_code>
+  <title>Aula base Educación a distancia (Educación)</title>
+  <course_code>Aula base Educación a distancia (Educación)</course_code>
   <start_at/>
   <conclude_at/>
   <tab_configuration>[{"id":0},{"id":1},{"id":10},{"id":3},{"id":8},{"id":14},{"id":5},{"id":6},{"id":"context_external_tool_6"},{"id":"context_external_tool_g42124d1c626ff8aba98c3015b9eee495"},{"id":"context_external_tool_g33c73a638069b34914089977d1a4329c"},{"id":17},{"id":15,"hidden":true},{"id":2,"hidden":true},{"id":"context_external_tool_g32ee375b39296e61e3422140ebe2a152","hidden":true},{"id":"context_external_tool_ge649155c31bd3c9fb6a70a60d5146db2","hidden":true},{"id":"context_external_tool_g11684e1b145cfd17154805b576eb20a2","hidden":true},{"id":4,"hidden":true},{"id":11,"hidden":true},{"id":18,"hidden":true},{"id":"context_external_tool_g14a141b0d7f161060a9c6c4ebf30e6b2","hidden":true}]</tab_configuration>
@@ -25,19 +25,18 @@
   <allow_student_discussion_topics>true</allow_student_discussion_topics>
   <allow_student_discussion_editing>true</allow_student_discussion_editing>
   <show_announcements_on_home_page>true</show_announcements_on_home_page>
-  <home_page_announcement_limit>1</home_page_announcement_limit>
+  <home_page_announcement_limit>3</home_page_announcement_limit>
   <enable_offline_web_export>true</enable_offline_web_export>
   <usage_rights_required>false</usage_rights_required>
-  <restrict_student_future_view>true</restrict_student_future_view>
-  <restrict_student_past_view>false</restrict_student_past_view>
   <restrict_enrollments_to_course_dates>true</restrict_enrollments_to_course_dates>
   <homeroom_course>false</homeroom_course>
   <horizon_course>false</horizon_course>
   <career_learning_library_only>false</career_learning_library_only>
   <conditional_release>false</conditional_release>
-  <content_library>false</content_library>
   <grading_standard_enabled>false</grading_standard_enabled>
   <storage_quota>500000000</storage_quota>
+  <restrict_student_future_view>true</restrict_student_future_view>
+  <restrict_student_past_view>false</restrict_student_past_view>
   <overridden_course_visibility/>
   <root_account_uuid>3gMBZiQJ1O0IXYDW8plQiJb6g2evo0eoKIhZn0gN</root_account_uuid>
   <default_post_policy>

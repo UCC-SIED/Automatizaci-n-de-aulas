@@ -1,14 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <topic xmlns="http://www.imsglobal.org/xsd/imsccv1p1/imsdt_v1p1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.imsglobal.org/xsd/imsccv1p1/imsdt_v1p1  http://www.imsglobal.org/profile/cc/ccv1p1/ccv1p1_imsdt_v1p1.xsd">
   <title>Foro M1</title>
-  <text texttype="text/html">&lt;div id="dp-wrapper" class="dp-wrapper dp-hdg-i-bg-h2-dp-primary dp-hdg-i-align-h2-tc dp-hdg-i-cp-brdr-h2-dp-white dp-hdg-b-h3-brdr-b dp-hdg-d-h2-c dp-hdg-b-h4-brdr-b dp-hdg-b-h5-brdr-b dp-hdg-brdr-h4-2 dp-hdg-brdr-h5-1 dp-hdg-i-sz-h2-out dp-hdg-i-brdr-h2-2 dp-hdg-brdr-h2-1 dp-hdg-brdr-h3-2 dp-hdg-txt-h4-dp-gray dp-hdg-txt-h5-dp-white dp-hdg-d-h5-table-l dp-hdg-brdr-h6-1 dp-hdg-d-h6-table-l dp-hdg-cp-brdr-h6-dp-gray dp-hdg-bg-h6-dp-gray dp-hdg-txt-h6-dp-gray dp-hdg-i-styl-h2-pill dp-hdg-txt-h2-dp-primary dp-hdg-b-h2-brdr-t dp-hdg-b-h6-pill-r dp-hdg-b-h6-bold dp-hdg-b-h5-bold dp-hdg-b-h4-bold dp-hdg-b-h3-bold" data-header-class="dp-header dp-flat-sections" data-nav-class="container-fluid dp-link-grid dp-flat-sections dp-fs-1" data-img-url="https://designtools.ciditools.com/css/images/banner_desert_sky.png"&gt;
+  <text texttype="text/html">&lt;div id="dp-wrapper" class="dp-wrapper dp-hdg-i-bg-h2-dp-primary dp-hdg-i-align-h2-tc dp-hdg-i-cp-brdr-h2-dp-white dp-hdg-b-h3-brdr-b dp-hdg-d-h2-c dp-hdg-b-h4-brdr-b dp-hdg-brdr-h4-2 dp-hdg-brdr-h5-1 dp-hdg-i-sz-h2-out dp-hdg-i-brdr-h2-2 dp-hdg-brdr-h2-1 dp-hdg-brdr-h3-2 dp-hdg-txt-h4-dp-gray dp-hdg-d-h5-table-l dp-hdg-brdr-h6-1 dp-hdg-d-h6-table-l dp-hdg-cp-brdr-h6-dp-gray dp-hdg-i-styl-h2-pill dp-hdg-txt-h2-dp-primary dp-hdg-b-h2-brdr-t dp-hdg-b-h4-bold dp-hdg-b-h3-bold dp-hdg-d-h4-table-l dp-hdg-b-h5-pill-r custom-paragraph-padding dp-hdg-txt-h6-dp-primary dp-hdg-bg-h5-dp-gray dp-hdg-txt-h5-dp-primary dp-hdg-bg-h6-dp-white dp-hdg-b-h6-pill-r&amp;nbsp; custom-paragraph-padding" data-header-class="dp-header dp-flat-sections" data-nav-class="container-fluid dp-link-grid dp-flat-sections dp-fs-1" data-img-url="https://designtools.ciditools.com/css/images/banner_desert_sky.png"&gt;
 &lt;div id="" class="dp-banner-image"&gt;&lt;img class="dp-full-width" style="height: auto;" src="$IMS-CC-FILEBASE$/Multimedia%20cargada/Foro%20M1%20-%20EP.png" alt="Foro del módulo 1" width="530" height="106.484" data-api-endpoint="https://distancia.ucc.edu.ar/api/v1/courses/454/files/43331" data-api-returntype="File" loading="lazy"&gt;&lt;/div&gt;
 &lt;div class="dp-content-block kl_introduction"&gt;
 &lt;p class="lead dp-progress-placeholder dp-module-progress-completion dp-padding-direction-all dp-margin-direction-all" style="display: none; padding: 10px; margin: 20px;"&gt;Module Item Completion (built in browser, hidden in app)&lt;/p&gt;
 &lt;/div&gt;
 &lt;div class="dp-content-block kl_lectures2"&gt;
 &lt;h2 class="dp-has-icon" style="color: #ffffff;"&gt;&lt;i class="dp-icon fas fa-comments cp-bg-dp-primary" aria-hidden="true"&gt;&lt;span class="dp-icon-content" style="display: none;"&gt;&amp;nbsp;&lt;/span&gt;&lt;/i&gt;&lt;/h2&gt;
-&lt;p&gt;&amp;nbsp;&lt;/p&gt;
 &lt;p&gt;&amp;nbsp;&lt;/p&gt;
 &lt;p&gt;&amp;nbsp;&lt;/p&gt;
 &lt;/div&gt;

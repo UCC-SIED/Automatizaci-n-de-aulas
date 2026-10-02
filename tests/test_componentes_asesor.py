@@ -75,14 +75,65 @@ class TestConstruirPanels:
 
 
 class TestConstruirFlipcards:
+    """Snippet estándar UCC (grilla flex de 2 por fila): ver docs/referencia-
+    designplus-cidilabs-ucc.md. El molde viejo (dp-flip-card sin
+    dp-flip-card-fast, "row justify-content-center" en vez de la grilla
+    flex) no es el que usa el equipo a mano."""
+
     def test_estructura_cidilabs(self):
         html = construir_flipcards([("Frente1", "Dorso1"), ("Frente2", "Dorso2")])
-        assert 'class="row justify-content-center"' in html
-        assert html.count('class="dp-flip-card"') == 2
+        assert html.count('class="dp-flip-card dp-flip-card-fast"') == 2
         assert '<div class="dp-front-card">' in html
         assert '<div class="dp-back-card">' in html
         assert "<strong>Frente1</strong>" in html
         assert "Dorso1" in html
+
+    def test_lleva_aire_de_parrafo_completo_arriba_y_abajo(self):
+        html = construir_flipcards([("Frente1", "Dorso1")])
+        assert html.startswith("<p>&nbsp;</p>")
+        assert html.rstrip().endswith("<p>&nbsp;</p>")
+
+    def test_el_frente_no_se_confunde_con_un_subtitulo(self):
+        """El texto del frente (corto, todo en negrita) no debe quedar
+        vulnerable a la auto-detección de subtítulos de procesar_contenido:
+        lleva dp-heading-ignore Y vive dentro de dp-front-card, que
+        procesar_contenido excluye explícitamente."""
+        from maquetador.build.snippets import procesar_contenido
+        html = construir_flipcards([("Planificar (Plan)", "Identificar una "
+                                    "situación que se debe mejorar.")])
+        out = procesar_contenido(html)
+        assert "<h3>Planificar (Plan)</h3>" not in out
+        assert "Planificar (Plan)" in out
+
+    def test_saca_las_etiquetas_tarjeta_y_reverso_de_la_prosa(self):
+        """El asesor no siempre arma una tabla: a veces escribe el frente y
+        el dorso como convención dentro del propio párrafo ('Tarjeta 1:
+        Planificar (Plan)' en negrita, '. Reverso: descripción' en el
+        resto) — lo agarra _titulo_en_negrita_al_inicio, con el resto
+        envuelto en <p>…</p>. Ninguna de las dos etiquetas es contenido
+        real de la tarjeta. Caso real: PDCA en 2.1, módulo 2."""
+        html = construir_flipcards([
+            ("Tarjeta 1: Planificar (Plan)",
+             "<p>. Reverso: Identificar una situación que se debe mejorar, "
+             "analizar sus causas y definir acciones.</p>"),
+            ("Tarjeta 2: Hacer (Do)",
+             "<p>. Reverso: Implementar las acciones planificadas.</p>"),
+        ])
+        assert "Tarjeta" not in html
+        assert "Reverso" not in html
+        assert "<p><p>" not in html
+        assert "<strong>Planificar (Plan)</strong>" in html
+        assert ("Identificar una situación que se debe mejorar, analizar "
+               "sus causas y definir acciones.") in html
+
+    def test_sin_etiquetas_no_cambia_el_contenido(self):
+        """La limpieza de 'Tarjeta N:'/'Reverso:' es específica de esa
+        convención: un par común (de una tabla, sin esas etiquetas) pasa
+        sin tocarse."""
+        html = construir_flipcards([("Frente normal", "Dorso normal, sin "
+                                    "ninguna etiqueta especial.")])
+        assert "<strong>Frente normal</strong>" in html
+        assert "Dorso normal, sin ninguna etiqueta especial." in html
 
 
 class TestConstruirPopover:
@@ -98,13 +149,18 @@ class TestConstruirPopover:
 
 
 class TestAplicarCita:
-    def test_agrega_sangria(self):
+    def test_agrega_sangria_doble(self):
         el = BeautifulSoup("<p>Una cita textual.</p>", "html.parser").find("p")
         aplicar_cita(el)
         assert "margin-left: 40px" in el.get("style", "")
+        assert "margin-right: 40px" in el.get("style", "")
 
 
 class TestCableado:
+    """Acordeón y expander son variantes DISTINTAS de DesignPLUS: el acordeón
+    es dp-accordion-default. Hasta la auditoría del 2026-09-10 ambos salían
+    como dp-expander-default y estos tests fijaban ese error."""
+
     def test_acordeon_desde_texto_se_arma(self):
         soup = BeautifulSoup(
             "<div><p>Autoevaluación: la persona valora su propio desempeño.</p>"
@@ -116,7 +172,7 @@ class TestCableado:
             "accion": "acordeon", "autor": "",
         }]
         aplicar_comentarios(soup, comentarios)
-        assert "dp-panels-wrapper dp-expander-default" in str(soup)
+        assert "dp-panels-wrapper dp-accordion-default" in str(soup)
         assert comentarios[0].get("_aplicado") is True
 
     def test_acordeon_desde_tabla_se_arma(self):
@@ -133,7 +189,7 @@ class TestCableado:
             "accion": "acordeon", "autor": "",
         }]
         aplicar_comentarios(soup, comentarios)
-        assert "dp-panels-wrapper dp-expander-default" in str(soup)
+        assert "dp-panels-wrapper dp-accordion-default" in str(soup)
         assert str(soup).count('class="dp-panel-group"') == 2
         assert comentarios[0].get("_aplicado") is True
         # la tabla original NO debe quedar duplicada
@@ -169,7 +225,7 @@ class TestCableado:
         aplicar_comentarios(soup, comentarios)
         p = soup.find("p")
         assert p is not None                          # el <p> sobrevive
-        assert "dp-popover-trigger" in str(p)         # el trigger queda DENTRO del <p>
+        assert "dp-tooltip-trigger" in str(p)         # el trigger queda DENTRO del <p>
         assert comentarios[0].get("_aplicado") is True
 
     def test_tooltip_palabra_ausente_no_aplica(self):
@@ -177,7 +233,7 @@ class TestCableado:
         comentarios = [{"instruccion": "al hacer clic aparezca: X",
                         "anclado": "inexistenteylargo", "accion": "tooltip", "autor": ""}]
         aplicar_comentarios(soup, comentarios)
-        assert "dp-popover-trigger" not in str(soup)
+        assert "dp-tooltip-trigger" not in str(soup)
         assert comentarios[0].get("_aplicado") is not True
 
 
@@ -224,3 +280,36 @@ class TestParesDeTablaGrilla:
         assert "Nombre del puesto" in d["1. Identificación"]
         assert "2. Propósito" in d
         assert "existe el puesto" in d["2. Propósito"]
+
+
+class TestParesDeTablaNoConfundeUnaTablaDeDatosConUnaGrilla:
+    """Una tabla de datos común (encabezados de columna cortos + filas de
+    registros) puede colar por el mismo filtro que la grilla título/
+    descripción: fila 0 corta, y el PROMEDIO de la fila 1 más largo (alcanza
+    con que UNA columna traiga texto largo). Pero la columna que solo trae
+    un código/número corto en cada fila en realidad se ACHICA de la fila 0 a
+    la 1 ("Cláusula" → "4"), a diferencia de una grilla real, donde CADA
+    columna crece de su título a su descripción (regresión real: una tabla
+    de 3 columnas — Cláusula/Requisito/Descripción, 7 filas de datos —
+    terminaba armando un acordeón roto con las celdas sueltas)."""
+
+    def test_no_arma_pares_de_una_tabla_de_datos(self):
+        html = (
+            "<table>"
+            "<tr><td><p>Cláusula</p></td><td><p>Requisito</p></td>"
+            "<td><p>Descripción</p></td></tr>"
+            "<tr><td><p>4</p></td><td><p>Contexto de la organización</p></td>"
+            "<td><p>La organización debe comprender su entorno interno y "
+            "externo, así como las necesidades de las partes "
+            "interesadas.</p></td></tr>"
+            "<tr><td><p>5</p></td><td><p>Liderazgo</p></td>"
+            "<td><p>La alta dirección debe demostrar compromiso con el "
+            "sistema de gestión, estableciendo la política de "
+            "calidad.</p></td></tr>"
+            "<tr><td><p>6</p></td><td><p>Planificación</p></td>"
+            "<td><p>Se deben identificar riesgos y oportunidades, y "
+            "establecer objetivos de calidad junto con planes para "
+            "alcanzarlos.</p></td></tr>"
+            "</table>")
+        tabla = _soup(html).find("table")
+        assert pares_de_tabla(tabla) == []

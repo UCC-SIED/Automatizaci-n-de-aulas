@@ -17,7 +17,31 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from PIL import Image, UnidentifiedImageError
+
 from maquetador.models import Issue, Severidad
+
+# Extensiones que el escáner sabe clasificar por sí solas. Lo que no está
+# acá se husmea con Pillow: diseño a veces entrega las figuras SIN extensión
+# ("Figura 1, m. 1"), y pathlib llama "extensión" a lo que sigue al último
+# punto (acá, ".1"), así que sin husmear quedaban en `otros` —la página se
+# publicaba con la imagen embebida del DOCX, de baja calidad, sin aviso.
+_EXT_CONOCIDAS = {".docx", ".doc", ".pdf", ".xlsx", ".xls", ".pptx", ".ppt",
+                  ".txt", ".csv", ".zip", ".rar", ".7z", ".mp4", ".mov",
+                  ".avi", ".mkv", ".mp3", ".wav", ".m4a", ".jpg", ".jpeg",
+                  ".png", ".gif", ".webp", ".bmp", ".svg", ".tif", ".tiff",
+                  ".url", ".lnk", ".html", ".htm", ".xml", ".json", ".ini"}
+_EXT_POR_FORMATO_PIL = {"JPEG": ".jpg", "PNG": ".png", "GIF": ".gif",
+                        "WEBP": ".webp", "BMP": ".bmp", "TIFF": ".tiff"}
+
+
+def _extension_husmeada(path: Path) -> Optional[str]:
+    """Extensión real de una imagen cuyo nombre no la declara, o None."""
+    try:
+        with Image.open(path) as img:
+            return _EXT_POR_FORMATO_PIL.get(img.format or "")
+    except (OSError, UnidentifiedImageError, ValueError):
+        return None
 
 
 def normalizar(texto: str) -> str:
@@ -28,13 +52,53 @@ def normalizar(texto: str) -> str:
 
 
 # Archivos que son borradores o material descartado: nunca son fuente.
+# Los informes de similitud y de uso de IA son control interno de la cátedra
+# (Turnitin, declaración GAIDeT): acompañan al material pero no se publican.
 _DESCARTAR = re.compile(
     r"(borrador|copia de|elimina(r|da)|despues se borra|devoluci|"
-    r"versi[óo]n anterior|^no_|^~\$)", re.I)
+    r"versi[óo]n anterior|^no_|^~\$|[-–—]\s*similitud|"
+    r"informe de uso de ia|[-–—]\s*uso de ia)", re.I)
+
+# Imágenes que comparten carpeta con la foto del docente pero NO son un
+# retrato: fotogramas y miniaturas de la grabación, capturas de pantalla,
+# logos y placeholders de banner.
+_NO_ES_RETRATO = re.compile(
+    r"(^|[-_\s])(video|videos|frame|fotograma|thumb|thumbnail|miniatura|"
+    r"captura|screenshot|pantalla|logo|isologo|banner|portada|caratula|"
+    r"slide|placeholder|plantilla)([-_\s]|\d|$)", re.I)
+
+
+# El archivo que se nombra a sí mismo como la foto del docente.
+_PAT_FOTO_DOCENTE = re.compile(
+    # El guion bajo es carácter de palabra, así que \b no sirve de corte:
+    # "fotografia_de_la_profesora" no tiene frontera después de la "a".
+    r"\bfoto(?:graf[ií]as?)?(?![a-z])[\s_-]*(?:del?[\s_-]*(?:la[\s_-]*)?)?"
+    r"(?:docente|profesora?|contenidista)", re.I)
+
+
+def _PARECE_RETRATO(nombre_normalizado: str) -> bool:
+    """¿El nombre del archivo es compatible con una foto de docente?"""
+    return not _NO_ES_RETRATO.search(nombre_normalizado)
 
 # Carpeta(s) en la ruta que marcan material no usable
 _CARPETAS_DESCARTAR = ("borrador", "borradores", "devoluciones",
                        "version anterior", "versiones anterior")
+
+# Ficha de caso ("Ficha_Caso_Disney", "Modulo 1 - Caso_Starbucks"): es un
+# anexo del módulo —el repositorio de casos que pide la planilla—, no el
+# desarrollo teórico. Se pide la forma "Ficha_Caso…" o el "Caso_" unido por
+# guion bajo (así se nombran las fichas) para no llevarse por delante un
+# título común que arranca igual ("Casos de estudio", "Caso práctico
+# integrador"), que sí puede ser el desarrollo del módulo.
+_PAT_FICHA_CASO = re.compile(r"(?:^|[-_\s])(?:ficha[_\s-]*caso|caso_)", re.I)
+
+# El DOCX de desarrollo teórico nombrado con el módulo adelante ("M1 Luis
+# Roldán - …", "Módulo 2 - …"). Cuando el archivo abre así no hace falta que
+# la carpeta lo confirme: es el material del módulo y nada más. Sin esto, la
+# materia que guarda los tres DOCX sueltos en la etapa (sin subcarpeta
+# "Material Multimedia") quedaba sin desarrollo teórico y con las páginas de
+# contenido vacías.
+_PAT_ABRE_CON_MODULO = re.compile(r"^m(?:[oó]dulo)?\s*[-_.]?\s*\d+\b", re.I)
 
 _PAT_MODULO_NUM = re.compile(
     r"(?:m[óo]dul[a-z]*[\s_]*(\d+)|(?:^|[-_\s])m[\s_]?(\d+)(?![a-z0-9])|"
@@ -85,6 +149,8 @@ class InventarioCurso:
     fotos_docente: list = field(default_factory=list)
     imagenes_diseno: list = field(default_factory=list)   # figuras/esquemas/tablas
     esquema: list = field(default_factory=list)           # esquema introductorio
+    casos: list = field(default_factory=list)             # [(n|None, Path)] fichas de caso
+    recursos_html: list = field(default_factory=list)      # herramientas HTML
     otros: list = field(default_factory=list)
     issues: list = field(default_factory=list)
 
@@ -101,6 +167,7 @@ class InventarioCurso:
             "hoja_de_ruta": _l(self.hoja_de_ruta), "biografia": _l(self.biografia),
             "fotos_docente": _l(self.fotos_docente),
             "imagenes_diseno": _l(self.imagenes_diseno), "esquema": _l(self.esquema),
+            "casos": _l(self.casos), "recursos_html": _l(self.recursos_html),
             "issues": [i.to_dict() for i in self.issues],
         }
 
@@ -143,7 +210,16 @@ def escanear(carpeta: Path) -> InventarioCurso:
 
         nombre = normalizar(path.name)
         carpeta_padre = normalizar(str(path.parent.relative_to(raiz)))
+        # Carpeta INMEDIATA, sin el prefijo de orden ("3. Actividades" →
+        # "actividades"). No sirve la ruta entera para decidir el rol: los
+        # nombres de etapa la contaminan ("Etapa 2_ Materiales multimediales y
+        # actividades/Material Multimedia" tiene "actividades" y mandaba los
+        # DOCX de módulo a la pila de actividades).
+        carpeta_inmediata = re.sub(r"^\s*\d+\s*[-._)]\s*", "",
+                                   normalizar(path.parent.name))
         ext = path.suffix.lower()
+        if ext not in _EXT_CONOCIDAS:
+            ext = _extension_husmeada(path) or ext
         num = _numero_modulo(path.name)
 
         # --- Planilla de estructura (la lleva la etapa de maquetación) ---
@@ -164,17 +240,39 @@ def escanear(carpeta: Path) -> InventarioCurso:
         if ext == ".docx":
             if "foro" in nombre:
                 inv.foros.append((num, path))
-            elif "actividad" in nombre or re.search(r"(?<![a-z])afi(?![a-z])", nombre):
+            elif _PAT_FICHA_CASO.search(nombre):
+                # Anexo del módulo (repositorio de casos), no su desarrollo
+                # teórico: si compite por el slot del módulo le gana al
+                # multimedial real solo por orden alfabético.
+                inv.casos.append((num, path))
+            elif "actividad" in nombre or re.search(r"(?<![a-z])afi(?![a-z])", nombre) \
+                    or (carpeta_inmediata.startswith("actividad")
+                        and "plantilla" not in nombre
+                        and "guion" not in nombre and "biograf" not in nombre):
                 # "afi" como palabra aislada. Se usa lookaround de LETRAS (no \b)
                 # porque '_' es carácter de palabra y \bafi\b no matchea "AFI_…"
                 # (nombre real: "AFI_ El liderazgo desde mi mirada.docx").
+                # La carpeta también alcanza: cada asesor abrevia a su gusto
+                # ("AEO 1 - GRyI.docx" = actividad de evaluación obligatoria) y
+                # sin esto el DOCX caía en `otros`, dejando la fila de la
+                # planilla sin fuente aunque nombrara el archivo exacto.
                 inv.actividades.append((num, path))
             elif "video" in nombre or "guion" in nombre or "audiovisual" in nombre \
-                    or ("grabaci" in carpeta_padre and "biograf" not in nombre):
+                    or (("grabaci" in carpeta_padre
+                         or carpeta_inmediata.startswith("video"))
+                        and "biograf" not in nombre):
                 inv.guiones_video.append((num, path))
-            elif "biograf" in nombre or "curriculum" in nombre \
+            elif "biograf" in nombre or "biodata" in nombre \
+                    or "curriculum" in nombre \
                     or re.search(r"\bcv\b", nombre) \
+                    or "bio" in carpeta_inmediata \
                     or "presentacion" in nombre and "foro" not in nombre:
+                # "biodata" es como lo nombra la planilla en varios cursos y
+                # quedaba sin clasificar: la titulación del docente salía
+                # "sin fuente" aunque el archivo estuviera en la carpeta.
+                # La CARPETA también alcanza: en "Bio y Foto" el DOCX suele
+                # llamarse con el nombre del docente y nada más
+                # ("LUIS ROLDÁN GONZÁLEZ DE LAS CUEVAS.docx").
                 inv.biografia.append(path)
             elif "hoja de ruta" in nombre or "hoja_de_ruta" in nombre:
                 inv.hoja_de_ruta.append(path)
@@ -187,8 +285,10 @@ def escanear(carpeta: Path) -> InventarioCurso:
                 inv.otros.append(path)
             elif ("modulo" in nombre or "multimedial" in nombre or num is not None) \
                     and ("multimedial" in carpeta_padre or "modulo" in carpeta_padre
-                         or "desarrollo" in carpeta_padre or "multimedial" in nombre
-                         or "modulo" in nombre):
+                         or "desarrollo" in carpeta_padre
+                         or "material" in carpeta_padre
+                         or "multimedial" in nombre or "modulo" in nombre
+                         or _PAT_ABRE_CON_MODULO.match(nombre)):
                 if num is None:
                     num = _numero_modulo(carpeta_padre) or 0
                 if num in inv.docx_modulos:
@@ -215,18 +315,37 @@ def escanear(carpeta: Path) -> InventarioCurso:
             continue
 
         # --- PDFs ---
+        # --- Herramienta HTML suelta ---
+        # El asesor entrega una actividad interactiva como un .html autónomo
+        # ("AFI_PiramideDelNeurolider_2.html", hecho con IA): no es una
+        # página del aula, es un recurso que el alumno usa aparte.
+        if ext in (".html", ".htm"):
+            inv.recursos_html.append((num, path))
+            continue
+
         if ext == ".pdf":
             if "programa" in nombre and "10a" not in nombre:
                 inv.programa.append(path)
             elif "hoja de ruta" in nombre:
                 inv.hoja_de_ruta.append(path)
+            elif _PAT_FICHA_CASO.search(nombre):
+                # El PDF de la ficha (el que sale de diseño) es la versión
+                # publicable del repositorio de casos.
+                inv.casos.append((num, path))
             else:
                 inv.otros.append(path)
             continue
 
         # --- Imágenes ---
         if ext in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
-            if re.search(r"(figura|fig\b|fig\s|tabla|m_?\d)", nombre):
+            # El nombre del archivo lo dice sin lugar a dudas ("Fotografía del
+            # profesor.jpg"): no hace falta que la carpeta lo confirme. Va
+            # PRIMERO porque "del profesor" no es una figura ni un esquema, y
+            # la carpeta donde suele estar (la etapa del programa) no entra en
+            # ninguna de las ramas de abajo.
+            if _PAT_FOTO_DOCENTE.search(nombre):
+                inv.fotos_docente.append(path)
+            elif re.search(r"(figura|fig\b|fig\s|tabla|m_?\d)", nombre):
                 inv.imagenes_diseno.append(path)
             elif "esquema" in nombre:
                 inv.esquema.append(path)
@@ -234,11 +353,18 @@ def escanear(carpeta: Path) -> InventarioCurso:
                 inv.imagenes_diseno.append(path)
             elif "grabaci" in carpeta_padre or "maquetaci" in carpeta_padre \
                     or "etapa 3" in carpeta_padre or "etapa 4" in carpeta_padre \
-                    or ("foto" in carpeta_padre and "docente" in carpeta_padre):
+                    or ("foto" in carpeta_padre
+                        and ("docente" in carpeta_padre or "bio" in carpeta_padre)):
                 # La foto del docente viene con el material de grabación, en
-                # la etapa de maquetación, o en una carpeta dedicada "Foto (y
-                # CV) docente".
-                inv.fotos_docente.append(path)
+                # la etapa de maquetación, o en una carpeta dedicada: "Foto (y
+                # CV) docente", "Bio y Foto". En esas carpetas conviven con capturas y
+                # miniaturas de video: si el nombre delata que no es un
+                # retrato, no puede terminar de foto del docente (ya pasó:
+                # "video-01.jpg" salió publicado como la foto del profesor).
+                if _PARECE_RETRATO(nombre):
+                    inv.fotos_docente.append(path)
+                else:
+                    inv.otros.append(path)
             else:
                 inv.otros.append(path)
             continue

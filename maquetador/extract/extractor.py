@@ -40,8 +40,8 @@ def extraer_contenido(spec: CourseSpec) -> dict:
                     marcadores[f"item_{item.orden}"] = titulo_docx
 
             try:
-                secciones, imagenes, faltantes, comentarios = segmentar_docx(
-                    Path(docx_path), marcadores)
+                secciones, imagenes, faltantes, comentarios, origenes_otra_pagina = \
+                    segmentar_docx(Path(docx_path), marcadores)
             except Exception as e:
                 spec.issues.append(Issue(Severidad.BLOQUEANTE,
                     f"Error segmentando '{docx_path.name}': {e}",
@@ -51,12 +51,32 @@ def extraer_contenido(spec: CourseSpec) -> dict:
             for nombre, data, ctype in imagenes:
                 media[f"m{modulo.numero}_{nombre}"] = (data, ctype)
 
+            # Contenido (típicamente un foro) que el asesor marcó "va en otra
+            # página": no es de esta página, pero sí es la consigna real de
+            # otro ítem del módulo (un foro sin DOCX propio, escrito adentro
+            # de la lectura) — el builder lo usa para cargar ese ítem Y para
+            # ubicarlo justo después de la página de la que se sacó.
+            if origenes_otra_pagina:
+                pagina_por_clave = {f"item_{it.orden}": it for it in items}
+                lista = getattr(modulo, "extras_otra_pagina", [])
+                for o in origenes_otra_pagina:
+                    pagina = pagina_por_clave.get(o["pagina_origen"])
+                    lista.append({
+                        "html": o["html"].replace(
+                            "__MEDIA__/", f"__MEDIA__/m{modulo.numero}_"),
+                        "pagina_titulo": pagina.detalle.get("titulo_docx", "")
+                                         if pagina else "",
+                    })
+                modulo.extras_otra_pagina = lista
+
             # Pedidos de maquetación del asesor (comentarios del DOCX) que no se
             # aplicaron solos: se avisan para armarlos a mano en la revisión.
             for c in comentarios:
                 etiqueta = {"acordeon": "armar un ACORDEÓN (editor DesignPLUS)",
                             "flip_card": "armar una FLIP CARD (editor DesignPLUS)",
                             "tabs": "armar TABS (editor DesignPLUS)",
+                            "tabs_vertical": "armar TABS VERTICALES "
+                                             "(editor DesignPLUS)",
                             "expander": "armar un EXPANDER",
                             "tooltip": "armar un TOOLTIP",
                             "cita": "marcar como CITA",
@@ -104,7 +124,8 @@ def extraer_contenido(spec: CourseSpec) -> dict:
             extras = {k: v.replace("__MEDIA__/", f"__MEDIA__/m{modulo.numero}_")
                       if k in ("intro", "objetivos") else v
                       for k, v in secciones.items()
-                      if k in ("conclusion", "referencias", "intro", "objetivos") and v}
+                      if k in ("conclusion", "referencias", "intro",
+                               "objetivos", "transparencia") and v}
             if extras:
                 modulo_extras = getattr(modulo, "extras", {})
                 modulo_extras.update(extras)

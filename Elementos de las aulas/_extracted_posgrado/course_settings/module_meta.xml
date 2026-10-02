@@ -256,7 +256,7 @@
       </prerequisite>
     </prerequisites>
     <items>
-      <item identifier="g06abfef8754331f085d323ad130a0710">
+      <item identifier="gec2430a53e664008c6772e5ffc1da215">
         <content_type>Quizzes::Quiz</content_type>
         <workflow_state>active</workflow_state>
         <title>Encuesta de valoración final</title>

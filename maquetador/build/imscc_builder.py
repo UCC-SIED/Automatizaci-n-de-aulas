@@ -40,11 +40,24 @@ from maquetador.models import CourseSpec, TipoItem, Issue, Severidad
 from maquetador.build.pages import (slugify, pagina_intro, pagina_contenido,
                                     pagina_bibliografia)
 from maquetador.build.snippets import (separar_consignas, procesar_contenido,
+                                       separar_foro_de_consultas,
+                                       urls_de_notas_al_pie,
+                                       enlazar_notas_al_pie,
                                        indexar_figuras_diseno,
-                                       reemplazar_figuras_diseno)
+                                       reconciliar_figuras_diseno,
+                                       referencias_de_figuras,
+                                       reemplazar_figuras_diseno,
+                                       maquetar_actividad,
+                                       nombre_publicado_de_figura,
+                                       bloque_video_studio,
+                                       token_de_studio,
+                                       contenido_declara_video,
+                                       bloque_recurso_incrustado,
+                                       _FIG_CLASES_EXPANDIBLE, _FIG_ANCHO_MAX)
 from maquetador.build.bibliography import construir_bibliografia
-from maquetador.extract.segmenter import ImagenInline
+from maquetador.extract.segmenter import ImagenInline, _MAMMOTH_STYLE_MAP
 from maquetador.ingest.folder_scanner import normalizar
+from maquetador.ingest.docx_comments import extraer_comentarios, aplicar_comentarios
 from processors.cidilabs_builder import DP_WRAPPER_CLASSES
 
 logger = logging.getLogger("imscc_builder")
@@ -81,6 +94,58 @@ def _genero_texto(texto: str) -> str:
     return None
 
 
+def _elegir_foto_docente(candidatas: list, nombre: str):
+    """De las fotos candidatas, la que más se parece al retrato del docente.
+
+    En la carpeta de grabación conviven la foto del profesor con fotogramas y
+    capturas; el escáner ya descarta los nombres que se delatan, pero cuando
+    quedan varias hay que elegir bien: gana la que menciona el nombre o el
+    apellido del docente. Si ninguna lo menciona, la primera (orden estable).
+    """
+    if not candidatas:
+        return None
+    partes = [normalizar(p) for p in (nombre or "").split() if len(p) >= 4]
+    if partes:
+        for path in candidatas:
+            stem = normalizar(path.stem)
+            if any(p in stem for p in partes):
+                return path
+    return candidatas[0]
+
+
+# Herramientas colaborativas externas: la planilla las nombra en la columna de
+# referencia en lugar de un DOCX ("Actividad sugerida | Padlet"). No hay archivo
+# que volcar, pero la actividad existe igual y necesita su lugar en Canvas.
+_HERRAMIENTAS_EXTERNAS = ("padlet", "mural", "miro", "jamboard", "wooclap",
+                          "mentimeter", "flipgrid", "genially")
+
+
+_PIDE_INTERVENIR = ("coment", "aporte", "respond", "particip", "intervenc")
+
+
+def _consigna_es_de_foro(html: str) -> bool:
+    """¿Esta consigna es la de un foro, más allá de cómo esté rotulada?
+
+    El asesor rotula la caja "Voces que construyen (Mural colaborativo)" pero
+    adentro invita a participar de un foro y a comentar los aportes de los
+    colegas. Lo que define el destino es la consigna, no la etiqueta."""
+    if not html:
+        return False
+    texto = normalizar(BeautifulSoup(html, "html.parser").get_text(" ", strip=True))
+    return "foro" in texto and any(k in texto for k in _PIDE_INTERVENIR)
+
+
+def _herramienta_externa(item) -> str:
+    """Nombre de la herramienta que la planilla puso como referencia, o ""."""
+    ref = normalizar(item.detalle.get("referencia", "") or "")
+    if not ref or len(ref) > 40:
+        return ""
+    for herramienta in _HERRAMIENTAS_EXTERNAS:
+        if herramienta in ref:
+            return herramienta.capitalize()
+    return ""
+
+
 def _leer(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
@@ -105,17 +170,23 @@ def _buscar_archivo_wiki(working: Path, patron: str) -> Path:
 
 
 def _copytree_longpath(src: Path, dst: Path) -> None:
-    r"""shutil.copytree con soporte de rutas largas en Windows (prefijo \\?\)."""
+    r"""shutil.copytree con soporte de rutas largas en Windows (prefijo \\?\).
+
+    El proyecto se usa en Windows, pero el prefijo se aplica solo si el SO es
+    ese: aplicado a una ruta POSIX queda '\\?\/home/...', que no existe, y
+    entonces os.walk no itera y la copia sale VACÍA sin lanzar ningún error —
+    el fallo recién aparece más tarde, al leer el imsmanifest. Fallar en
+    silencio es peor que no soportarlo. (Mismo criterio que _rmtree_longpath.)
+    """
     import os
     src_s = str(src.resolve())
     dst_s = str(dst.resolve())
-    lp_src = "\\\\?\\" + src_s if not src_s.startswith("\\\\") else src_s
-    lp_dst = "\\\\?\\" + dst_s if not dst_s.startswith("\\\\") else dst_s
-    import ctypes
-    kernel32 = ctypes.windll.kernel32 if hasattr(ctypes, "windll") else None
+    es_windows = os.name == "nt"
+    lp_src = "\\\\?\\" + src_s if es_windows and not src_s.startswith("\\\\") else src_s
+    lp_dst = "\\\\?\\" + dst_s if es_windows and not dst_s.startswith("\\\\") else dst_s
 
     for root, dirs, files in os.walk(lp_src):
-        rel = root[len(lp_src):].lstrip("\\")
+        rel = root[len(lp_src):].lstrip("\\/")
         dest_dir = os.path.join(lp_dst, rel) if rel else lp_dst
         os.makedirs(dest_dir, exist_ok=True)
         for f in files:
@@ -163,6 +234,19 @@ def _rmtree_longpath(path: Path) -> None:
         pass
 
 
+def _titulacion_de_planilla(item) -> list:
+    """Renglones de titulación que el asesor escribió en la columna LINK.
+
+    Esa columna a veces trae un enlace (Drive, Canvas Studio) y a veces el
+    texto mismo. Solo se toma cuando es texto: un enlace no es una
+    biografía, y publicarlo dejaría una URL suelta en la ficha del docente.
+    """
+    texto = (item.detalle or {}).get("referencia", "").strip()
+    if not texto or re.match(r"https?://", texto, re.I) or len(texto) < 25:
+        return []
+    return [r.strip() for r in texto.splitlines() if r.strip()]
+
+
 class GeneradorAula:
     def __init__(self, spec: CourseSpec, media: dict, output_dir: Path):
         self.spec = spec
@@ -174,10 +258,34 @@ class GeneradorAula:
         self.recursos_nuevos = []   # [(identifier, href)]
         self.topics_escritos = set()       # rids de foros ya llenados
         self.assignments_escritos = set()  # rids de actividades ya llenadas
+        self._reorders_pendientes = []     # [(rid, pagina_titulo)] p/ organizations
         self.paginas_por_modulo = {}       # {n: [(page_id, titulo)]} para el syllabus
+        self.modulo_por_slug = {}          # {slug de la página: nº de módulo}
+        self.rid_por_archivo = {}          # {nombre del DOCX: rid del assignment}
         self.indice_diseno = indexar_figuras_diseno(
             getattr(spec, "imagenes_diseno", []))
+        self._conciliar_figuras_mal_rotuladas()
         self.figuras_usadas = set()        # paths de DISEÑO aprovechados
+
+    def _conciliar_figuras_mal_rotuladas(self):
+        """Rescata las figuras de DISEÑO nombradas con el módulo equivocado."""
+        if not self.indice_diseno:
+            return
+        referencias = {}
+        for modulo in self.spec.modulos:
+            refs = set()
+            for item in modulo.items:
+                if item.fuente.html:
+                    refs |= referencias_de_figuras(item.fuente.html)
+            referencias[modulo.numero] = refs
+        for mod, tipo, num, mod_nombre, path in reconciliar_figuras_diseno(
+                self.indice_diseno, referencias):
+            self.spec.issues.append(Issue(
+                Severidad.AVISO,
+                f"El archivo de DISEÑO '{path.name}' dice módulo {mod_nombre}, "
+                f"pero la {tipo} {num} la pide el módulo {mod}: la uso ahí. "
+                f"Conviene renombrarlo en la carpeta de Diseño.",
+                f"Módulo {mod}"))
 
     # ------------------------------------------------------------------ #
     def generar(self) -> Path:
@@ -205,10 +313,13 @@ class GeneradorAula:
         self._eliminar_encuesta_valoracion()
         self._limpiar_recursos_no_usados()
         self._inyectar_afi()
+        self._resolver_enlaces_de_actividad()
         self._avisar_recursos_vacios()
         self._personalizar_inicio()
         self._construir_syllabus()
         self._empaquetar_media()
+        self._publicar_material_suelto()
+        self._unificar_tema_wrapper()
         self._registrar_recursos()
         self._renumerar_posiciones()
         # Con todos los archivos válidos ya en su sitio, cualquier <resource>
@@ -250,6 +361,42 @@ class GeneradorAula:
             _escribir(settings, txt)
 
     # ------------------------------------------------------------------ #
+    def _video_de_planilla(self, items, ctx) -> str:
+        """Hueco del video del módulo, según lo que declara la planilla.
+
+        Cuando el DOCX no marca dónde va el video ("Embeber video: …"), la
+        planilla sí lo dice: una fila de tipo VIDEO con el enlace de Canvas
+        Studio en la columna LINK. Sin mirarla, el módulo salía sin ningún
+        bloque de video y no quedaba ni el lugar para pegarlo.
+
+        El embed NO se arma: el enlace de la planilla es el de edición del
+        medio y su token no sirve como id del reproductor (ver
+        `token_de_studio`). Queda el hueco con el enlace en el comentario,
+        que es como se venía entregando."""
+        if any(contenido_declara_video(i.fuente.html) for i in items):
+            return ""      # el DOCX ya dice dónde va: no se duplica el bloque
+        for item in items:
+            if item.tipo != TipoItem.VIDEO:
+                continue
+            url = (item.detalle or {}).get("referencia", "")
+            if token_de_studio(url)[0]:
+                self.spec.issues.append(Issue(Severidad.AVISO,
+                    f"El video de este módulo ya está en Canvas Studio ({url}), "
+                    "pero el embed se pega a mano: quedó el hueco en la página "
+                    "de Introducción, debajo de los Objetivos.", ctx))
+                return bloque_video_studio(referencia=url)
+            # Sin enlace todavía (la fila está "Pendiente", el video se graba
+            # o se sube después): el hueco va igual. Que el video no esté
+            # subido no cambia dónde va, y sin el bloque nadie se acuerda de
+            # ubicarlo cuando llega.
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                f"'{item.titulo[:60]}': la planilla lo declara pero todavía no "
+                "tiene el enlace de Canvas Studio. Dejé el hueco en la página "
+                "de Introducción, debajo de los Objetivos.", ctx))
+            return bloque_video_studio(referencia=item.titulo)
+        return ""
+
+    # ------------------------------------------------------------------ #
     def _procesar_modulo(self, modulo):
         n = modulo.numero
         ctx = f"Módulo {n}"
@@ -284,7 +431,9 @@ class GeneradorAula:
                 intro_html=self._rutear_media(intro_html),
                 objetivos_html=self._rutear_media(objetivos_html),
                 banner_src=_extraer_banner(viejo),
-                identifier=_extraer_identifier(viejo))
+                identifier=_extraer_identifier(viejo),
+                tema=self.spec.tema,
+                video_html=self._video_de_planilla(modulo.items, ctx))
             _escribir(archivo_intro, nuevo)
             logger.info(f"  [M{n}] Introducción sobreescrita")
         elif intro_html:
@@ -309,7 +458,10 @@ class GeneradorAula:
                     consignas.extend(cs)
         foros_emb = [(t, b) for tipo, t, b in consignas if tipo == "foro"]
         if foros_emb:
-            self._inyectar_consigna_foro(n, foros_emb, ctx)
+            self._inyectar_consigna_foro(
+                n, foros_emb, ctx,
+                obligatorio=any("obligatori" in normalizar(t)
+                                for t, _ in foros_emb))
         # Un DOCX dedicado de actividad (p.ej. "Actividad obligatoria I.docx")
         # manda sobre un puntero embebido en el texto ("te invito a realizar la
         # actividad obligatoria…"): si el módulo trae el archivo, se deja el slot
@@ -340,6 +492,9 @@ class GeneradorAula:
         # --- foros con la consigna escrita en la planilla (no como DOCX) ---
         self._inyectar_foros_de_planilla(modulo, ctx)
 
+        # --- foros con la consigna escrita adentro de otra página ---
+        self._inyectar_otra_pagina(modulo, ctx)
+
         # --- foros y actividades que llegan como DOCX separados ---
         self._inyectar_foros_y_actividades(modulo, ctx)
 
@@ -364,6 +519,14 @@ class GeneradorAula:
                 f"El módulo {n} no tiene páginas con contenido extraído; "
                 "queda el placeholder del aula base.", ctx))
 
+        # Recién ahora existen en organizations los <item> de las páginas:
+        # se resuelven los reordenamientos que quedaron pendientes de
+        # _inyectar_otra_pagina (si el módulo no tenía páginas, no hay
+        # después de qué ubicarlos: quedan donde ya estaban).
+        for rid, pagina_titulo in self._reorders_pendientes:
+            self._reordenar_item_despues_de_pagina(rid, pagina_titulo)
+        self._reorders_pendientes = []
+
         # --- Bibliografía MN ---
         referencias = getattr(modulo, "extras", {}).get("referencias", "")
         archivo_bib = _buscar_archivo_wiki(self.working, f"bibliografia-m{n}*.html")
@@ -373,7 +536,8 @@ class GeneradorAula:
                 titulo=f"Bibliografía M{n}",
                 body_html=self._rutear_media(referencias),
                 banner_src=_extraer_banner(viejo),
-                identifier=_extraer_identifier(viejo))
+                identifier=_extraer_identifier(viejo),
+                tema=self.spec.tema)
             _escribir(archivo_bib, nuevo)
             logger.info(f"  [M{n}] Bibliografía sobreescrita")
 
@@ -391,8 +555,10 @@ class GeneradorAula:
             html = pagina_contenido(
                 titulo=item.titulo,
                 body_html=self._rutear_media(item.fuente.html),
-                banner_src=banner, identifier=page_id)
+                banner_src=banner, identifier=page_id,
+                tema=self.spec.tema)
             _escribir(self.working / href, html)
+            self.modulo_por_slug[slug] = n
             nuevos.append((page_id, href, item.titulo))
         # Para el índice del programa (syllabus): páginas reales del módulo.
         self.paginas_por_modulo[n] = [(pid, t) for pid, _h, t in nuevos]
@@ -480,17 +646,46 @@ class GeneradorAula:
             if nt:
                 cambios.append("tutor sección 1 (= docente)")
 
+        # --- banner de la portada ---
+        # El aula base trae el placeholder "Nombre de la asignatura - EP.png"
+        # y, como alt, el propio nombre del archivo. El alt tiene que describir
+        # la imagen: va el nombre de la asignatura.
+        if self.spec.nombre:
+            html, nb = re.subn(r'alt="Nombre de la asignatura[^"]*"',
+                               f'alt="{xml_escape(self.spec.nombre)}"', html)
+            if nb:
+                cambios.append("alt del banner")
+
         # --- foto del docente ---
         foto_item = next((i for k, i in items.items() if "fotografia" in k), None)
         foto = (foto_item.fuente.archivo if foto_item and foto_item.fuente.archivo
-                else (getattr(self.spec, "fotos_docente", []) or [None])[0])
+                else _elegir_foto_docente(
+                    getattr(self.spec, "fotos_docente", []) or [], nombre))
         if foto and foto.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"):
-            destino_rel = f"web_resources/Multimedia cargada/{foto.name}"
             (self.working / "web_resources" / "Multimedia cargada").mkdir(
                 parents=True, exist_ok=True)
-            shutil.copy2(foto, self.working / destino_rel)
+            # Recorte cuadrado centrado en el rostro (como hace el equipo a
+            # mano con la herramienta de recorte circular de Fotor): el
+            # círculo final lo sigue poniendo el CSS de abajo, pero sin la
+            # foto centrada en la cara el object-fit la dejaba descentrada o
+            # "estirada" según el encuadre original. Si el recorte falla por
+            # cualquier motivo (foto corrupta, sin OpenCV, etc.) se sigue con
+            # la foto original: no bloquea la generación del paquete.
+            nombre_final = foto.name
+            try:
+                from maquetador.build.imagenes import recortar_rostro_circular
+                recorte = (self.working / "web_resources" / "Multimedia cargada"
+                          / f"{foto.stem}_circular.png")
+                recortar_rostro_circular(foto, recorte)
+                nombre_final = recorte.name
+            except Exception as e:
+                logger.warning(f"  No pude recortar la foto del docente "
+                               f"centrada en el rostro ({e}): uso la original.")
+                shutil.copy2(foto, self.working / "web_resources"
+                            / "Multimedia cargada" / foto.name)
+            destino_rel = f"web_resources/Multimedia cargada/{nombre_final}"
             self.recursos_nuevos.append((_gen_id(), destino_rel))
-            url = "$IMS-CC-FILEBASE$/Multimedia%20cargada/" + quote(foto.name)
+            url = "$IMS-CC-FILEBASE$/Multimedia%20cargada/" + quote(nombre_final)
             html, n = re.subn(
                 r'(<img[^>]*alt="Avatar docente"[^>]*src=")[^"]*(")',
                 lambda m: m.group(1) + url + m.group(2), html)
@@ -505,6 +700,14 @@ class GeneradorAula:
                     html = html.replace(
                         'alt="Avatar docente"',
                         f'alt="Fotografía del docente {xml_escape(nombre)}"')
+                # La foto del docente va en círculo: el border-radius la
+                # redondea y object-fit evita que se deforme si el recorte de
+                # arriba no llegó a dejarla perfectamente cuadrada (o si se
+                # usó la original sin recortar, por algún error).
+                html = re.sub(
+                    r'(<img[^>]*alt="Fotograf[íi]a del docente[^"]*")',
+                    r'\1 style="border-radius: 50%; object-fit: cover; '
+                    r'width: 150px; height: 150px;"', html, count=1)
                 cambios.append("foto del docente")
             # Tutor de la Sección 1 = mismo docente autor por defecto (foto).
             html, nt = re.subn(
@@ -515,10 +718,21 @@ class GeneradorAula:
                 if nombre:
                     html = html.replace(
                         'alt="Avatar tutor"',
-                        f'alt="Fotografía del docente {xml_escape(nombre)}"')
+                        f'alt="Fotografía del tutor {xml_escape(nombre)}"')
+                # La del tutor va con el borde institucional (no en círculo).
+                html = re.sub(
+                    r'(<img)([^>]*alt="Fotograf[íi]a del tutor[^"]*")',
+                    r'\1 class="dp-image-rounded-10 dp-image-bordered"'
+                    r' style="height: auto; width: 100px;"\2', html, count=1)
                 cambios.append("foto del tutor (= docente)")
 
         # --- titulación / biografía ---
+        # Dos fuentes: un DOCX de biografía, o —cuando no hay archivo— el
+        # texto que el asesor escribe directo en la columna LINK de la
+        # planilla, con un renglón por ítem (Selección y Optimización de
+        # Inversiones). Sin la segunda, la titulación salía vacía y había que
+        # completarla a mano aunque estuviera escrita en la planilla.
+        renglones = []
         if bio_item and bio_item.fuente.archivo \
                 and bio_item.fuente.archivo.suffix.lower() == ".docx":
             try:
@@ -527,26 +741,61 @@ class GeneradorAula:
                 parrafos = [p.text.strip() for p in doc.paragraphs
                             if p.text.strip()
                             and not normalizar(p.text).startswith("biograf")]
-                bio = " ".join(parrafos)
-                if nombre and normalizar(bio).startswith(normalizar(nombre)):
-                    bio = bio[len(nombre):].lstrip(" .,:;-–")
+                renglones = [" ".join(parrafos)]
             except Exception:
-                bio = ""
-            if bio:
-                bio = bio.replace("\\", "").strip()
-                html, n = re.subn(r"(>)\s*Titulación relevante\.?\s*(<)",
-                                  lambda m: m.group(1) + xml_escape(bio) + m.group(2),
-                                  html, count=1)
-                if n:
-                    cambios.append("titulación/biografía")
-                # Género para "Profesor/a autor/a" (el aula base trae el
-                # femenino por defecto): se ajusta a masculino si la bio lo
-                # indica claramente.
-                if _genero_texto(bio + " " + nombre) == "m":
-                    html, ng = re.subn(r">\s*Profesora autora\s*<",
-                                       ">Profesor autor<", html, count=1)
-                    if ng:
-                        cambios.append("género docente")
+                renglones = []
+        elif bio_item:
+            renglones = _titulacion_de_planilla(bio_item)
+        bio = ""
+        if renglones:
+            if nombre and normalizar(renglones[0]).startswith(normalizar(nombre)):
+                # El asesor suele abrir con el nombre del docente, que ya está
+                # arriba en la ficha: sin sacarlo saldría dos veces.
+                renglones[0] = renglones[0][len(nombre):].lstrip(" .,:;-–")
+            renglones = [r.replace("\\", "").strip() for r in renglones if r.strip()]
+            bio = " ".join(renglones)
+        if bio:
+            marcado = "<br>".join(xml_escape(r) for r in renglones)
+            html, n = re.subn(r"(>)\s*Titulación relevante\.?\s*(<)",
+                              lambda m: m.group(1) + marcado + m.group(2),
+                              html, count=1)
+            if n:
+                cambios.append("titulación/biografía")
+            # Género para "Profesor/a autor/a" (el aula base trae el
+            # femenino por defecto): se ajusta a masculino si la bio lo
+            # indica claramente.
+            if _genero_texto(bio + " " + nombre) == "m":
+                html, ng = re.subn(r">\s*Profesora autora\s*<",
+                                   ">Profesor autor<", html, count=1)
+                if ng:
+                    cambios.append("género docente")
+
+        # --- video de bienvenida (Canvas Studio) ---
+        # El bloque "Te damos la bienvenida" del aula base queda con su
+        # párrafo vacío: el embed se pega a mano. Si la planilla trae el
+        # enlace del video ya subido, se avisa cuál va.
+        video_item = next((i for k, i in items.items()
+                           if "video" in k and "introduc" in k), None)
+        url_video = (video_item.detalle or {}).get("referencia", "") \
+            if video_item else ""
+        if token_de_studio(url_video)[0]:
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                f"El video de bienvenida ya está en Canvas Studio "
+                f"({url_video}): pegar su embed en el bloque 'Te damos la "
+                "bienvenida' de la página de inicio.", "Página de inicio"))
+
+        # Si no hubo biografía que poner, el placeholder del aula base no puede
+        # quedar publicado: "Titulación relevante." ya salió así en un curso.
+        # Se vacía el campo y se avisa para completarlo a mano.
+        html, np = re.subn(r"(>)\s*Titulación relevante\.?\s*(<)",
+                           lambda m: m.group(1) + "&nbsp;" + m.group(2),
+                           html, count=1)
+        if np:
+            cambios.append("placeholder de titulación vaciado")
+            self.spec.issues.append(Issue(Severidad.INFO,
+                "No se encontró la biografía/titulación del docente: el campo "
+                "quedó vacío en la página de inicio, hay que completarlo a mano.",
+                "Página de inicio"))
 
         if cambios:
             _escribir(pagina, html)
@@ -619,13 +868,40 @@ class GeneradorAula:
                 '<span class="dp-icon-content" style="display: none;">&nbsp;</span>'
                 '</i> Contenido</h2>\n'
                 '<div class="dp-panels-wrapper dp-expander-default '
-                'dp-panel-color-dp-primary dp-panel-active-color-dp-secondary" '
+                'dp-panel-color-dp-primary dp-panel-active-color-dp-secondary '
+                'dp-panel-hover-color-dp-secondary" '
                 'title="contenido insertado">\n' + "\n".join(grupos)
                 + '\n</div>\n</div>')
             nuevo = self._reemplazar_bloque_div(html, "kl_custom_block_2", bloque2)
             if nuevo != html:
                 html = nuevo
                 cambios.append(f"índice ({len(grupos)} módulos)")
+
+        # --- Bloque "Transparencia del documento" ---
+        # Va pegado abajo del bloque que enlaza el programa en PDF, y una
+        # sola vez: el docente repite la misma declaración en los tres DOCX.
+        transparencia = self._bloque_transparencia()
+        if transparencia:
+            nuevo = self._reemplazar_bloque_div(
+                html, "kl_custom_block_1",
+                self._bloque_div(html, "kl_custom_block_1") + transparencia)
+            if nuevo != html:
+                html = nuevo
+                cambios.append("transparencia del documento")
+
+        # --- Bloque "Visión General": el esquema de la asignatura ---
+        # El aula base ya trae el bloque (viene de un curso real), así que se
+        # REEMPLAZA el que está en vez de agregar otro: agregándolo quedaban
+        # dos, y el de arriba sin imagen.
+        esquema = self._bloque_esquema()
+        if esquema:
+            html, reemplazado = self._reemplazar_bloque_por_data_title(
+                html, "Esquema del módulo", esquema.lstrip("\n"))
+            if not reemplazado:
+                html = self._reemplazar_bloque_div(
+                    html, "kl_custom_block_2", bloque2 + esquema) \
+                    if grupos else html
+            cambios.append("esquema de la asignatura")
 
         # --- Bloque 3: bibliografía consolidada (todos los módulos juntos) ---
         bloque3 = self._construir_bibliografia_consolidada(html)
@@ -638,6 +914,70 @@ class GeneradorAula:
         if cambios:
             _escribir(syl_path, html)
             logger.info(f"  [Programa] syllabus armado: {', '.join(cambios)}")
+
+    def _unificar_tema_wrapper(self):
+        """Deja TODAS las páginas con el tema de encabezados vigente.
+
+        Las páginas que el generador arma ya salen con el string correcto, pero
+        las que se clonan del aula base conservan el que traían. El editor
+        DesignPLUS lo reescribe cuando alguien abre y guarda la página, así que
+        el aula base puede tener páginas al día y otras no: el syllabus quedaba
+        con el tema anterior. Se normaliza al final, cuando ya están todos los
+        archivos en su sitio.
+        """
+        pat = re.compile(r'(id="dp-wrapper"\s+class=")([^"]*)(")')
+        tocados = 0
+        for archivo in self.working.rglob("*.html"):
+            html = _leer(archivo)
+            nuevo, n = pat.subn(
+                lambda m: m.group(1) + DP_WRAPPER_CLASSES + m.group(3), html)
+            if n and nuevo != html:
+                _escribir(archivo, nuevo)
+                tocados += 1
+        if tocados:
+            logger.info(f"  [Tema] wrapper actualizado en {tocados} página(s)")
+
+    def _bloque_esquema(self) -> str:
+        """Bloque 'Visión General' del programa con el esquema de la asignatura.
+
+        La planilla lo pide como ítem de inicio ("Esquema introductorio a la
+        asignatura") y el equipo lo maqueta en el syllabus, debajo del índice
+        de contenidos. Devuelve "" si no hay un esquema utilizable.
+        """
+        from urllib.parse import quote
+        item = next((i for i in self.spec.items_inicio
+                     if "esquema" in normalizar(i.detalle.get("item_planilla",
+                                                              i.titulo))), None)
+        esquema = item.fuente.archivo if item and item.fuente.archivo else None
+        if esquema is None or esquema.suffix.lower() not in (
+                ".jpg", ".jpeg", ".png", ".webp"):
+            if item is not None:
+                self.spec.issues.append(Issue(Severidad.AVISO,
+                    "La planilla pide el esquema introductorio pero no encontré "
+                    "la imagen en la carpeta de diseño. Se carga a mano en el "
+                    "programa, debajo del índice.", "Programa"))
+            return ""
+
+        destino_rel = f"web_resources/Multimedia cargada/{esquema.name}"
+        (self.working / "web_resources" / "Multimedia cargada").mkdir(
+            parents=True, exist_ok=True)
+        shutil.copy2(esquema, self.working / destino_rel)
+        self.recursos_nuevos.append((_gen_id(), destino_rel))
+        url = "$IMS-CC-FILEBASE$/Multimedia%20cargada/" + quote(esquema.name)
+        return (
+            '\n<div class="dp-content-block content-block" '
+            'data-title="Esquema del módulo" data-category="Instructional">\n'
+            '<h2 class="dp-has-icon"><i class="fas fa-network-wired" '
+            'aria-hidden="true"><span class="dp-icon-content" '
+            'style="display: none;">&nbsp;</span></i>Visión General</h2>\n'
+            # El esquema de la asignatura es un mapa conceptual lleno de texto
+            # chico: a 600px y sin lupa no se lee. Va al ancho máximo y
+            # expandible, como lo dejó el equipo a mano.
+            '<p style="text-align: center;">'
+            f'<img class="{_FIG_CLASES_EXPANDIBLE}" '
+            f'style="width: {_FIG_ANCHO_MAX}px; height: auto;" '
+            f'src="{url}" width="{_FIG_ANCHO_MAX}" '
+            'alt="Esquema de la asignatura" loading="lazy"></p>\n</div>')
 
     def _construir_bibliografia_consolidada(self, syl_html: str) -> str:
         """Bloque kl_custom_block_3 del programa: la bibliografía de TODOS los
@@ -654,11 +994,6 @@ class GeneradorAula:
             '<h2 class="dp-has-icon"><i class="fas fa-bookmark" aria-hidden="true">'
             '<span class="dp-icon-content" style="display: none;">&nbsp;</span>'
             '</i> Bibliografía</h2>')
-        m_estilo = re.search(
-            r'<h3(\s+class="dp-ignore-theme")?\s+style="border-top: 0px;[^"]*">',
-            syl_html)
-        attr_clase = ' class="dp-ignore-theme"' if (m_estilo and m_estilo.group(1)) else ""
-
         secciones = []
         for modulo in self.spec.modulos:
             refs = getattr(modulo, "extras", {}).get("referencias", "")
@@ -666,10 +1001,14 @@ class GeneradorAula:
             if not cuerpo:
                 continue
             titulo_mod = xml_escape(f"Módulo {modulo.numero}: {modulo.titulo}".strip(": "))
+            # El título de módulo va SIN el estilo de encabezado del tema
+            # (dp-ignore-theme), solo en negrita: si no, compite visualmente
+            # con los rótulos Obligatoria / Sugerida de cada bloque.
             secciones.append(
-                f'<h3{attr_clase} style="border-top: 0px; text-align: left;">'
+                '<h3 class="dp-ignore-theme" '
+                'style="border-top: 0px; text-align: left;">'
                 f'<strong><span style="font-size: 18pt;">{titulo_mod}</span>'
-                f'</strong></h3>\n{cuerpo}')
+                f'</strong></h3>\n<p>&nbsp;</p>\n{cuerpo}')
         if not secciones:
             return ""
         return ('<div class="dp-content-block kl_custom_block_3">\n'
@@ -683,6 +1022,23 @@ class GeneradorAula:
                     and item.fuente.archivo.exists():
                 return item.fuente.archivo
         return None
+
+    def _reemplazar_bloque_por_data_title(self, html: str, titulo: str,
+                                          nuevo: str) -> tuple:
+        """Reemplaza el <div data-title="…"> por `nuevo`. (html, reemplazado)."""
+        ancla = re.search(rf'<div[^>]*\bdata-title="{re.escape(titulo)}"[^>]*>',
+                          html)
+        if not ancla:
+            return html, False
+        inicio = ancla.start()
+        depth = 0
+        fin = inicio
+        for mm in re.finditer(r'<div\b[^>]*>|</div>', html[inicio:]):
+            depth += -1 if mm.group(0).startswith("</div") else 1
+            if depth == 0:
+                fin = inicio + mm.end()
+                break
+        return html[:inicio] + nuevo + html[fin:], True
 
     def _reemplazar_bloque_div(self, html: str, clase: str, nuevo: str) -> str:
         """Reemplaza el <div class="…clase…">…</div> (con divs anidados) por
@@ -701,24 +1057,69 @@ class GeneradorAula:
                 break
         return html[:inicio] + nuevo + html[fin:]
 
+    def _bloque_div(self, html: str, clase: str) -> str:
+        """El <div class="…clase…">…</div> tal como está, o ''."""
+        marca = "\x00BLOQUE\x00"
+        recortado = self._reemplazar_bloque_div(html, clase, marca)
+        if marca not in recortado:
+            return ""
+        i = recortado.index(marca)
+        return html[i:len(html) - (len(recortado) - i - len(marca))]
+
+    def _bloque_transparencia(self) -> str:
+        """Bloque 'Transparencia del documento' del Programa.
+
+        El docente declara arriba de cada DOCX modular que usó una
+        herramienta de IA para el estilo. Es la misma declaración en los tres
+        módulos y no es contenido de ninguno: se publica una vez sola, en el
+        Programa, debajo del PDF."""
+        for modulo in self.spec.modulos:
+            cuerpo = getattr(modulo, "extras", {}).get("transparencia", "")
+            if not cuerpo:
+                continue
+            notas = urls_de_notas_al_pie(
+                getattr(modulo, "extras", {}).get("referencias", ""))
+            cuerpo = enlazar_notas_al_pie(cuerpo, notas)
+            return (
+                '\n<div class="dp-content-block" '
+                'data-title="Transparencia del documento" data-category="+UCC">\n'
+                '<h2 class="dp-has-icon"><i class="dp-icon fas fa-robot" '
+                'aria-hidden="true"><span class="dp-icon-content" '
+                'style="display: none;">&nbsp;</span></i> Transparencia del '
+                'documento</h2>\n' + cuerpo + "\n</div>")
+        return ""
+
     # ------------------------------------------------------------------ #
     #  Helpers de inyección en foros (topics) y actividades (assignments)
     # ------------------------------------------------------------------ #
-    def _docx_a_html(self, path: Path, prefijo: str) -> str:
+    def _docx_a_html(self, path: Path, prefijo: str, es_actividad: bool = False) -> str:
         """Convierte un DOCX (foro/actividad) a HTML con snippets UCC.
-        Las imágenes embebidas se suman al paquete con el prefijo dado."""
+        Las imágenes embebidas se suman al paquete con el prefijo dado.
+
+        `es_actividad=True` deja el h1/h2 nativo del DOCX sin bajar a h3:
+        maquetar_actividad necesita esa distinción (título del caso vs.
+        sub-encabezados) para armar sus propios niveles."""
         img = ImagenInline()
         with open(path, "rb") as f:
             html = mammoth.convert_to_html(
-                f, convert_image=mammoth.images.img_element(img.handler)).value
+                f, convert_image=mammoth.images.img_element(img.handler),
+                style_map=_MAMMOTH_STYLE_MAP).value
         soup = BeautifulSoup(html, "html.parser")
         primeros = soup.find_all(recursive=False)
         if primeros and primeros[0].name == "table":
             primeros[0].decompose()   # tabla de metadatos de la plantilla
+        # Pedidos de maquetación del asesor (comentarios del DOCX): igual que
+        # en las páginas de contenido, un foro/actividad puede traer un link
+        # real en un comentario (p.ej. el protocolo de transparencia) u otro
+        # pedido anclado a texto del documento.
+        comentarios = extraer_comentarios(path)
+        if comentarios:
+            aplicar_comentarios(soup, comentarios)
         for nombre, data, ctype in img.imagenes:
             self.media[f"{prefijo}_{nombre}"] = (data, ctype)
         html = str(soup).replace("__MEDIA__/", f"__MEDIA__/{prefijo}_")
-        return procesar_contenido(self._rutear_media(html))
+        return procesar_contenido(self._rutear_media(html), self.spec.tema,
+                                  bajar_h1_h2=not es_actividad)
 
     def _rid_en_meta(self, content_type: str, patron_titulo: str) -> str:
         pat = re.compile(
@@ -736,7 +1137,12 @@ class GeneradorAula:
         placeholder. Devuelve None si el cuerpo base no tiene la estructura."""
         soup = BeautifulSoup(base_body, "html.parser")
         cont_div, h2 = None, None
-        for cb in soup.find_all("div", class_="content-block"):
+        # "dp-content-block" es la clase universal (todo bloque la tiene);
+        # la bare "content-block" es solo una variante que traen ALGUNOS
+        # topics (p.ej. "Foro de apertura") — otros, como los foros
+        # obligatorios de módulo ("kl_lectures2"), no la tienen y quedaban
+        # sin encontrar nunca su bloque de contenido real.
+        for cb in soup.find_all("div", class_="dp-content-block"):
             if cb.find("h2"):
                 cont_div, h2 = cb, cb.find("h2")
                 break
@@ -745,6 +1151,10 @@ class GeneradorAula:
         for sib in list(h2.find_next_siblings()):
             sib.decompose()                 # quita los <p>&nbsp;</p> placeholder
         cont_div.append(BeautifulSoup(contenido, "html.parser"))
+        # El aula base siempre cierra el bloque con aire abajo (los placeholder
+        # que acabamos de quitar lo tenían): sin esto el foro queda pegado al
+        # borde del content-block, el contenido pierda el margen inferior.
+        cont_div.append(BeautifulSoup("<p>&nbsp;</p>", "html.parser"))
         return str(soup)
 
     def _escribir_topic(self, rid: str, body_html: str, ctx: str) -> bool:
@@ -772,6 +1182,31 @@ class GeneradorAula:
         self.topics_escritos.add(rid)
         return True
 
+    @staticmethod
+    def _color_del_placeholder(html_previo: str) -> str:
+        """Color del primer texto con estilo propio que YA trae el
+        placeholder del aula base para este assignment (p.ej. el banner fijo
+        "¡Llegaste al final!" de la AFI). Devuelve "" si no hay ninguno."""
+        m = re.search(r'style="color:\s*(#[0-9a-fA-F]{3,6})[;"]', html_previo)
+        return m.group(1) if m else ""
+
+    _PAT_PARRAFO_VACIO_FINAL = re.compile(
+        r"(?:<p>(?:&nbsp;|\s*)</p>\s*)+$")
+
+    @classmethod
+    def _sacar_un_espacio_final(cls, html_previo: str) -> str:
+        """Si el placeholder termina en dos o más párrafos vacíos seguidos
+        (el aula base de la AFI trae <hr><p>&nbsp;</p><p>&nbsp;</p> antes del
+        título del caso, un aire doble), saca uno solo: el resto de las
+        páginas de actividad usan un único párrafo vacío de separación."""
+        m = cls._PAT_PARRAFO_VACIO_FINAL.search(html_previo)
+        if m is None:
+            return html_previo
+        vacios = re.findall(r"<p>(?:&nbsp;|\s*)</p>", m.group(0))
+        if len(vacios) < 2:
+            return html_previo
+        return html_previo[:m.start()] + "".join(vacios[1:])
+
     def _escribir_assignment(self, rid: str, body_html: str, ctx: str) -> bool:
         """Llena el bloque 'Actividad' del assignment del aula base."""
         carpeta = self.working / rid
@@ -791,9 +1226,17 @@ class GeneradorAula:
                 "El assignment del aula base no tiene el bloque 'Actividad' "
                 "esperado.", ctx))
             return False
-        html = pat.sub(
-            lambda m: m.group(1) + m.group(2) + "\n" + body_html + "\n" + m.group(3),
-            html, count=1)
+        def _reemplazo(m):
+            # Si el placeholder del aula base ya trae un texto fijo con color
+            # propio (el banner "¡Llegaste al final!" de la AFI, azul #003087
+            # sin importar el tema del curso), el título del caso se pinta
+            # igual — es el mismo bloque, no puede quedar de otro color.
+            color = self._color_del_placeholder(m.group(2))
+            previo = self._sacar_un_espacio_final(m.group(2))
+            return (m.group(1) + previo + "\n"
+                   + maquetar_actividad(body_html, self.spec.tema, color)
+                   + "\n" + m.group(3))
+        html = pat.sub(_reemplazo, html, count=1)
         _escribir(archivos[0], html)
         self.assignments_escritos.add(rid)
         return True
@@ -805,12 +1248,78 @@ class GeneradorAula:
             return self._rid_en_meta(
                 "Assignment", r"[^<]*[Aa]ctividad final[^<]*"), "Actividad final integradora"
         if "sugerida" in ne or "optativa" in ne:
+            # La no calificable se llama "Actividad MN" (así la nombra el
+            # equipo en Canvas); también se acepta como la escribía antes.
             rid = self._rid_en_meta(
-                "Assignment", rf"[^<]*[Aa]ctividad (sugerida|optativa)[^<]*M{n}[^<]*")
+                "Assignment", rf"[^<]*[Aa]ctividad (?:sugerida |optativa )?M{n}[^<]*")
             if rid:
-                return rid, f"Actividad sugerida M{n}"
-        return self._rid_en_meta(
-            "Assignment", rf"[^<]*[Aa]ctividad[^<]*M{n}[^<]*"), f"Actividad obligatoria M{n}"
+                return rid, f"Actividad M{n}"
+        return self._rid_obligatoria(n), f"Actividad obligatoria M{n}"
+
+    def _consigna_de_mural(self, modulo) -> str:
+        """Consigna del recuadro de mural colaborativo del módulo, si lo hay.
+
+        Cuando la actividad del módulo se resuelve en una herramienta externa,
+        la consigna no llega como DOCX: el asesor la escribe en el recuadro
+        "Voces que construyen (Mural colaborativo)" del propio multimedial.
+        """
+        fuentes = [getattr(i.fuente, "html", "") or "" for i in modulo.items]
+        # El recuadro suele ir al final del multimedial, después de la última
+        # sección numerada: ahí ya no pertenece a ningún ítem de la planilla,
+        # queda en el bloque de cierre del módulo.
+        fuentes += list(getattr(modulo, "extras", {}).values())
+        for html in fuentes:
+            if not html or ("mural" not in normalizar(html)
+                            and "voces que" not in normalizar(html)):
+                continue
+            soup = BeautifulSoup(html, "html.parser")
+            for tabla in soup.find_all("table"):
+                celdas = tabla.find_all(["td", "th"])
+                if not celdas:
+                    continue
+                etiqueta = normalizar(celdas[0].get_text(" ", strip=True))
+                if "mural" not in etiqueta and "voces que construyen" not in etiqueta:
+                    continue
+                cuerpo = "".join(
+                    "".join(str(x) for x in c.children) for c in celdas[1:])
+                if cuerpo.strip():
+                    return cuerpo
+        return ""
+
+    def _inyectar_actividad_con_herramienta(self, modulo, item, herramienta: str,
+                                            ctx: str):
+        """Actividad que se resuelve en una herramienta externa (Padlet, Mural,
+        Miro…): la planilla nombra la herramienta en vez de un DOCX, así que no
+        hay archivo que volcar. Se arma igual el assignment, con la consigna
+        que el asesor dejó en el multimedial y el contenedor listo para pegar
+        el embebido."""
+        n = modulo.numero
+        consigna = self._consigna_de_mural(modulo)
+        # La etiqueta del recuadro dice "Mural colaborativo", pero manda lo que
+        # pide la consigna: cuando invita a participar de un FORO y a comentar
+        # los aportes de los demás, es un foro y va al espacio del foro del
+        # módulo, no a un buzón de entrega. Pasó en Gestión del Riesgo: el
+        # "Voces que construyen" del módulo 1 salía de actividad sugerida.
+        if _consigna_es_de_foro(consigna):
+            self._inyectar_consigna_foro(
+                n, [(item.titulo, consigna)], ctx)
+            return
+        rid = self._clonar_actividad_sugerida(n)
+        if not rid:
+            item.issues.append(Issue(Severidad.AVISO,
+                f"La actividad del módulo {n} se resuelve en {herramienta} y no "
+                "pude clonar un assignment para ella: crearla a mano en Canvas.",
+                item.titulo))
+            return
+        cuerpo = (consigna + bloque_recurso_incrustado(titulo=herramienta)).strip()
+        if self._escribir_assignment(rid, self._rutear_media(cuerpo), ctx):
+            item.issues.append(Issue(Severidad.INFO,
+                f"'{item.titulo[:50]}' se resuelve en {herramienta}: creé el "
+                f"assignment 'Actividad M{n}' (Completo/Incompleto, no "
+                f"cuenta para la nota final) con el hueco para pegar el "
+                f"{herramienta}. La consigna sigue además en el multimedial.",
+                item.titulo))
+            logger.info(f"  [M{n}] Actividad sugerida (nueva) ← {herramienta}")
 
     def _inyectar_consigna_actividad(self, n: int, titulo: str, body: str,
                                      ctx: str):
@@ -868,10 +1377,66 @@ class GeneradorAula:
             html = "".join(f"<p>{xml_escape(linea.strip())}</p>"
                            for linea in texto.splitlines() if linea.strip())
             if self._escribir_topic(rid, html, ctx):
+                # El aula base rotula todos los foros de módulo como "Foro
+                # obligatorio MN". Lo que decide es la FILA de la planilla,
+                # no el cuerpo de la consigna: un foro de consultas habla de
+                # la actividad obligatoria sin ser él mismo calificable.
+                if destino != "Foro de apertura" \
+                        and "obligatori" not in normalizar(
+                            item.detalle.get("item_planilla", "") + " "
+                            + item.titulo):
+                    self._renombrar_recurso(rid, None, self._nombre_de_foro(n))
                 item.issues.append(Issue(Severidad.INFO,
                     f"Consigna del foro (escrita en la planilla) cargada en "
                     f"{destino}.", item.titulo))
                 logger.info(f"  [M{n}] {destino} ← consigna de la planilla")
+
+    def _inyectar_otra_pagina(self, modulo, ctx: str):
+        """Contenido marcado 'va en otra página' (típicamente un foro sin DOCX
+        propio, escrito adentro de la lectura de otra sección): se carga en el
+        foro del módulo y ese ítem se reordena para quedar justo después de la
+        página de la que se sacó."""
+        n = modulo.numero
+        for extra in getattr(modulo, "extras_otra_pagina", []):
+            html = extra.get("html", "")
+            if not html:
+                continue
+            rid = self._rid_en_meta("DiscussionTopic",
+                                    rf"[^<]*[Ff]oro[^<]*M{n}[^<]*")
+            if not rid or rid in self.topics_escritos:
+                continue
+            cuerpo = procesar_contenido(self._rutear_media(html), self.spec.tema)
+            if self._escribir_topic(rid, cuerpo, ctx):
+                logger.info(f"  [M{n}] Foro del módulo {n} ← contenido "
+                           "embebido en la lectura")
+                # El <item> de la página todavía no existe en organizations
+                # (las páginas se inyectan más adelante, en _inyectar_
+                # paginas): el reordenamiento se hace después, no acá.
+                self._reorders_pendientes.append(
+                    (rid, extra.get("pagina_titulo", "")))
+
+    def _reordenar_item_despues_de_pagina(self, rid: str, pagina_titulo: str):
+        """Mueve, dentro de organizations, el <item> cuyo identifierref es
+        `rid` para que quede justo después del <item> de la página
+        `pagina_titulo` (mismo módulo). No hace nada si no encuentra alguno
+        de los dos — el ítem queda donde ya estaba, en su lugar del aula
+        base, en vez de arriesgar un manifiesto roto."""
+        if not rid or not pagina_titulo:
+            return
+        m_item = re.search(
+            rf'<item identifier="[^"]+" identifierref="{rid}">.*?</item>',
+            self.manifest, re.DOTALL)
+        if not m_item:
+            return
+        bloque = m_item.group(0)
+        sin_item = self.manifest[:m_item.start()] + self.manifest[m_item.end():]
+        m_pag = re.search(
+            r'<item identifier="[^"]+" identifierref="[^"]+">\s*'
+            rf'<title>{re.escape(pagina_titulo)}</title>\s*</item>', sin_item)
+        if not m_pag:
+            return
+        self.manifest = (sin_item[:m_pag.end()] + bloque
+                         + sin_item[m_pag.end():])
 
     def _inyectar_foros_y_actividades(self, modulo, ctx: str):
         """Vuelca los DOCX de foros y actividades en los topics/assignments
@@ -882,12 +1447,28 @@ class GeneradorAula:
         for item in modulo.items:
             archivo = item.fuente.archivo
             if not archivo or archivo.suffix.lower() != ".docx":
+                if item.tipo == TipoItem.TAREA and not archivo:
+                    herramienta = _herramienta_externa(item)
+                    if herramienta:
+                        self._inyectar_actividad_con_herramienta(
+                            modulo, item, herramienta, ctx)
                 continue
             if item.tipo in (TipoItem.FORO, TipoItem.TAREA) \
                     and item.fuente.confianza < 0.6:
                 item.issues.append(Issue(Severidad.AVISO,
                     f"Match de baja confianza ({item.fuente.confianza:.0%}) con "
                     f"'{archivo.name}': no lo cargué automáticamente; revisar.",
+                    item.titulo))
+                continue
+            # El MISMO DOCX referenciado desde dos módulos es una sola
+            # actividad, no dos. La planilla de Gestión del Riesgo apunta la
+            # entrega preparatoria ("EP - AFI.docx") desde el módulo 2 y
+            # desde el 3, y salían dos buzones con idéntica consigna.
+            if item.tipo == TipoItem.TAREA \
+                    and archivo.name in self.rid_por_archivo:
+                item.issues.append(Issue(Severidad.INFO,
+                    f"'{archivo.name}' ya se cargó como actividad en otro "
+                    "módulo: este ítem apunta a la misma y no se duplica.",
                     item.titulo))
                 continue
             titulo_n = normalizar(item.detalle.get("item_planilla", "") + " "
@@ -928,26 +1509,115 @@ class GeneradorAula:
                             "en Canvas (Completo/Incompleto, no cuenta para la "
                             "nota final).", item.titulo))
                         continue
-                    html = self._docx_a_html(archivo, f"act_sugerida_m{n}")
+                    html = self._docx_a_html(archivo, f"act_sugerida_m{n}",
+                                             es_actividad=True)
                     if self._escribir_assignment(rid_sug, html, ctx):
+                        # setdefault: el mismo DOCX puede alimentar la sugerida
+                        # de varios módulos (la entrega preparatoria va de M2 a
+                        # M3). El enlace tiene que llevar al primer buzón, no
+                        # al último que se clonó.
+                        self.rid_por_archivo.setdefault(archivo.name, rid_sug)
                         item.issues.append(Issue(Severidad.INFO,
                             f"Contenido de '{archivo.name}' cargado en un "
-                            f"assignment nuevo 'Actividad sugerida M{n}' "
+                            f"assignment nuevo 'Actividad M{n}' "
                             "(Completo/Incompleto, no cuenta para la nota "
                             "final). Verificar en Canvas.", item.titulo))
                         logger.info(f"  [M{n}] Actividad sugerida (nueva) ← {archivo.name}")
                     continue
-                rid = self._rid_en_meta(
-                    "Assignment", rf"[^<]*[Aa]ctividad[^<]*M{n}[^<]*")
+                rid = self._rid_obligatoria(n)
                 if not rid or rid in self.assignments_escritos:
                     continue
-                html = self._docx_a_html(archivo, f"act_m{n}")
+                html = self._docx_a_html(archivo, f"act_m{n}", es_actividad=True)
                 if self._escribir_assignment(rid, html, ctx):
                     assignment_escrito = True
+                    self.rid_por_archivo.setdefault(archivo.name, rid)
                     item.issues.append(Issue(Severidad.INFO,
                         f"Contenido de '{archivo.name}' cargado en la "
                         f"Actividad obligatoria M{n}.", item.titulo))
                     logger.info(f"  [M{n}] Actividad obligatoria ← {archivo.name}")
+
+    # Material que viaja en la carpeta del curso sin una fila en la planilla:
+    # los casos que el docente usa en las actividades, planillas de apoyo,
+    # una imagen conceptual. No se pueden ubicar solos (nadie dice dónde van)
+    # pero tampoco se tiran: se publican en los archivos del aula para que el
+    # equipo los enlace desde donde corresponda.
+    # El .pptx queda afuera a propósito: cuando aparece es el archivo fuente
+    # de algo que ya se publica hecho (el esquema, las placas del video).
+    _EXT_PUBLICABLES = {".pdf", ".xlsx", ".xls", ".docx",
+                        ".jpg", ".jpeg", ".png", ".gif", ".webp"}
+    # Las etapas de producción (guiones, grabación) son material interno: sus
+    # PPT y PDF no son para el estudiante.
+    _ETAPAS_INTERNAS = ("guion", "grabaci", "maquetaci", "etapa 3", "etapa 4")
+    # Papeles del proceso editorial que viajan en la misma carpeta y NO son
+    # material de cursada: plantillas vacías, el cronograma interno, el plan
+    # de estudios de la carrera, las declaraciones de uso de IA.
+    _NO_PUBLICABLE = re.compile(
+        r"plantilla|cronograma|protocolo|gaidet|plan de estudio|"
+        r"\brr\b|uso de ia|similitud|resoluci[oó]n|^ejemplo\b|[-–—]\s*ejemplo",
+        re.I)
+
+    def _publicar_material_suelto(self):
+        """Sube a 'Recursos/' el material de la carpeta que nadie referenció."""
+        from urllib.parse import quote
+        raiz = self.spec.carpeta_origen
+        sueltos = []
+        for path in getattr(self.spec, "material_suelto", []) or []:
+            if path.suffix.lower() not in self._EXT_PUBLICABLES \
+                    or self._NO_PUBLICABLE.search(path.name):
+                continue
+            try:
+                relativa = normalizar(str(path.parent.relative_to(raiz)))
+            except (ValueError, TypeError):
+                continue
+            if relativa in (".", "") or any(e in relativa
+                                            for e in self._ETAPAS_INTERNAS):
+                continue      # la raíz guarda papeles administrativos
+            sueltos.append(path)
+        if not sueltos:
+            return
+        destino = self.working / "web_resources" / "Recursos"
+        destino.mkdir(parents=True, exist_ok=True)
+        for path in sueltos:
+            shutil.copy2(path, destino / path.name)
+            self.recursos_nuevos.append(
+                (_gen_id(), f"web_resources/Recursos/{path.name}"))
+        self.spec.issues.append(Issue(Severidad.AVISO,
+            "Material de la carpeta que la planilla no ubica: lo publiqué en "
+            "los archivos del aula (Recursos/) para enlazarlo desde donde "
+            "corresponda — " + ", ".join(p.name for p in sueltos) + ".",
+            "Archivos del aula"))
+
+    def _herramienta_html_incrustada(self) -> str:
+        """Publica la herramienta HTML de la AFI y devuelve su bloque embebido.
+
+        El asesor entrega la actividad como un .html autónomo (con su CSS y
+        su JS adentro). Va a los archivos del aula, en la carpeta "Recursos",
+        y se incrusta en la página de la AFI apuntando a ese archivo: es el
+        "instrumento de aplicación" que la consigna manda usar, así que tiene
+        que estar a la vista y además quedar accesible por su cuenta."""
+        from urllib.parse import quote
+        recursos = list(getattr(self.spec, "recursos_html", []) or [])
+        if not recursos:
+            return ""
+        bloques = []
+        for path in recursos:
+            destino_rel = f"web_resources/Recursos/{path.name}"
+            (self.working / "web_resources" / "Recursos").mkdir(
+                parents=True, exist_ok=True)
+            shutil.copy2(path, self.working / destino_rel)
+            self.recursos_nuevos.append((_gen_id(), destino_rel))
+            url = "$IMS-CC-FILEBASE$/Recursos/" + quote(path.name)
+            iframe = (f'<iframe src="{url}" width="100%" height="100%" '
+                      'style="position: absolute; top: 0; left: 0; width: 100%; '
+                      'height: 100%;" frameborder="0" allowfullscreen="true" '
+                      f'title="{xml_escape(path.stem)}" loading="lazy"></iframe>')
+            bloques.append("<p>&nbsp;</p>\n"
+                           + bloque_recurso_incrustado(iframe))
+            self.spec.issues.append(Issue(Severidad.INFO,
+                f"'{path.name}' se publicó en los archivos del aula "
+                f"(Recursos/) y quedó incrustado en la Actividad final "
+                "integradora.", "AFI"))
+        return "\n".join(bloques)
 
     def _inyectar_afi(self):
         # Foro de consultas de la AFI con la consigna escrita en la planilla:
@@ -974,49 +1644,194 @@ class GeneradorAula:
             return
         if rid in self.assignments_escritos:
             return
-        html = self._docx_a_html(item.fuente.archivo, "afi")
+        html = self._docx_a_html(item.fuente.archivo, "afi", es_actividad=True)
+        html, titulo_foro, cuerpo_foro = separar_foro_de_consultas(html)
+        if cuerpo_foro:
+            self._inyectar_foro_de_consultas_afi(titulo_foro, cuerpo_foro)
+        html += self._herramienta_html_incrustada()
         if self._escribir_assignment(rid, html, "AFI"):
+            self.rid_por_archivo[item.fuente.archivo.name] = rid
             item.issues.append(Issue(Severidad.INFO,
                 f"Contenido de '{item.fuente.archivo.name}' cargado en la "
                 "Actividad final integradora.", item.titulo))
             logger.info(f"  [AFI] ← {item.fuente.archivo.name}")
 
     # ------------------------------------------------------------------ #
-    def _inyectar_consigna_foro(self, n: int, consignas: list, ctx: str):
-        """Escribe la consigna extraída del DOCX dentro del DiscussionTopic
-        'Foro (obligatorio) MN' del aula base."""
-        # 1. Encontrar el item DiscussionTopic del módulo N en module_meta
+    def _topic_del_aula_base(self, pat_titulo: str):
+        """(recurso_id, ruta_xml) del DiscussionTopic cuyo título matchea, o
+        (None, None). El título va como fragmento de regex."""
         pat_item = re.compile(
             r"<item identifier=\"[^\"]+\">\s*"
             r"<content_type>DiscussionTopic</content_type>\s*"
             r"<workflow_state>active</workflow_state>\s*"
-            rf"<title>[^<]*[Ff]oro[^<]*M{n}[^<]*</title>\s*"
+            rf"<title>{pat_titulo}</title>\s*"
             r"<identifierref>([^<]+)</identifierref>", re.DOTALL)
         m = pat_item.search(self.meta)
         if not m:
-            self.spec.issues.append(Issue(Severidad.AVISO,
-                f"Extraje la consigna del foro del módulo {n} del contenido, "
-                f"pero no encontré el foro 'Foro … M{n}' en el aula base para "
-                "volcarla. Queda para carga manual.", ctx))
-            return
+            return None, None
         recurso_id = m.group(1)
-
-        # 2. Recurso → archivo XML del topic
         pat_res = re.compile(
             rf'<resource[^>]*identifier="{recurso_id}"[^>]*>.*?'
             r'<file href="([^"]+\.xml)"', re.DOTALL)
         mr = pat_res.search(self.manifest)
         if not mr:
+            return recurso_id, None
+        topic_path = self.working / mr.group(1)
+        return recurso_id, (topic_path if topic_path.exists() else None)
+
+    def _topic_suelto(self, patron_titulo: str):
+        """(recurso_id, ruta_xml) de un DiscussionTopic que el aula base trae
+        armado pero NO enganchado a ningún módulo.
+
+        El foro de consultas de la AFI viene así en el aula base de posgrado:
+        el topic y su diseño existen, pero no figuran en module_meta, así que
+        buscarlo por module_meta no lo encuentra nunca."""
+        pat = re.compile(patron_titulo)
+        for m in re.finditer(r'<resource[^>]*identifier="([^"]+)"[^>]*'
+                             r'type="imsdt_xmlv1p1"[^>]*>.*?'
+                             r'<file href="([^"]+\.xml)"', self.manifest,
+                             re.DOTALL):
+            ruta = self.working / m.group(2)
+            if not ruta.exists():
+                continue
+            mt = re.search(r"<title>([^<]*)</title>", _leer(ruta))
+            if mt and pat.search(mt.group(1)):
+                return m.group(1), ruta
+        return None, None
+
+    def _enganchar_item_en_modulo(self, modulo_titulo: str, rref: str,
+                                  titulo: str, content_type: str) -> bool:
+        """Agrega un ítem al final del módulo indicado, en module_meta y en
+        organizations. Devuelve False si no encontró el módulo."""
+        pat_mod = re.compile(
+            rf'<module identifier="([^"]+)">\s*<title>{modulo_titulo}</title>'
+            r'.*?<items>(.*?)</items>', re.DOTALL)
+        m = pat_mod.search(self.meta)
+        if not m:
+            return False
+        posicion = len(re.findall(r"<item identifier=", m.group(2))) + 1
+        item_id = _gen_id()
+        nuevo = (f'\n      <item identifier="{item_id}">\n'
+                 f'        <content_type>{content_type}</content_type>\n'
+                 f'        <workflow_state>active</workflow_state>\n'
+                 f'        <title>{xml_escape(titulo)}</title>\n'
+                 f'        <identifierref>{rref}</identifierref>\n'
+                 f'        <position>{posicion}</position>\n'
+                 f'        <new_tab>false</new_tab>\n'
+                 f'        <indent>0</indent>\n'
+                 f'        <link_settings_json>null</link_settings_json>\n'
+                 f'      </item>')
+        # Se inserta ANTES del blanco que cierra <items>, para no heredar su
+        # sangría y dejar el ítem desalineado con sus hermanos.
+        fin = m.end(2)
+        while fin > m.start(2) and self.meta[fin - 1] in " \t\r\n":
+            fin -= 1
+        self.meta = self.meta[:fin] + nuevo + self.meta[fin:]
+        cierre = self._cierre_del_item_org(m.group(1))
+        if cierre is not None:
+            while cierre > 0 and self.manifest[cierre - 1] in " \t\r\n":
+                cierre -= 1
+            org_item = (f'\n          <item identifier="{item_id}" '
+                        f'identifierref="{rref}">\n'
+                        f'            <title>{xml_escape(titulo)}</title>\n'
+                        f'          </item>\n        ')
+            self.manifest = (self.manifest[:cierre] + org_item
+                             + self.manifest[cierre:])
+        return True
+
+    def _cierre_del_item_org(self, identificador: str):
+        """Posición del </item> que cierra ese <item> de organizations.
+
+        Los ítems de módulo ANIDAN a sus páginas, así que no alcanza con
+        buscar el primer </item>: hay que contar aperturas y cierres."""
+        m = re.search(rf'<item identifier="{identificador}"[^>]*>',
+                      self.manifest)
+        if not m:
+            return None
+        nivel, pos = 1, m.end()
+        for t in re.finditer(r"<item\b[^>]*?(/?)>|</item>",
+                             self.manifest[m.end():]):
+            if t.group(0).startswith("</"):
+                nivel -= 1
+                if nivel == 0:
+                    return m.end() + t.start()
+            elif not t.group(1):
+                nivel += 1
+        return None
+
+    # ------------------------------------------------------------------ #
+    def _inyectar_foro_de_consultas_afi(self, titulo: str, cuerpo: str):
+        """La consigna del foro de consultas que el asesor dejó al final del
+        DOCX de la AFI va al foro que ya trae el aula base, no al pie de la
+        consigna de la actividad."""
+        recurso_id, topic_path = self._topic_del_aula_base(
+            r"[^<]*[Ff]oro[^<]*consultas?[^<]*")
+        enganchar = False
+        if topic_path is None:
+            recurso_id, topic_path = self._topic_suelto(
+                r"[Ff]oro\s+de\s+consultas?")
+            enganchar = topic_path is not None
+        if topic_path is None:
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                f"Saqué la consigna de '{titulo[:60]}' del final de la AFI, "
+                "pero no encontré el foro de consultas en el aula base: queda "
+                "para carga manual.", "AFI"))
+            return
+        topic_xml = _leer(topic_path)
+        mt = re.search(r'<text texttype="text/html">(.*?)</text>',
+                       topic_xml, re.DOTALL)
+        base_body = xml_unescape(mt.group(1)) if mt else ""
+        nuevo = self._cuerpo_topic_con_diseno(base_body, procesar_contenido(
+            cuerpo, self.spec.tema))
+        if nuevo is None:
+            return
+        topic_xml = re.sub(
+            r'(<text texttype="text/html">).*?(</text>)',
+            lambda mm: mm.group(1) + xml_escape(nuevo) + mm.group(2),
+            topic_xml, count=1, flags=re.DOTALL)
+        _escribir(topic_path, topic_xml)
+        self.topics_escritos.add(recurso_id)
+        logger.info(f"  [AFI] Consigna del foro de consultas inyectada en "
+                    f"{topic_path.name}")
+        titulo_base = re.search(r"<title>([^<]*)</title>", topic_xml)
+        if enganchar and not self._enganchar_item_en_modulo(
+                r"Actividad final integradora", recurso_id,
+                titulo_base.group(1) if titulo_base else titulo,
+                "DiscussionTopic"):
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                "Cargué la consigna en el foro de consultas, pero no encontré "
+                "el módulo 'Actividad final integradora' para engancharlo: "
+                "agregarlo a mano al módulo en Canvas.", "AFI"))
+            return
+        self.spec.issues.append(Issue(Severidad.INFO,
+            f"'{titulo[:60]}' se quitó del final de la AFI y se cargó en el "
+            "foro de consultas del aula base"
+            + (", que se enganchó al módulo de la AFI." if enganchar else "."),
+            "AFI"))
+
+    # ------------------------------------------------------------------ #
+    def _inyectar_consigna_foro(self, n: int, consignas: list, ctx: str,
+                                obligatorio: bool = False):
+        """Escribe la consigna extraída del DOCX dentro del DiscussionTopic
+        'Foro (obligatorio) MN' del aula base.
+
+        `obligatorio` distingue el foro calificable del de participación: el
+        aula base los trae todos rotulados "Foro obligatorio MN", y el de
+        participación se publica con el nombre corto que usa el equipo."""
+        recurso_id, topic_path = self._topic_del_aula_base(
+            rf"[^<]*[Ff]oro[^<]*M{n}[^<]*")
+        if recurso_id is None:
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                f"Extraje la consigna del foro del módulo {n} del contenido, "
+                f"pero no encontré el foro 'Foro … M{n}' en el aula base para "
+                "volcarla. Queda para carga manual.", ctx))
+            return
+        if topic_path is None:
             self.spec.issues.append(Issue(Severidad.AVISO,
                 f"No encontré el recurso XML del foro del módulo {n}.", ctx))
             return
-        topic_path = self.working / mr.group(1)
-        if not topic_path.exists():
-            self.spec.issues.append(Issue(Severidad.AVISO,
-                f"No existe {mr.group(1)} en el aula base.", ctx))
-            return
 
-        # 3. Volcar la consigna conservando el diseño del aula base
+        # Volcar la consigna conservando el diseño del aula base
         titulo, cuerpo = consignas[0]
         if len(consignas) > 1:
             cuerpo = "\n".join(c[1] for c in consignas)
@@ -1033,10 +1848,49 @@ class GeneradorAula:
             topic_xml, count=1, flags=re.DOTALL)
         _escribir(topic_path, topic_xml)
         self.topics_escritos.add(recurso_id)
+        if not obligatorio:
+            self._renombrar_recurso(recurso_id, topic_path,
+                                    self._nombre_de_foro(n))
         logger.info(f"  [M{n}] Consigna del foro inyectada en {topic_path.name}")
         self.spec.issues.append(Issue(Severidad.INFO,
             f"La consigna '{titulo[:60]}' se quitó de la página de contenido "
             f"y se cargó en el foro del módulo {n}.", ctx))
+
+    def _nombre_de_foro(self, n: int) -> str:
+        """Cómo se llama el foro de participación del módulo en cada aula.
+
+        El aula base los trae todos como "Foro obligatorio MN", pero ese
+        nombre es solo del calificable: en posgrado el de participación es
+        "Foro MN" y en educación "Foro sugerido MN"."""
+        return (f"Foro sugerido M{n}" if normalizar(self.spec.tema) == "educacion"
+                else f"Foro M{n}")
+
+    def _renombrar_recurso(self, rref: str, ruta_xml, nuevo: str):
+        """Cambia el título de un recurso en sus cuatro lugares: el <item> de
+        module_meta, el de organizations, el XML del topic y el de su meta."""
+        escapado = xml_escape(nuevo)
+        self.meta = re.sub(
+            rf'(<item identifier="[^"]+">(?:(?!</item>).)*?<title>)[^<]*'
+            rf'(</title>(?:(?!</item>).)*?<identifierref>{rref}</identifierref>)',
+            lambda m: m.group(1) + escapado + m.group(2), self.meta,
+            count=1, flags=re.DOTALL)
+        self.manifest = re.sub(
+            rf'(<item identifier="[^"]+" identifierref="{rref}">\s*<title>)[^<]*',
+            lambda m: m.group(1) + escapado, self.manifest, count=1)
+        # El topic y su "topicMeta" (la dependencia del recurso) llevan cada
+        # uno su propio <title>: con renombrar solo uno, Canvas seguía
+        # mostrando el viejo.
+        m_dep = re.search(rf'<resource[^>]*identifier="{rref}"[^>]*>.*?'
+                          r'<dependency identifierref="([^"]+)"',
+                          self.manifest, re.DOTALL)
+        archivos = [ruta_xml, self.working / f"{rref}.xml"]
+        if m_dep:
+            archivos.append(self.working / f"{m_dep.group(1)}.xml")
+        for archivo in archivos:
+            if archivo is not None and archivo.exists():
+                _escribir(archivo, re.sub(r"(<title>)[^<]*(</title>)",
+                                          lambda m: m.group(1) + escapado
+                                          + m.group(2), _leer(archivo), count=1))
 
     # ------------------------------------------------------------------ #
     def _asegurar_modulos(self):
@@ -1107,6 +1961,18 @@ class GeneradorAula:
         else:
             shutil.copy2(src, dst)
 
+    def _rid_obligatoria(self, n: int) -> str:
+        """El assignment calificable del módulo, nombrándolo explícitamente.
+
+        Desde que la actividad no calificable se agrega ARRIBA de la
+        obligatoria, un patrón genérico ("Actividad … MN") se queda con la
+        de más arriba: la consigna calificable no se cargaba y el buzón
+        obligatorio quedaba con el placeholder del aula base."""
+        return (self._rid_en_meta(
+                    "Assignment", rf"[^<]*[Aa]ctividad obligatoria[^<]*M{n}[^<]*")
+                or self._rid_en_meta(
+                    "Assignment", rf"[^<]*[Aa]ctividad[^<]*M{n}[^<]*"))
+
     def _clonar_actividad_sugerida(self, n: int) -> str:
         """Clona el assignment 'Actividad obligatoria M{n}' del aula base como
         'Actividad sugerida M{n}': mismo diseño/wrapper, pero SIN calificar
@@ -1121,7 +1987,7 @@ class GeneradorAula:
         <organizations> (simple: identifier+identifierref+title, el estándar
         Common Cartridge). Hay que clonar los dos, más el <resource> y los
         archivos de la carpeta del assignment."""
-        rid_base = self._rid_en_meta("Assignment", rf"[^<]*[Aa]ctividad[^<]*M{n}[^<]*")
+        rid_base = self._rid_obligatoria(n)
         if not rid_base:
             return ""
         bloque_res = self._resource_block(rid_base)
@@ -1161,7 +2027,7 @@ class GeneradorAula:
             xml = _leer(settings)
             xml = xml.replace(f'identifier="{rid_base}"', f'identifier="{nuevo_rid}"', 1)
             xml = re.sub(r"<title>[^<]*</title>",
-                        f"<title>Actividad sugerida M{n}</title>", xml, count=1)
+                        f"<title>Actividad M{n}</title>", xml, count=1)
             xml = re.sub(r"<grading_type>[^<]*</grading_type>",
                         "<grading_type>pass_fail</grading_type>", xml)
             xml = re.sub(r"<points_possible>[^<]*</points_possible>",
@@ -1180,19 +2046,21 @@ class GeneradorAula:
             f"<identifierref>{rid_base}</identifierref>",
             f"<identifierref>{nuevo_rid}</identifierref>")
         nuevo_meta_item = re.sub(r"<title>[^<]*</title>",
-                                 f"<title>Actividad sugerida M{n}</title>",
+                                 f"<title>Actividad M{n}</title>",
                                  nuevo_meta_item, count=1)
+        # La entrega no calificable prepara la obligatoria: va ARRIBA de ella,
+        # como la ubica el equipo en Canvas.
         self.meta = self.meta.replace(
-            bloque_meta_item, bloque_meta_item + "\n      " + nuevo_meta_item, 1)
+            bloque_meta_item, nuevo_meta_item + "\n      " + bloque_meta_item, 1)
 
         nuevo_org_item = m_org_item.group(0).replace(
             f'identifier="{item_id_base}" identifierref="{rid_base}"',
             f'identifier="{nuevo_item_id}" identifierref="{nuevo_rid}"', 1)
         nuevo_org_item = re.sub(r"<title>[^<]*</title>",
-                                f"<title>Actividad sugerida M{n}</title>",
+                                f"<title>Actividad M{n}</title>",
                                 nuevo_org_item, count=1)
         self.manifest = self.manifest.replace(
-            m_org_item.group(0), m_org_item.group(0) + "\n            " + nuevo_org_item, 1)
+            m_org_item.group(0), nuevo_org_item + "\n            " + m_org_item.group(0), 1)
         return nuevo_rid
 
     def _clonar_modulo(self, template: int, nuevo: int):
@@ -1350,6 +2218,54 @@ class GeneradorAula:
                 if f.is_file() and marca.search(f.name):
                     f.unlink()
 
+    def _resolver_enlaces_de_actividad(self):
+        """Completa los <a data-actividad="…"> que dejó el pedido "enlazar
+        actividad" del asesor.
+
+        Se hace al final y no al maquetar cada página: el destino puede ser la
+        actividad de OTRO módulo (la entrega preparatoria usa un solo buzón
+        para los módulos 2 y 3) y los assignments clonados recién existen
+        cuando todos los módulos pasaron."""
+        for archivo in sorted((self.working / "wiki_content").glob("*.html")):
+            html = _leer(archivo)
+            if "data-actividad=" not in html:
+                continue
+            modulo = self.modulo_por_slug.get(archivo.stem)
+
+            def _href(m, modulo=modulo, archivo=archivo):
+                nombre = m.group(2) or ""
+                clase, _, mod_pedido = m.group(1).partition(":")
+                n = int(mod_pedido) if mod_pedido else modulo
+                # Si el asesor nombró el módulo ("el buzón debe ser el mismo
+                # que se abrió en el módulo 2"), manda eso. Si no, manda el
+                # DOCX que anotó al pie del recuadro, que es el dato exacto.
+                rid = self._rid_de_actividad(clase, n) if mod_pedido else ""
+                if not rid:
+                    rid = self.rid_por_archivo.get(nombre, "")
+                if not rid and n:
+                    rid = self._rid_de_actividad(clase, n)
+                if not rid:
+                    self.spec.issues.append(Issue(Severidad.AVISO,
+                        f"El asesor pidió enlazar la actividad {clase} "
+                        f"({nombre or 'módulo ' + str(n or '?')}) en "
+                        f"'{archivo.stem}', pero no encontré ese recurso: "
+                        "enlazarlo a mano en Canvas.", "Enlaces a actividades"))
+                    return ' class="dp-course-link"'
+                return (' class="dp-course-link" href='
+                        f'"$CANVAS_OBJECT_REFERENCE$/assignments/{rid}"')
+
+            nuevo = re.sub(
+                r' class="dp-course-link" data-actividad="([^"]+)"'
+                r'(?: data-actividad-archivo="([^"]+)")?',
+                _href, html)
+            if nuevo != html:
+                _escribir(archivo, nuevo)
+
+    def _rid_de_actividad(self, clase: str, n: int) -> str:
+        """rid del assignment 'Actividad <clase> M<n>' del paquete ya armado."""
+        return self._rid_en_meta(
+            "Assignment", rf"[^<]*[Aa]ctividad {clase}[^<]*M{n}\b[^<]*")
+
     def _purgar_referencias_rotas(self):
         """Elimina <resource> cuyos archivos href ya no existen (p.ej. la
         dependencia assessment_meta.xml de un quiz cuya carpeta se borró)."""
@@ -1426,7 +2342,12 @@ class GeneradorAula:
                     if titulo in quedan:
                         continue
                     rref = self._rid_en_meta(content_type, re.escape(titulo))
-                    if rref:
+                    # Un recurso que la planilla no pide pero que YA se llenó
+                    # no es sobrante: la consigna llegó desde el contenido del
+                    # multimedial, no desde una fila. En Gestión del Riesgo el
+                    # foro del módulo 1 se cargaba y se borraba a continuación.
+                    if rref and rref not in self.topics_escritos \
+                            and rref not in self.assignments_escritos:
                         self._eliminar_item_por_rref(rref)
                         logger.info(f"  [M{n}] recurso no pedido eliminado: {titulo}")
 
@@ -1480,9 +2401,10 @@ class GeneradorAula:
     # dos "Una pausa para reflexionar"), no es un duplicado accidental.
     _TITULOS_ESTANDARIZADOS = {
         "una pausa para reflexionar", "no pases de largo",
-        "ejemplo que iluminan", "descubri leyendo", "auriculares on",
+        "ejemplos que iluminan", "descubri leyendo", "auriculares on",
         "miralo con lupa", "voces que construyen",
         "¿como vengo hasta aca?", "caja de herramientas para usar",
+        "laboratorio de ideas",
     }
 
     def _avisar_contenido_duplicado(self):
@@ -1558,6 +2480,13 @@ class GeneradorAula:
             elif item.tipo == TipoItem.TAREA:
                 if "autoeval" in txt:
                     self._avisar_autoevaluacion_clasica(n, item.titulo)
+                elif "sugerida" in txt or "opcional" in txt:
+                    # La sugerida se arma clonando: no ocupa el slot de la
+                    # obligatoria del aula base. Si el módulo NO pide una
+                    # obligatoria (en Gestión del Riesgo, el módulo 1 solo
+                    # tiene una sugerida en Padlet), ese slot se queda vacío y
+                    # hay que borrarlo, no dejarlo con el placeholder.
+                    quedan.add(f"Actividad M{n}")
                 else:
                     quedan.add(f"Actividad obligatoria M{n}")
         return quedan
@@ -1593,9 +2522,10 @@ class GeneradorAula:
         # Figuras de DISEÑO: van directo a Multimedia cargada/ (como a mano)
         for path in self.figuras_usadas:
             from urllib.parse import quote
-            html = html.replace(f"__DISENO__/{path.name}",
+            nombre = nombre_publicado_de_figura(path)
+            html = html.replace(f"__DISENO__/{nombre}",
                                 "$IMS-CC-FILEBASE$/Multimedia%20cargada/"
-                                + quote(path.name))
+                                + quote(nombre))
         return html
 
     def _empaquetar_media(self):
@@ -1612,10 +2542,31 @@ class GeneradorAula:
             carpeta = self.working / "web_resources" / "Multimedia cargada"
             carpeta.mkdir(parents=True, exist_ok=True)
             for path in self.figuras_usadas:
+                # Se publica con extensión real aunque el archivo de Diseño
+                # no la traiga: si no, Canvas lo sirve como descarga en vez
+                # de mostrarlo como imagen.
+                nombre = nombre_publicado_de_figura(path)
+                shutil.copy2(path, carpeta / nombre)
+                self.recursos_nuevos.append(
+                    (_gen_id(), f"web_resources/Multimedia cargada/{nombre}"))
+            logger.info(f"  {len(self.figuras_usadas)} figuras de DISEÑO empaquetadas")
+        # Repositorio de casos: las fichas se suben como archivos del curso
+        # (la planilla las pide como repositorio, no como página propia), y
+        # el equipo las enlaza desde donde corresponda.
+        casos = list(getattr(self.spec, "casos", []) or [])
+        if casos:
+            carpeta = self.working / "web_resources" / "Multimedia cargada"
+            carpeta.mkdir(parents=True, exist_ok=True)
+            for path in casos:
                 shutil.copy2(path, carpeta / path.name)
                 self.recursos_nuevos.append(
                     (_gen_id(), f"web_resources/Multimedia cargada/{path.name}"))
-            logger.info(f"  {len(self.figuras_usadas)} figuras de DISEÑO empaquetadas")
+            self.spec.issues.append(Issue(Severidad.INFO,
+                f"{len(casos)} fichas del repositorio de casos subidas a "
+                "'Multimedia cargada': " + ", ".join(p.name for p in casos)
+                + ". Quedan como archivos del curso, para enlazarlas desde "
+                "donde corresponda."))
+
         # Figuras de DISEÑO que no pude ubicar en ninguna página
         sobrantes = [p for p in getattr(self.spec, "imagenes_diseno", [])
                      if p not in self.figuras_usadas]

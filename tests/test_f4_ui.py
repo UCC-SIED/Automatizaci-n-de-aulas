@@ -233,15 +233,21 @@ class TestEditPlanFormElements:
             "Botón submit debe tener id 'btn-guardar'"
 
     def test_formulario_tiene_javascript(self):
-        """Verificar que el template contiene JavaScript para manejo del formulario."""
-        template_path = (Path(__file__).parent.parent /
-                        "maquetador/web/templates/edit_plan.html")
-        with open(template_path, "r", encoding="utf-8") as f:
-            contenido = f.read()
+        """El formulario debe tener su JavaScript cableado.
 
-        assert "<script" in contenido, \
-            "Template debe contener bloque <script>"
-        assert "addEventListener" in contenido, \
-            "Script debe usar addEventListener"
-        assert "fetch" in contenido, \
-            "Script debe usar fetch para POST"
+        El script vive en un archivo aparte (static/js/edit_plan.js), no
+        embebido en el template: se verifica que el template lo cargue y
+        que el archivo traiga el manejo de eventos y el POST."""
+        raiz = Path(__file__).parent.parent
+        template = (raiz / "maquetador/web/templates/edit_plan.html").read_text(
+            encoding="utf-8")
+
+        assert "<script" in template, "Template debe contener bloque <script>"
+        assert "js/edit_plan.js" in template, \
+            "Template debe cargar static/js/edit_plan.js"
+
+        script = (raiz / "maquetador/web/static/js/edit_plan.js").read_text(
+            encoding="utf-8")
+
+        assert "addEventListener" in script, "Script debe usar addEventListener"
+        assert "fetch" in script, "Script debe usar fetch para POST"

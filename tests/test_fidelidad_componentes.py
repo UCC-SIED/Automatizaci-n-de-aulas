@@ -1,0 +1,1092 @@
+# -*- coding: utf-8 -*-
+"""Componentes colapsables pedidos por comentario del asesor.
+
+Casos salidos de la auditoría del 2026-09-10: en el curso de prueba la
+automatización generó UN solo panel en 13 páginas, aunque la asesora había
+pedido tabs, expander y acordeón en varias.
+
+Ver docs/auditoria-fidelidad-gestion-calidad-2026-09-10.md
+"""
+
+import re
+
+import pytest
+
+from bs4 import BeautifulSoup
+
+from maquetador.ingest.docx_comments import _clasificar, _VARIANTE_PANEL, \
+    aplicar_comentarios
+from maquetador.build.componentes_asesor import (construir_panels,
+                                                 pares_de_secciones,
+                                                 extraer_pares)
+from maquetador.build.snippets import maquetar_actividad, procesar_contenido
+
+
+class TestVariantesDePanel:
+    """Cada tipo de panel tiene SU clase de DesignPLUS."""
+
+    def test_acordeon_y_expander_no_son_la_misma_variante(self):
+        assert _VARIANTE_PANEL["acordeon"] == "dp-accordion-default"
+        assert _VARIANTE_PANEL["expander"] == "dp-expander-default"
+
+    def test_tabs_usa_la_clase_que_existe(self):
+        assert _VARIANTE_PANEL["tabs"] == "dp-tabs-buttons"
+        assert _VARIANTE_PANEL["tabs_vertical"] == "dp-tabs-buttons-vertical"
+
+    def test_clasifica_la_orientacion_de_las_tabs(self):
+        assert _clasificar("Para maquetación: TABS vertical") == "tabs_vertical"
+        assert _clasificar("Para maquetación: tabs") == "tabs"
+        assert _clasificar("Maquetación: solapas horizontales") == "tabs"
+
+    def test_colores_de_panel_del_catalogo_ucc(self):
+        html = construir_panels([("A", "<p>a</p>"), ("B", "<p>b</p>")],
+                                "dp-accordion-default")
+        assert "dp-panel-color-dp-primary" in html
+        assert "dp-panel-active-color-dp-secondary" in html
+        assert "dp-panel-hover-color-dp-secondary" in html
+
+    def test_tabs_horizontal_lleva_ancho_completo(self):
+        """Catálogo UCC (docs/referencia-designplus-cidilabs-ucc.md): las
+        tabs horizontales SIEMPRE llevan dp-panel-tab-width-fill, si no
+        quedan angostas (del ancho del texto) en vez de ocupar toda la fila."""
+        html = construir_panels([("A", "<p>a</p>"), ("B", "<p>b</p>")],
+                                "dp-tabs-buttons")
+        assert "dp-panel-tab-width-fill" in html
+
+    def test_tabs_vertical_y_acordeon_no_llevan_ancho_completo(self):
+        """dp-panel-tab-width-fill es específico de las tabs horizontales:
+        vertical/expander/acordeón no lo necesitan (no tienen ese problema
+        de ancho)."""
+        assert "dp-panel-tab-width-fill" not in construir_panels(
+            [("A", "<p>a</p>"), ("B", "<p>b</p>")], "dp-tabs-buttons-vertical")
+        assert "dp-panel-tab-width-fill" not in construir_panels(
+            [("A", "<p>a</p>"), ("B", "<p>b</p>")], "dp-expander-default")
+        assert "dp-panel-tab-width-fill" not in construir_panels(
+            [("A", "<p>a</p>"), ("B", "<p>b</p>")], "dp-accordion-default")
+
+
+class TestEspaciadoYTipografiaDePaneles:
+    """Tabs/acordeón/expander (dp-panels-wrapper) NO llevan aire propio
+    arriba ni abajo — se probó lo contrario (aire de párrafo completo
+    siempre) y en la revisión en Canvas se veía exagerado en un acordeón que
+    va metido en el medio de un tramo de texto ("Planificación /
+    Aseguramiento / Control de la calidad", módulo 1.4 de Gestión de la
+    Calidad): se revierte a que el panel no agregue nada por su cuenta, y
+    si el DOCX ya trae separación alrededor, queda tal cual llegó.
+
+    Si el panel arranca con una bajada TODO subrayada (la bajada del
+    título del panel, p.ej. "La calidad como responsabilidad de toda la
+    organización" abriendo "Calidad Total"), esa línea lleva letra un poco
+    más grande y en negrita (estilo "lead dp-text-bold"), pero sigue siendo
+    párrafo, no heading."""
+
+    def test_no_agrega_aire_propio(self):
+        html = ("<p>Antes del panel.</p>"
+                + construir_panels([("A", "<p>Contenido A.</p>"),
+                                    ("B", "<p>Contenido B.</p>")],
+                                   "dp-tabs-buttons")
+                + "<p>Después del panel.</p>")
+        out = procesar_contenido(html)
+        assert "<p>Antes del panel.</p><div" in out
+        assert "</div><p>Después del panel.</p>" in out
+
+    def test_la_bajada_subrayada_del_panel_usa_lead(self):
+        html = construir_panels(
+            [("Calidad Total",
+              "<p><u>La calidad como responsabilidad de toda la "
+              "organización</u></p><p>La Calidad Total puede entenderse "
+              "como una filosofía de gestión.</p>"),
+             ("Lean", "<p>Contenido de Lean.</p>")],
+            "dp-tabs-buttons")
+        out = procesar_contenido(html)
+        assert ('<p class="lead dp-text-bold"><u>La calidad como '
+               'responsabilidad de toda la organización</u></p>') in out
+
+    def test_un_parrafo_underline_parcial_no_se_agranda(self):
+        """Solo una bajada TOTALMENTE subrayada cuenta — un párrafo con
+        solo una palabra subrayada en el medio es contenido común."""
+        html = construir_panels(
+            [("A", "<p>Un párrafo con <u>una palabra</u> subrayada, nada "
+                   "más.</p><p>Más contenido.</p>"),
+             ("B", "<p>Contenido B.</p>")],
+            "dp-tabs-buttons")
+        out = procesar_contenido(html)
+        assert '<p class="lead">' not in out
+
+
+class TestPanelDesdeSubtitulos:
+    """'expander (títulos subrayados)': el asesor no arma tabla, subraya los
+    subtítulos y escribe el contenido corrido."""
+
+    HTML = ("<div>"
+            "<p>Antes de aplicar cualquier herramienta conviene reconocer algo.</p>"
+            "<p>Por ejemplo, si un proyecto presenta retrasos en la entrega.</p>"
+            "<p><u>El diagrama de Ishikawa: explorar posibles causas</u></p>"
+            "<p>Una de las herramientas más utilizadas para analizar problemas.</p>"
+            "<p>Su principal objetivo es identificar y organizar las causas.</p>"
+            "<p><u>La técnica de los 5 porqués: buscar la causa raíz</u></p>"
+            "<p>Mientras que Ishikawa ayuda a explorar diversas posibilidades.</p>"
+            "<p><u>El diagrama de Pareto: priorizar esfuerzos</u></p>"
+            "<p>Una vez identificados distintos problemas o causas posibles.</p>"
+            "</div>")
+
+    def _aplicar(self):
+        soup = BeautifulSoup(self.HTML, "html.parser")
+        coment = [{"instruccion": "Para maquetación: expander (títulos subrayados)",
+                   "anclado": "Antes de aplicar cualquier herramienta conviene",
+                   "accion": "expander", "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        return str(soup), coment[0]
+
+    def test_arma_un_panel_por_subtitulo_subrayado(self):
+        out, coment = self._aplicar()
+        assert coment.get("_aplicado") is True
+        assert out.count('class="dp-panel-group"') == 3
+
+    def test_los_titulos_son_los_subtitulos_completos(self):
+        out, _ = self._aplicar()
+        titulos = re.findall(r'dp-panel-heading">([^<]+)', out)
+        assert titulos == ["El diagrama de Ishikawa: explorar posibles causas",
+                           "La técnica de los 5 porqués: buscar la causa raíz",
+                           "El diagrama de Pareto: priorizar esfuerzos"]
+
+    def test_cada_panel_se_lleva_sus_parrafos(self):
+        out, _ = self._aplicar()
+        cuerpos = re.findall(r'dp-panel-content">(.*?)</div>', out, re.S)
+        assert cuerpos[0].count("<p>") == 2
+        assert cuerpos[1].count("<p>") == 1
+
+    def test_la_introduccion_queda_fuera_del_panel(self):
+        """Lo anterior al primer subtítulo no es parte de ningún panel."""
+        out, _ = self._aplicar()
+        antes = out.split('<div class="dp-panels-wrapper')[0]
+        assert "Antes de aplicar cualquier herramienta" in antes
+        assert "Por ejemplo, si un proyecto presenta retrasos" in antes
+
+    def test_no_parte_el_subtitulo_por_los_dos_puntos(self):
+        """El extractor 'Nombre: contenido' cortaba el título en el ':' y
+        perdía los párrafos de la sección — por eso salían paneles basura."""
+        out, _ = self._aplicar()
+        assert "El diagrama de Ishikawa: explorar posibles causas" in out
+        assert 'dp-panel-heading">El diagrama de Ishikawa</h3>' not in out
+
+
+class TestPrefijoEnNegritaLeGanaAlSubrayadoSuelto:
+    """Cuando el comentario no dice "subrayado" ni "negrita" explícitamente
+    (p.ej. "TABS horizontal. Aclaración: si no entra el título completo
+    poner Principio 1 / Principio 2 / etc y el título dentro del TAB"), y el
+    tramo tiene AMBAS marcas —un prefijo en negrita que abre cada sección
+    real ("Principio N.° 1: Enfoque al cliente") Y subtítulos internos
+    totalmente subrayados que NO deberían abrir una sección propia
+    ("Aplicación en proyectos", "Caso aplicado:")— el modo "negrita" debe
+    probarse ANTES que "auto": si "auto" gana primero (matchea por el
+    subrayado completo), arma un tab por cada subtítulo interno en vez de
+    uno por "Principio" (regresión real: 8 tabs "Aplicación en
+    proyectos"/"Caso aplicado" en vez de 4 "Principio N.° 1".."4")."""
+
+    HTML = (
+        "<div>"
+        "<p>A continuación, se desarrollan los principales principios.</p>"
+        "<p><strong><u>Principio N.° 1</u></strong>: Enfoque al cliente</p>"
+        "<p>La alineación hacia la satisfacción de necesidades.</p>"
+        "<p><u>Aplicación en proyectos</u></p>"
+        "<ul><li>Identificación de stakeholders clave</li></ul>"
+        "<p><u>Caso aplicado</u>:</p>"
+        "<p>Una empresa desarrolla un proyecto para su plataforma.</p>"
+        "<p><strong><u>Principio N.° 2</u></strong>: Liderazgo</p>"
+        "<p>El liderazgo implica establecer una dirección clara.</p>"
+        "<p><u>Aplicación en proyectos</u></p>"
+        "<ul><li>Definición de estándares de calidad</li></ul>"
+        "</div>")
+    INSTR = ("Para maquetación: TABS horizontal Aclaración: si no entra el "
+            "título completo poner Principio 1 / Principio 2 / etc y el "
+            "título dentro del TAB")
+
+    def _aplicar(self):
+        soup = BeautifulSoup(self.HTML, "html.parser")
+        coment = [{"instruccion": self.INSTR,
+                   "anclado": "Principio N.° 1: Enfoque al cliente",
+                   "accion": "tabs", "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        return BeautifulSoup(str(soup), "html.parser")
+
+    def test_un_tab_por_principio_no_por_subtitulo_interno(self):
+        soup = self._aplicar()
+        titulos = [h.get_text(strip=True)
+                   for h in soup.find_all(class_="dp-panel-heading")]
+        assert titulos == ["Principio N.° 1", "Principio N.° 2"]
+
+    def test_los_subtitulos_internos_quedan_como_contenido(self):
+        soup = self._aplicar()
+        wrapper = soup.find(class_="dp-panels-wrapper")
+        assert "Aplicación en proyectos" in str(wrapper)
+        assert "Caso aplicado" in str(wrapper)
+
+
+class TestNoRompeLoQueYaAndaba:
+    def test_sigue_armando_desde_nombre_contenido(self):
+        soup = BeautifulSoup(
+            "<div><p>Autoevaluación: la persona valora su desempeño.</p>"
+            "<p>Evaluación por objetivos: mide el cumplimiento.</p></div>",
+            "html.parser")
+        pares, _ = extraer_pares(soup.find("p"), "Maquetación: acordeón")
+        assert len(pares) == 2
+        assert pares[0][0] == "Autoevaluación"
+
+    def test_sin_subtitulos_no_inventa_secciones(self):
+        soup = BeautifulSoup("<div><p>Un párrafo suelto.</p>"
+                             "<p>Otro párrafo suelto.</p></div>", "html.parser")
+        pares, _ = pares_de_secciones(soup.find("p"))
+        assert pares == []
+
+    def test_un_solo_subtitulo_no_alcanza_para_un_panel(self):
+        soup = BeautifulSoup("<div><p><u>Único título</u></p>"
+                             "<p>Su contenido.</p></div>", "html.parser")
+        pares, _ = pares_de_secciones(soup.find("p"))
+        assert pares == []
+
+
+class TestMaquetadoDeActividad:
+    """El "Modelo de actividad": título propio y rótulos de sección.
+
+    En la AFI del curso de prueba el título salía como <h3> arrastrando el
+    prefijo "Actividad final integradora: ", que repite el nombre que Canvas
+    ya muestra en el módulo, y "Objetivo:" quedaba como párrafo.
+    """
+
+    CUERPO = ('<h3>Actividad final integradora: Analizá situaciones reales</h3>'
+              '<p>Objetivo: </p>'
+              '<p>Interpretar la situación planteada e integrar los conceptos.</p>'
+              '<p>Consigna: Elaborá un informe técnico.</p>')
+
+    def test_el_titulo_va_en_el_h2_de_titulo(self):
+        out = maquetar_actividad(self.CUERPO)
+        assert 'class="dp-ignore-theme"' in out
+        assert "text-align: center" in out
+
+    @pytest.mark.parametrize("tema,color", [("educacion", "#003087"),
+                                            ("posgrado", "#1b1e31")])
+    def test_el_color_del_titulo_sale_del_aula_base(self, tema, color):
+        """Estaba fijo en el azul de educación: un curso de posgrado salía con
+        el título de la actividad del color equivocado."""
+        assert f"color: {color}" in maquetar_actividad(self.CUERPO, tema)
+
+    def test_le_saca_el_prefijo_que_duplica_el_nombre_del_item(self):
+        out = maquetar_actividad(self.CUERPO)
+        assert "<strong>Analizá situaciones reales</strong>" in out
+        assert "Actividad final integradora:" not in out
+
+    def test_los_rotulos_de_seccion_son_encabezados(self):
+        out = maquetar_actividad(self.CUERPO)
+        assert "<h3>Objetivo</h3>" in out
+        assert "<h3>Consigna</h3>" in out
+        assert "<p>Objetivo: </p>" not in out
+
+    def test_el_cuerpo_pegado_al_rotulo_queda_debajo(self):
+        out = maquetar_actividad(self.CUERPO)
+        assert "<h3>Consigna</h3><p>Elaborá un informe técnico.</p>" in out
+
+    def test_no_toca_un_parrafo_que_no_es_rotulo(self):
+        out = maquetar_actividad("<p>Nutri Pet S.A.: una empresa del rubro.</p>")
+        assert "<h3>" not in out
+
+
+class TestTituloGenericoDeActividad:
+    """'Actividad obligatoria 1' a secas (sin nada más en el título, solo el
+    tipo + número) no aporta nada: Canvas ya muestra ese mismo nombre en el
+    banner de la Assignment. Se saca en vez de duplicarlo como H2."""
+
+    @pytest.mark.parametrize("titulo", [
+        "Actividad obligatoria 1", "Actividad obligatoria 2",
+        "Actividad final integradora", "Actividad M1",
+    ])
+    def test_titulo_generico_se_saca_sin_dejar_h2(self, titulo):
+        out = maquetar_actividad(f"<h3>{titulo}</h3><p>Objetivo: Diagnosticar.</p>")
+        assert "dp-ignore-theme" not in out
+        assert titulo not in out
+
+    def test_titulo_con_nombre_propio_sigue_yendo_al_h2(self):
+        """Diferencia real con el caso de arriba: acá SÍ queda texto propio
+        después de sacar el prefijo del tipo de actividad."""
+        out = maquetar_actividad(
+            "<h3>Actividad obligatoria: Diagnóstico de un caso real</h3>")
+        assert 'class="dp-ignore-theme"' in out
+        assert "Diagnóstico de un caso real" in out
+
+
+class TestNivelDeEncabezadosDelCaso:
+    """Los "Título N" nativos de Word que trae el caso planteado (más
+    profundos que el H2 de la actividad) bajan a <h4>: si quedaran en <h3>
+    competirían de igual a igual con los rótulos de sección (Objetivo,
+    Consigna…), que sí son <h3>."""
+
+    def test_encabezado_nativo_del_caso_baja_a_h4(self):
+        out = maquetar_actividad(
+            "<h2>Proyecto: Caso X</h2><h3>Contexto del proyecto:</h3>"
+            "<p>Descripción del contexto.</p>")
+        # Baja a h4 y se le saca el ":" final, igual que a cualquier otro
+        # encabezado del catálogo.
+        assert "<h4>Contexto del proyecto</h4>" in out
+        assert "<h3>Contexto del proyecto:</h3>" not in out
+
+    def test_rotulo_de_seccion_que_llega_como_encabezado_nativo_sigue_en_h3(self):
+        """'Pautas de presentación:' puede llegar ya como <h3> (si en el
+        DOCX tenía un estilo de título de Word en vez de párrafo normal):
+        tiene que terminar en el mismo nivel que sus hermanos armados desde
+        <p> (regresión: bajaba a h4 igual que los encabezados del caso), y
+        se le saca igual el ':' que le sobra."""
+        out = maquetar_actividad(
+            "<h2>Actividad obligatoria: Caso X</h2>"
+            "<h3>Pautas de presentación:</h3>")
+        assert "<h3>Pautas de presentación</h3>" in out
+
+    def test_h2_nativo_del_caso_que_no_es_el_titulo_baja_a_h3(self):
+        """Un <h2> de Word DENTRO del caso planteado (no el primer
+        encabezado, que ya se convirtió en el título de la actividad) no
+        puede competir en el mismo nivel que el título: baja a <h3>, sin el
+        ':' final. Caso real: 'Proyecto: "Puente Comunitario La Esperanza"'
+        quedaba como <h2> nativo sin tocar."""
+        out = maquetar_actividad(
+            "<h2>Actividad obligatoria 1</h2>"
+            '<h2>Proyecto: "Puente Comunitario La Esperanza"</h2>'
+            "<p>Descripción del proyecto.</p>")
+        assert '<h3>Proyecto: "Puente Comunitario La Esperanza"</h3>' in out
+        # El título sintético de la actividad (el "primero", que acá se
+        # descompone por ser genérico) sigue sin clase espuria ni duplicado.
+        assert out.count("<h2") == 0
+
+    def test_el_titulo_sintetico_de_la_actividad_no_baja_de_nivel(self):
+        """El <h2 class="dp-ignore-theme"> que arma maquetar_actividad para
+        el título real (a partir del "primero") no es un h2 nativo del
+        DOCX: el bucle que baja h1/h2 a h3 no debe tocarlo."""
+        out = maquetar_actividad("<h2>Proyecto: Caso X</h2><p>Cuerpo.</p>")
+        assert '<h2 class="dp-ignore-theme"' in out
+
+    def test_pipeline_completo_preserva_el_nivel_para_maquetar_actividad(self):
+        """Regresión real: procesar_contenido corre ANTES de maquetar_
+        actividad (vía _docx_a_html) y por defecto aplana TODO h1/h2 del
+        cuerpo a <h3> — con eso, "Proyecto: …" (Heading 2 nativo) y
+        "Contexto del proyecto" (Heading 3 nativo) llegaban indistinguibles
+        (los dos <h3>) y maquetar_actividad no podía saber cuál de los dos
+        era el subtítulo del caso y cuál un encabezado más profundo: los
+        bajaba a los dos por igual. Con bajar_h1_h2=False (lo que pasa
+        _docx_a_html para actividades) el nivel nativo llega intacto y cada
+        uno termina en su nivel correcto."""
+        html = ('<p><strong>Actividad obligatoria 1</strong></p>'
+                '<h2>Proyecto: "Puente Comunitario La Esperanza"</h2>'
+                '<p>Descripción del proyecto.</p>'
+                '<h3>Contexto del proyecto:</h3>'
+                '<p>Descripción del contexto.</p>')
+        procesado = procesar_contenido(html, "", bajar_h1_h2=False)
+        out = maquetar_actividad(procesado)
+        assert '<h3>Proyecto: "Puente Comunitario La Esperanza"</h3>' in out
+        assert "<h4>Contexto del proyecto</h4>" in out
+
+    def test_subrayado_directo_en_un_encabezado_nativo_se_saca(self):
+        """El autor a veces subraya a mano un 'Título 3' de Word que ya
+        lleva subrayado por el tema (CSS): queda doble. Caso real:
+        'Contexto del proyecto:' e 'Información técnica y operativa:'."""
+        out = maquetar_actividad(
+            "<h2>Actividad obligatoria 1</h2>"
+            "<h3><u>Contexto del proyecto</u>:</h3>"
+            "<p>Descripción del contexto.</p>")
+        assert "<u>" not in out
+        assert "<h4>Contexto del proyecto</h4>" in out
+
+    def test_el_h2_nativo_bajado_a_h3_lleva_espaciador_propio(self):
+        """Un h1/h2 nativo no pasa por el paso 5 de procesar_contenido (que
+        solo mira h3/h4, y acá llega sin bajar por bajar_h1_h2=False): sin
+        este espaciador propio, "Proyecto: <nombre del caso>" quedaba pegado
+        al párrafo del objetivo. Regresión real: Actividad obligatoria M2 y
+        AFI de Gestión de la Calidad."""
+        out = maquetar_actividad(
+            "<h2>Actividad obligatoria 2</h2>"
+            "<h3>Objetivo</h3><p>Identificar causas y proponer acciones.</p>"
+            '<h2>Proyecto: "Centro de formación Santa Elena"</h2>'
+            "<p>Descripción del proyecto.</p>")
+        assert ('acciones.</p><p>\xa0</p><h3>Proyecto: "Centro de formación '
+               'Santa Elena"</h3>') in out
+
+    def test_no_duplica_el_espaciador_si_ya_hay_uno(self):
+        out = maquetar_actividad(
+            "<h2>Actividad obligatoria 2</h2>"
+            "<h3>Objetivo</h3><p>Identificar causas.</p><p>&nbsp;</p>"
+            '<h2>Proyecto: "Centro de formación Santa Elena"</h2>'
+            "<p>Descripción del proyecto.</p>")
+        assert "<p>\xa0</p><p>\xa0</p>" not in out
+
+
+class TestFinalDePaginaDeActividad:
+    """Toda página termina con un párrafo de aire antes del borde del
+    content-block — misma convención que pagina_contenido para las páginas
+    de contenido —, pero maquetar_actividad nunca la aplicaba: el molde del
+    assignment inserta su salida directo contra el cierre del bloque.
+    Regresión real: Actividad obligatoria M2 de Gestión de la Calidad."""
+
+    def test_termina_con_espaciador(self):
+        out = maquetar_actividad(
+            "<h2>Actividad obligatoria 2</h2><p>Último párrafo del caso.</p>")
+        assert out.rstrip().endswith("<p>\xa0</p>")
+
+    def test_no_duplica_si_ya_termina_en_espaciador(self):
+        out = maquetar_actividad(
+            "<h2>Actividad obligatoria 2</h2><p>Último párrafo.</p>"
+            "<p>&nbsp;</p>")
+        assert not out.rstrip().endswith("<p>\xa0</p><p>\xa0</p>")
+
+
+class TestRotuloEnLineaYDisclaimerDeIA:
+    def test_situacion_de_incertidumbre_se_destaca_sin_ser_encabezado(self):
+        out = maquetar_actividad(
+            "<p>Situación de incertidumbre: el presupuesto se reduce un "
+            "10 % durante la ejecución.</p>")
+        assert "<h3>" not in out
+        assert "<h4>" not in out
+        assert "<u><strong>Situación de incertidumbre:</strong></u>" in out
+        assert "el presupuesto se reduce" in out
+
+    def test_disclaimer_de_ia_va_en_recuadro_simple(self):
+        out = maquetar_actividad(
+            "<p>Se recomienda que el aporte de la IA no exceda el 30 % del "
+            "trabajo, que su uso esté correctamente citado.</p>")
+        assert "dp-callout" in out
+        assert "aporte de la IA" in out
+
+    def test_disclaimer_de_ia_lleva_espaciado_de_parrafo_completo(self):
+        """El aviso de cierre sobre uso de IA es un aparte del "Modelo de
+        actividad" (nota de cierre, no parte del relato del caso): lleva
+        aire de párrafo entero arriba y abajo, no el espaciado corto de
+        cualquier otro recuadro simple encerrado entre texto — maquetar_
+        actividad no llamaba a _espaciar_recuadros en absoluto, así que el
+        disclaimer quedaba sin ningún aire."""
+        out = maquetar_actividad(
+            "<p>Formato: Word</p>"
+            "<p>Se recomienda que el aporte de la IA no exceda el 30 % del "
+            "trabajo, que su uso esté correctamente citado.</p>")
+        assert "<p>Formato: Word</p><p>\xa0</p><div" in out
+
+
+class TestEspaciadoYDosPuntosDeRotulosDeSeccion:
+    """Los rótulos de sección (Objetivo, Consigna, Criterios de evaluación,
+    Pautas de presentación, Anexo) llevan aire arriba, igual que cualquier
+    encabezado — antes no lo llevaban, quedaban pegados a lo anterior. Y si
+    llegan ya como encabezado nativo del DOCX (no como <p>"Rótulo: …") con
+    los dos puntos incluidos en el propio texto del título, también hay que
+    sacárselos: el bucle que arma el <h3> desde <p> ya lo hacía, pero el que
+    solo baja de nivel un <h3> nativo no."""
+
+    def test_lleva_aire_arriba(self):
+        out = maquetar_actividad(
+            "<h2>Actividad: Caso X</h2>"
+            "<p>Cuerpo del caso.</p>"
+            "<p>Consigna: Resolvé el caso.</p>")
+        assert "<p>\xa0</p><h3>Consigna</h3>" in out
+
+    def test_encabezado_nativo_pierde_los_dos_puntos(self):
+        out = maquetar_actividad(
+            "<h2>Actividad: Caso X</h2>"
+            "<h3>Pautas de presentación:</h3>")
+        assert "<h3>Pautas de presentación</h3>" in out
+        assert "Pautas de presentación:" not in out
+
+
+class TestCeldaDeTablaEnNegritaNoEsEncabezado:
+    """Una celda de tabla en negrita es un encabezado de COLUMNA, no un
+    subtítulo de la página: no debe promoverse a <h3>/<h4> solo por estar en
+    negrita y tener el largo típico de un subtítulo (regresión real: 'Tipo
+    de inconveniente', encabezado de una tabla de datos en una actividad
+    obligatoria, terminaba como <h4> adentro de su propia celda)."""
+
+    def test_no_se_promueve_a_encabezado(self):
+        html = ("<table><tr><th><p><strong>Tipo de inconveniente</strong></p>"
+                "</th><th><p><strong>Cantidad</strong></p></th></tr>"
+                "<tr><td><p>Climatización</p></td><td><p>42</p></td></tr>"
+                "</table>")
+        out = procesar_contenido(html)
+        assert "<h3>" not in out and "<h4>" not in out
+        assert "<strong>Tipo de inconveniente</strong>" in out
+
+
+class TestJerarquiaDeSubtitulos:
+    """Textos tomados de los comentarios reales del curso de prueba.
+
+    La política de jerarquía de la UCC: H2 título de página, H3 subtítulo,
+    H4 sub-subtítulo. "sub-subtítulo" contiene la palabra "subtítulo", así que
+    todos caían en H3.
+    """
+
+    def test_subtitulo_es_h3(self):
+        assert _clasificar("Para maquetación: subtítulo") == "subtitulo"
+
+    @pytest.mark.parametrize("texto", [
+        "Para maquetación: sub-subtítulo",
+        "Para maquetación: subsubtítulo",
+        "Para maquetación: sub subtitulo",
+    ])
+    def test_sub_subtitulo_es_h4(self, texto):
+        assert _clasificar(texto) == "subsubtitulo"
+
+    def test_aplica_el_nivel_correcto(self):
+        soup = BeautifulSoup("<div><p>¿Qué es un indicador?</p></div>",
+                             "html.parser")
+        coment = [{"instruccion": "Para maquetación: sub-subtítulo",
+                   "anclado": "¿Qué es un indicador?",
+                   "accion": "subsubtitulo", "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        assert "<h4>¿Qué es un indicador?</h4>" in str(soup)
+
+    def test_el_subtitulo_sigue_siendo_h3(self):
+        soup = BeautifulSoup("<div><p>Costos de la calidad</p></div>",
+                             "html.parser")
+        coment = [{"instruccion": "Para maquetación: subtítulo",
+                   "anclado": "Costos de la calidad",
+                   "accion": "subtitulo", "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        assert "<h3>Costos de la calidad</h3>" in str(soup)
+
+    def test_estilo_subtitle_ya_resuelto_no_queda_pendiente_de_revision(self):
+        """Un párrafo con estilo Word 'Subtitle' ya llega como <h3> (mammoth,
+        vía el style_map de segmenter.py) — _buscar_elemento no lo encuentra
+        entre los <p>/<li>. Si el nivel YA es el que pide el comentario, no
+        hay nada que hacer: no debe quedar avisado como pendiente."""
+        soup = BeautifulSoup(
+            "<div><h3>Costos de la calidad</h3></div>", "html.parser")
+        coment = [{"instruccion": "Para maquetación: subtítulo",
+                   "anclado": "Costos de la calidad",
+                   "accion": "subtitulo", "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        assert coment[0].get("_aplicado") is True
+        assert "<h3>Costos de la calidad</h3>" in str(soup)
+
+    def test_estilo_subtitle_en_h3_se_baja_a_h4_si_el_comentario_pide_subsubtitulo(self):
+        """El estilo Word 'Subtitle' siempre da <h3>, pero el asesor puede
+        pedir sub-subtítulo (h4) para ESE párrafo puntual: hay que corregir
+        el nivel, no dejarlo en h3 avisado como 'revisar a mano' sin más
+        (regresión real: '¿Qué es un indicador?' y 'Indicadores aplicados a
+        proyectos' quedaban en h3 en vez de h4)."""
+        soup = BeautifulSoup(
+            "<div><h3>¿Qué es un indicador?</h3></div>", "html.parser")
+        coment = [{"instruccion": "Para maquetación: sub-subtítulo",
+                   "anclado": "¿Qué es un indicador?",
+                   "accion": "subsubtitulo", "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        assert coment[0].get("_aplicado") is True
+        assert "<h4>¿Qué es un indicador?</h4>" in str(soup)
+        assert "<h3>¿Qué es un indicador?</h3>" not in str(soup)
+
+    def test_una_mencion_de_paso_no_convierte_la_intro_en_titulo(self):
+        """Caso real (módulo 2): la introducción del módulo menciona
+        'auditorías internas' de pasada; el comentario 'subtítulo' que en
+        realidad apunta al subtítulo real (mucho más abajo) no debe resolver
+        sobre ese párrafo de introducción y convertirlo entero en <h3>."""
+        soup = BeautifulSoup(
+            "<div>"
+            "<p>Una vez definidos los estándares y mecanismos de calidad, "
+            "la gestión del proyecto debe sostenerlos durante toda la "
+            "ejecución. Esto implica detectar desvíos, gestionar "
+            "evidencias, validar entregables periódicamente e interpretar "
+            "la percepción de los interesados a lo largo del tiempo, junto "
+            "con las auditorías internas como instrumentos de evaluación "
+            "y aprendizaje dentro del proyecto en curso.</p>"
+            "<p>Auditorías internas</p>"
+            "<p>Permiten evaluar el cumplimiento de los procesos.</p>"
+            "</div>", "html.parser")
+        coment = [{"instruccion": "Para maquetación: subtítulo",
+                   "anclado": "Auditorías internas",
+                   "accion": "subtitulo", "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        out = str(soup)
+        assert "<h3>Auditorías internas</h3>" in out
+        assert "<h3>La mejora continua" not in out
+
+
+class TestMarcadorDeCierre:
+    """'fin del expander' marca dónde termina, no pide armar otro."""
+
+    @pytest.mark.parametrize("texto", [
+        "Para maquetación: fin del expander",
+        "Para maquetación: fin de la tabla",
+        "fin del acordeón",
+    ])
+    def test_no_dispara_un_componente(self, texto):
+        assert _clasificar(texto) is None
+
+    def test_el_expander_de_verdad_sigue_disparando(self):
+        assert _clasificar("Para maquetación: expander") == "expander"
+
+
+class TestPedidoRepetido:
+    """Un mismo pedido anclado en varios lugares es UN componente.
+
+    El asesor marca con el mismo globo cada tramo que va adentro: "TABS
+    vertical ISO 14001 ISO 45001" aparece 3 veces en el DOCX del curso de
+    prueba y "flipcards" una vez por tarjeta. El generador intentaba armar uno
+    por globo.
+    """
+
+    HTML = ("<div>"
+            "<p><u>ISO 14001</u></p><p>Gestión ambiental de la organización.</p>"
+            "<p><u>ISO 45001</u></p><p>Seguridad y salud en el trabajo.</p>"
+            "<p><u>ISO 50001</u></p><p>Gestión de la energía.</p>"
+            "</div>")
+    INSTR = "Para maquetación: TABS vertical ISO 14001 ISO 45001"
+
+    def _aplicar(self):
+        soup = BeautifulSoup(self.HTML, "html.parser")
+        coments = [{"instruccion": self.INSTR, "anclado": a,
+                    "accion": "tabs_vertical", "autor": ""}
+                   for a in ("ISO 14001", "Gestión ambiental de la organización.",
+                             "Gestión de la energía.")]
+        aplicar_comentarios(soup, coments)
+        return str(soup), coments
+
+    def test_arma_un_solo_componente(self):
+        out, _ = self._aplicar()
+        assert out.count("dp-panels-wrapper") == 1
+
+    def test_con_todos_los_paneles(self):
+        out, _ = self._aplicar()
+        assert out.count('class="dp-panel-group"') == 3
+
+    def test_saldar_todo_el_grupo(self):
+        """Los globos repetidos quedan resueltos, no pendientes de aviso."""
+        _, coments = self._aplicar()
+        assert all(c.get("_aplicado") for c in coments)
+
+    def test_pedidos_distintos_siguen_siendo_componentes_distintos(self):
+        """La deduplicación agrupa por pedido: dos pedidos distintos, en dos
+        tramos distintos, siguen dando dos componentes."""
+        soup = BeautifulSoup(
+            "<div>"
+            "<p><u>ISO 14001</u></p><p>Gestión ambiental.</p>"
+            "<p><u>ISO 45001</u></p><p>Seguridad y salud.</p>"
+            "<h2>Otra sección</h2>"
+            "<p><u>Planificar</u></p><p>Definir el alcance.</p>"
+            "<p><u>Verificar</u></p><p>Medir los resultados.</p>"
+            "</div>", "html.parser")
+        coments = [
+            {"instruccion": "Para maquetación: TABS vertical",
+             "anclado": "ISO 14001", "accion": "tabs_vertical", "autor": ""},
+            {"instruccion": "Para maquetación: acordeón",
+             "anclado": "Planificar", "accion": "acordeon", "autor": ""},
+        ]
+        aplicar_comentarios(soup, coments)
+        out = str(soup)
+        assert out.count("dp-panels-wrapper") == 2
+        assert "dp-tabs-buttons-vertical" in out
+        assert "dp-accordion-default" in out
+
+
+class TestSubtituloEnvueltoEnLista:
+    """Mammoth a veces envuelve un subtítulo corto en negrita en una lista de
+    un solo ítem ("<ul><li><strong>ISO 14001</strong></li></ul>") en vez de
+    dejarlo como <p>. Caso real: "TABS vertical ISO 14001 ISO 45001" — el
+    componente no se armaba porque el título vivía en un <li> invisible para
+    la detección de encabezados, y el <p> en negrita que sigue (la bajada del
+    título, "Gestión ambiental") se tomaba por error como una sección nueva.
+    """
+
+    HTML = (
+        "<div>"
+        "<p>Existen normas relacionadas:</p>"
+        "<ul><li><strong>ISO 14001</strong> </li></ul>"
+        "<p><strong>Gestión ambiental</strong></p>"
+        "<p>Norma de gestión ambiental.</p>"
+        "<p>Implica identificar impactos ambientales.</p>"
+        "<ul><li><strong>ISO 45001</strong> </li></ul>"
+        "<p><strong>Seguridad y salud ocupacional</strong></p>"
+        "<p>Norma de seguridad laboral.</p>"
+        "<p>Es relevante para reducir accidentes y proteger a las personas "
+        "en el trabajo.</p>"
+        "<p>Nota: hay más normas de las mencionadas.</p>"
+        "</div>")
+    INSTR = "Para maquetación: TABS vertical ISO 14001 ISO 45001"
+
+    def _aplicar(self):
+        soup = BeautifulSoup(self.HTML, "html.parser")
+        coments = [
+            {"instruccion": self.INSTR, "anclado": "ISO 14001",
+             "accion": "tabs_vertical", "autor": ""},
+            {"instruccion": self.INSTR,
+             "anclado": "Norma de seguridad laboral.",
+             "accion": "tabs_vertical", "autor": ""},
+            {"instruccion": self.INSTR,
+             "anclado": "Es relevante para reducir accidentes y proteger a "
+                        "las personas en el trabajo.",
+             "accion": "tabs_vertical", "autor": ""},
+        ]
+        aplicar_comentarios(soup, coments)
+        return BeautifulSoup(str(soup), "html.parser")
+
+    def test_arma_dos_paneles_iso(self):
+        soup = self._aplicar()
+        titulos = [h.get_text(strip=True)
+                   for h in soup.find_all(class_="dp-panel-heading")]
+        assert titulos == ["ISO 14001", "ISO 45001"]
+
+    def test_la_bajada_en_negrita_no_abre_seccion_propia(self):
+        """'Gestión ambiental' es parte del contenido del panel ISO 14001,
+        no un tercer panel."""
+        soup = self._aplicar()
+        assert len(soup.find_all(class_="dp-panel-group")) == 2
+
+    def test_no_se_come_lo_que_sigue_al_desplegable(self):
+        """El párrafo posterior al cierre del tramo anclado queda afuera del
+        componente, como contenido normal de la página."""
+        soup = self._aplicar()
+        wrapper = soup.find(class_="dp-panels-wrapper")
+        assert "Nota: hay más normas" not in str(wrapper)
+        assert "Nota: hay más normas" in str(soup)
+
+
+class TestSubtituloYaConvertidoAEncabezadoNativo:
+    """Un título de tabs/expander con estilo Word "Subtitle" ya llegó
+    convertido a <hN> (mammoth, vía _MAMMOTH_STYLE_MAP) ANTES de que
+    aplicar_comentarios corra: _buscar_elemento solo miraba <p>/<li>, así que
+    nunca encontraba el ancla y el componente entero fallaba en silencio.
+    Caso real: "TABS horizontal (palabras en negrita)" sobre "Calidad Total"
+    (estilo Subtitle → <h3>), seguido de su bajada también con pinta de
+    encabezado ("La calidad como responsabilidad de toda la organización",
+    todo subrayado) — que debe quedar como CONTENIDO del panel "Calidad
+    Total", no abrir un panel propio.
+    """
+
+    HTML = (
+        "<div>"
+        "<p>Entre los enfoques más reconocidos se encuentran varios.</p>"
+        "<h3>Calidad Total</h3>"
+        "<p><u>La calidad como responsabilidad de toda la organización</u></p>"
+        "<p>La Calidad Total integra la calidad en todas las actividades.</p>"
+        "<h3>Lean</h3>"
+        "<p><u>Eliminar actividades que no generan valor</u></p>"
+        "<p>Lean se enfoca en eliminar desperdicios.</p>"
+        "<p>Una pausa para reflexionar.</p>"
+        "</div>")
+    INSTR = "Para maquetación: TABS horizontal (palabras en negrita)"
+
+    def _aplicar(self):
+        # Ancla corta a propósito (sin el resto del tramo): el límite `hasta`
+        # solo se calcula para anclas largas (ver TestAcordeonSeDetieneEnSu
+        # Ancla) — lo que este test quiere aislar es la resolución del
+        # elemento y el colapso de la bajada subrayada, no ese mecanismo.
+        soup = BeautifulSoup(self.HTML, "html.parser")
+        coment = [{"instruccion": self.INSTR, "anclado": "Calidad Total",
+                   "accion": "tabs", "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        return BeautifulSoup(str(soup), "html.parser"), coment
+
+    def test_encuentra_el_titulo_ya_convertido_a_h3(self):
+        soup, coment = self._aplicar()
+        assert coment[0].get("_aplicado") is True
+        titulos = [h.get_text(strip=True)
+                   for h in soup.find_all(class_="dp-panel-heading")]
+        assert titulos == ["Calidad Total", "Lean"]
+
+    def test_la_bajada_subrayada_no_abre_panel_propio(self):
+        soup, _ = self._aplicar()
+        assert len(soup.find_all(class_="dp-panel-group")) == 2
+        wrapper = soup.find(class_="dp-panels-wrapper")
+        assert "La calidad como responsabilidad" in str(wrapper)
+
+
+class TestPreguntaNumeradaNoEsEncabezado:
+    """Una pregunta de la consigna, numerada, a veces llega con estilo de
+    título de Word (el asesor la organiza así en el propio documento), pero
+    es un ítem de una lista de preguntas, no un sub-encabezado del caso: no
+    debe bajar a <h4> junto con los sub-encabezados reales ("Contexto del
+    proyecto", "Actores involucrados"…). Caso real: la Actividad final
+    integradora, 5 preguntas numeradas como Heading 3 en el DOCX."""
+
+    def test_no_se_convierte_en_h4(self):
+        out = maquetar_actividad(
+            "<h2>Actividad final integradora</h2>"
+            "<h3>Consigna</h3>"
+            "<p>Responda a los siguientes puntos:</p>"
+            "<h3>1. ¿Considera que el proyecto fue exitoso?</h3>"
+            "<h3>2. Identifique las prioridades de mejora.</h3>")
+        assert "<h4>" not in out
+        assert "<p>1. ¿Considera que el proyecto fue exitoso?</p>" in out
+        assert "<p>2. Identifique las prioridades de mejora.</p>" in out
+
+    def test_no_deja_aire_suelto_entre_las_preguntas(self):
+        """procesar_contenido le pone aire adelante cuando todavía es un
+        <h3> suelto (paso 5): al bajarla a párrafo ese aire ya no
+        corresponde — una lista de preguntas va corrida, sin separador
+        entre cada una."""
+        html = ("<h2>Actividad final integradora</h2>"
+                "<h3>Consigna</h3>"
+                "<p>Responda a los siguientes puntos:</p>"
+                "<h3>1. ¿Considera que el proyecto fue exitoso?</h3>"
+                "<h3>2. Identifique las prioridades de mejora.</h3>")
+        out = maquetar_actividad(procesar_contenido(html, "", bajar_h1_h2=False))
+        assert ("<p>1. ¿Considera que el proyecto fue exitoso?</p>"
+               "<p>2. Identifique las prioridades de mejora.</p>") in out
+
+    def test_un_subencabezado_real_del_caso_si_baja_a_h4(self):
+        """Sin número al inicio, sigue siendo un sub-encabezado real del
+        relato (no una pregunta de la consigna): baja a <h4> como antes."""
+        out = maquetar_actividad(
+            "<h2>Actividad obligatoria 1</h2>"
+            "<h3>Contexto del proyecto</h3>"
+            "<p>Descripción del contexto.</p>")
+        assert "<h4>Contexto del proyecto</h4>" in out
+
+
+class TestFlipCardSeDetieneEnSuPropioGrupo:
+    """flip_card no calculaba un límite de fin (`hasta`) como sí hacen
+    acordeón/tabs/expander (`grupos_fin`, vía `_VARIANTE_PANEL`): el barrido
+    de pares_de_secciones (modo "negrita", desde la primera tarjeta) seguía
+    de largo más allá de la última tarjeta y se tragaba cualquier encabezado
+    nativo que encontrara después como si fuera una tarjeta más. Caso real:
+    el flip card del ciclo PDCA (4 tarjetas "Tarjeta N: … . Reverso: …")
+    seguía de largo y sumaba dos subtítulos NO relacionados que venían
+    después en el documento ("¿Cómo influye…?"/"La mejora continua…") como
+    tarjetas 5 y 6."""
+
+    HTML = (
+        "<div>"
+        "<p>Su nombre surge de las iniciales de cuatro etapas:</p>"
+        "<p><strong>Tarjeta 1: Planificar (Plan)</strong>. Reverso: "
+        "Identificar una situación que se debe mejorar.</p>"
+        "<p><strong>Tarjeta 2: Actuar (Act)</strong>. Reverso: "
+        "Consolidar la mejora antes de iniciar un nuevo ciclo.</p>"
+        "<h4>¿Cómo influye el ciclo PDCA sobre la toma de decisiones?</h4>"
+        "<p>La mejora continua no solo permite optimizar procesos.</p>"
+        "<h3>La mejora continua como parte de la gestión de proyectos</h3>"
+        "<p>En proyectos, el ciclo PDCA puede aplicarse a diferentes niveles.</p>"
+        "</div>")
+
+    def _aplicar(self):
+        soup = BeautifulSoup(self.HTML, "html.parser")
+        coment = [
+            {"instruccion": "Para maquetación: flipcards",
+             "anclado": "Planificar (Plan). Reverso: Identificar una "
+                        "situación que se debe mejorar.",
+             "accion": "flip_card", "autor": ""},
+            {"instruccion": "Para maquetación: flipcards",
+             "anclado": "Actuar (Act). Reverso: Consolidar la mejora antes "
+                        "de iniciar un nuevo ciclo.",
+             "accion": "flip_card", "autor": ""},
+        ]
+        aplicar_comentarios(soup, coment)
+        return soup
+
+    def test_el_deck_tiene_solo_las_tarjetas_pedidas(self):
+        soup = self._aplicar()
+        titulos = [t.get_text(strip=True) for t in
+                   soup.find_all(class_="card-text dp-heading-ignore")]
+        assert titulos == ["Planificar (Plan)", "Actuar (Act)"]
+
+    def test_los_encabezados_posteriores_no_relacionados_sobreviven(self):
+        soup = self._aplicar()
+        assert soup.find(
+            "h4", string="¿Cómo influye el ciclo PDCA sobre la toma de "
+                         "decisiones?") is not None
+        assert soup.find(
+            "h3", string="La mejora continua como parte de la gestión de "
+                         "proyectos") is not None
+
+
+class TestNoMaquetarBorraElTramo:
+    """"NO MAQUETAR" saca TODO el tramo anclado, no solo el párrafo donde
+    arranca: el asesor marca de una una sección entera (las "Indicaciones
+    para el tutor" al cierre de una AFI). Borrar solo el primero dejaría el
+    resto publicado."""
+
+    HTML = ("<div>"
+            "<h3>Criterios de evaluación</h3><p>Se evalúa X.</p>"
+            "<h3>Indicaciones para el tutor</h3>"
+            "<p>Esta sección es para el equipo docente.</p>"
+            "<h4>Sobre la corrección</h4><p>Aplicar la rúbrica.</p>"
+            "</div>")
+
+    def _aplicar(self):
+        soup = BeautifulSoup(self.HTML, "html.parser")
+        coment = [{"instruccion": "NO MAQUETAR",
+                   "anclado": "Indicaciones para el tutor Esta sección es para "
+                              "el equipo docente. Sobre la corrección "
+                              "Aplicar la rúbrica.",
+                   "accion": "no_maquetar", "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        return soup, coment
+
+    def test_saca_toda_la_seccion(self):
+        soup, _ = self._aplicar()
+        texto = soup.get_text()
+        assert "Indicaciones para el tutor" not in texto
+        assert "Sobre la corrección" not in texto
+        assert "Aplicar la rúbrica" not in texto
+
+    def test_no_toca_lo_que_va_antes(self):
+        soup, _ = self._aplicar()
+        assert "Criterios de evaluación" in soup.get_text()
+        assert "Se evalúa X." in soup.get_text()
+
+    def test_queda_marcado_como_aplicado(self):
+        _soup, coment = self._aplicar()
+        assert coment[0].get("_aplicado") is True
+
+
+class TestRecuadroDeForoSegunDestino:
+    """El recuadro del foro escrito en la lectura va a la página, al espacio
+    del foro, o a los dos, según lo que aclare el asesor."""
+
+    def _caja(self, rotulo="Foro del módulo 1"):
+        return ("<div><p>Texto previo.</p>"
+                f"<table><tr><td><p>{rotulo}</p></td></tr>"
+                "<tr><td><p>Compartí tu experiencia.</p></td></tr></table></div>")
+
+    def _aplicar(self, instruccion, accion):
+        soup = BeautifulSoup(self._caja(), "html.parser")
+        coment = [{"instruccion": instruccion, "anclado": "Foro del módulo 1",
+                   "accion": accion, "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        return soup, coment
+
+    def test_espacio_del_foro_lo_saca_de_la_pagina(self):
+        soup, coment = self._aplicar("Para maquetación, para el espacio del foro.",
+                                     "otra_pagina")
+        assert "Compartí tu experiencia." not in soup.get_text()
+        assert "Compartí tu experiencia." in coment[0]["_contenido_extraido"]
+
+    def test_en_los_dos_lados_lo_copia_y_lo_deja(self):
+        soup, coment = self._aplicar(
+            "Para maquetación, es el mismo contenido para la lectura y para "
+            "el espacio del foro.", "foro_lectura_y_espacio")
+        assert "Compartí tu experiencia." in soup.get_text()
+        assert "Compartí tu experiencia." in coment[0]["_contenido_extraido"]
+
+    def test_solo_en_la_lectura_no_toca_nada(self):
+        soup, coment = self._aplicar("Para maquetación, para dejar en la lectura.",
+                                     "foro_en_lectura")
+        assert "Compartí tu experiencia." in soup.get_text()
+        assert coment[0].get("_aplicado") is True
+
+    def test_recuadro_de_una_sola_celda_tambien_da_su_cuerpo(self):
+        """En algunos módulos el rótulo y el cuerpo son párrafos de la MISMA
+        celda: mirando solo tr[1:] el foro quedaba sin consigna."""
+        soup = BeautifulSoup(
+            "<div><table><tr><td><p>Foro del módulo 3</p>"
+            "<p>Esta actividad es optativa.</p></td></tr></table></div>",
+            "html.parser")
+        coment = [{"instruccion": "Para maquetación, para el espacio del foro.",
+                   "anclado": "Foro del módulo 3", "accion": "otra_pagina",
+                   "autor": ""}]
+        aplicar_comentarios(soup, coment)
+        assert "Esta actividad es optativa." in coment[0]["_contenido_extraido"]
+        assert "Foro del módulo 3" not in coment[0]["_contenido_extraido"]
+
+
+class TestBusquedaDeElementoEsEspecifica:
+    """_buscar_elemento se queda con el candidato más específico: una celda
+    de tabla corta ('Planificación') que por casualidad es prefijo del texto
+    anclado no debe ganarle al párrafo real ('Planificación de la calidad')
+    solo por aparecer antes en el documento."""
+
+    def test_prefiere_el_parrafo_largo_al_rotulo_corto_anterior(self):
+        from maquetador.ingest.docx_comments import _buscar_elemento
+        soup = BeautifulSoup(
+            "<div>"
+            "<table><tr><th><p><strong>Planificación</strong></p></th></tr></table>"
+            "<p><strong>Planificación de la calidad</strong></p>"
+            "<p>Define qué significa calidad para el proyecto.</p>"
+            "</div>", "html.parser")
+        el = _buscar_elemento(soup, "Planificación de la calidad Define qué "
+                                     "significa calidad para el proyecto.")
+        assert el.name == "p"
+        assert el.get_text(strip=True) == "Planificación de la calidad"
+
+    def test_no_confunde_una_mencion_de_paso_con_el_subtitulo_real(self):
+        """Caso real (módulo 2): un párrafo largo de introducción MENCIONA
+        'auditorías internas' de paso, mucho antes del subtítulo real que el
+        comentario 'Para maquetación: subtítulo' señala. La mención de paso
+        no debe ganarle al subtítulo real por aparecer antes en el documento
+        (regresión: la introducción entera terminaba convertida en <h3>)."""
+        from maquetador.ingest.docx_comments import _buscar_elemento
+        soup = BeautifulSoup(
+            "<div>"
+            "<p>Una vez definidos los estándares y mecanismos de calidad, "
+            "la gestión del proyecto debe sostenerlos durante toda la "
+            "ejecución. Esto implica detectar desvíos, gestionar "
+            "evidencias, validar entregables periódicamente e interpretar "
+            "la percepción de los interesados a lo largo del tiempo, junto "
+            "con las auditorías internas como instrumentos de evaluación "
+            "y aprendizaje dentro del proyecto en curso.</p>"
+            "<p>Auditorías internas</p>"
+            "<p>Permiten evaluar el grado de cumplimiento de los procesos.</p>"
+            "</div>", "html.parser")
+        el = _buscar_elemento(soup, "Auditorías internas")
+        assert el.get_text(strip=True) == "Auditorías internas"
+
+    def test_ancla_muy_corta_solo_matchea_por_igualdad_exacta(self):
+        """Un ancla de menos de 6 caracteres squasheados ('Foro') es
+        demasiado corta para prefijo/substring: solo vale si el párrafo
+        candidato es, entero, ese mismo texto — así 'Foro' no matchea por
+        casualidad contra 'Foro de discusión' u otro párrafo no relacionado."""
+        from maquetador.ingest.docx_comments import _buscar_elemento
+        soup = BeautifulSoup(
+            "<div>"
+            "<p>Foro de discusión general del curso.</p>"
+            "<p><strong>Foro</strong></p>"
+            "<p>Reflexioná sobre el rol de la calidad.</p>"
+            "</div>", "html.parser")
+        el = _buscar_elemento(soup, "Foro")
+        assert el is not None
+        assert el.get_text(strip=True) == "Foro"
+
+
+class TestHastaAdentroDeUnaLista:
+    """El límite `hasta` de pares_de_secciones() puede caer en un <li>
+    adentro de un <ul>/<ol> (el ancla final del comentario terminó en un
+    ítem de lista, no en un párrafo suelto): ese <li> nunca es un hermano de
+    nivel superior que el recorrido visite directo, así que el corte tiene
+    que reconocer cuándo `hasta` es DESCENDIENTE del elemento que sí se
+    visita (regresión real: un expander de módulo 2 se comía toda una
+    sección extra — "No conformidades y acciones de mejora" — porque el
+    límite real terminaba en un <li> de una lista de viñetas)."""
+
+    def test_se_detiene_en_el_li_final_sin_comerse_lo_que_sigue(self):
+        from maquetador.build.componentes_asesor import pares_de_secciones
+        soup = BeautifulSoup(
+            "<div>"
+            "<p><u>Título uno</u></p><p>Cuerpo uno.</p>"
+            "<p><u>Título dos</u></p>"
+            "<p>Antes de la lista.</p>"
+            "<ul><li>Primer punto</li><li>Último punto</li></ul>"
+            "<p>Esto no debería entrar al componente.</p>"
+            "</div>", "html.parser")
+        el = soup.find("p")
+        hasta = soup.find_all("li")[-1]
+        pares, consumidos = pares_de_secciones(el, modo="subrayado", hasta=hasta)
+        assert len(pares) == 2
+        cuerpo_total = "".join(c for _, c in pares)
+        assert "Último punto" in cuerpo_total
+        assert "Esto no debería entrar" not in cuerpo_total
+        assert all("Esto no debería entrar" not in str(c) for c in consumidos)
+
+
+class TestAcordeonSeDetieneEnSuAncla:
+    """Un acordeón de un solo globo también tiene un final: el texto anclado
+    completo (no solo el arranque) marca hasta dónde llega el componente."""
+
+    def test_no_sigue_de_largo_mas_alla_del_texto_anclado(self):
+        soup = BeautifulSoup(
+            "<div>"
+            "<p><strong>Planificación</strong></p>"
+            "<p>Define qué se va a medir.</p>"
+            "<p><strong>Control</strong></p>"
+            "<p>Verifica que se cumplan los criterios.</p>"
+            "<h3>Video módulo 1</h3>"
+            "<p>Contenido que no debería entrar al acordeón.</p>"
+            "</div>", "html.parser")
+        coment = [{
+            "instruccion": "Para maquetación: acordeón",
+            "anclado": "Planificación Define qué se va a medir. Control "
+                       "Verifica que se cumplan los criterios.",
+            "accion": "acordeon", "autor": "",
+        }]
+        aplicar_comentarios(soup, coment)
+        out = str(soup)
+        assert "Contenido que no debería entrar al acordeón" not in \
+            soup.find(class_="dp-panels-wrapper").decode_contents()
+        assert "Video módulo 1" in out
