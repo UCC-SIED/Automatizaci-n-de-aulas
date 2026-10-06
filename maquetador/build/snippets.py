@@ -185,10 +185,34 @@ def resaltado_profundizacion(titulo: str, body_html: str) -> str:
 
 
 def resaltado_atencion(body_html: str, titulo: str = "No pases de largo") -> str:
-    return f"""<div class="dp-callout dp-callout-placeholder card dp-callout-position-default dp-callout-type-info dp-callout-color-danger">
-<div class="dp-callout-side-emphasis"><i class="dp-icon dp-default-icon fas fa-exclamation-triangle">​</i></div>
+    """"No pases de largo" — la variante IMPORTANTE del catálogo.
+
+    El título es el mismo para tres cajas distintas (Atención en rojo con el
+    triángulo, Importante en ámbar con el marcador, y la verde). La que usa
+    el equipo para destacar lo que no hay que saltearse es la de Importante:
+    el rojo del triángulo es para una advertencia, y ese peso no lo tiene un
+    resumen de ideas clave.
+    """
+    return f"""<div class="dp-callout dp-callout-placeholder card dp-callout-position-default dp-callout-type-info dp-callout-color-lg-warning" style="border-width: 1px !important; border-style: solid !important;">
+<div class="dp-callout-side-emphasis"><i class="dp-icon fas fa-bookmark dp-default-icon" style="color: #ffffff;">​</i></div>
 <div class="card-body">
 <h3 class="card-title">{titulo}</h3>
+{body_html}
+</div>
+</div>"""
+
+
+# "Bitácora de aprendizaje": la ficha con barra lateral gruesa y encabezado
+# propio que el equipo arma a mano. No es un dp-callout —tiene su paleta y su
+# borde— así que no sigue el acento del tema: #003366 es parte del snippet.
+_AZUL_BITACORA = "#003366"
+
+
+def bitacora_de_aprendizaje(body_html: str,
+                            titulo: str = "Bitácora de aprendizaje") -> str:
+    return f"""<div style="margin: 20px 0px; border-width: 1px 1px 1px 10px; border-style: solid; border-color: #e1e1e1 #e1e1e1 #e1e1e1 {_AZUL_BITACORA}; border-radius: 8px; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
+<div style="background-color: #f8f9fa; padding: 15px 20px; border-bottom: 1px solid #e1e1e1; display: flex; justify-content: space-between; align-items: center;"><span style="color: {_AZUL_BITACORA}; font-size: 1.1rem;"><i class="dp-icon fas fa-diagnoses" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i>&nbsp; <strong>{titulo}</strong></span> <span style="color: {_AZUL_BITACORA}; font-size: 1.2rem;"><br></span></div>
+<div style="padding: 20px; background-color: #ffffff;">
 {body_html}
 </div>
 </div>"""
@@ -356,6 +380,10 @@ def _clasificar_recuadro(etiqueta: str, texto_completo: str) -> tuple:
         return "ejemplo", "Ejemplos que iluminan"
     if "laboratorio de ideas" in n:
         return "laboratorio_ideas", "Laboratorio de ideas"
+    # "Bitácora de aprendizaje": ficha propia, con barra lateral gruesa y su
+    # encabezado. Sin reconocerla salía de recuadro simple, sin título.
+    if "bitacora" in n:
+        return "bitacora", "Bitácora de aprendizaje"
     return "simple", ""
 
 
@@ -533,6 +561,8 @@ def _tabla_a_recuadro(tabla) -> str:
         return resaltado_ejemplo(body, titulo)
     if tipo == "laboratorio_ideas":
         return resaltado_laboratorio_ideas(body, titulo)
+    if tipo == "bitacora":
+        return bitacora_de_aprendizaje(body, titulo)
     return resaltado_simple(body)
 
 
@@ -1277,13 +1307,26 @@ def _bajada_de_recuadro(soup):
             "html.parser"))
 
 
-_PAT_ES_ARTICULO = re.compile(r"\bart[íi]culos?\b|\barticles?\b|\bpapers?\b", re.I)
+# De qué recurso se trata, para nombrar el enlace con lo que el lector va
+# a hacer con él. La pista sale de la cita APA que lo acompaña, que
+# declara el tipo entre corchetes ("[Video]. YouTube").
+_PAT_ES_ARTICULO = re.compile(
+    r"\bart[íi]culos?\b|\barticles?\b|\bpapers?\b", re.I)
+_PAT_ES_VIDEO = re.compile(
+    r"youtu\.?be|youtube\.com|vimeo\.com|\[video\]", re.I)
+_PAT_ES_PODCAST = re.compile(
+    r"spotify\.com|ivoox|anchor\.fm|podcasts?\.apple|\[podcast\]|podcasts?\b", re.I)
 
 
 def _texto_de_acceso(contexto: str) -> str:
-    """"Acceso al artículo" / "Acceso al documento" según de qué se hable."""
-    return ("Acceso al artículo" if _PAT_ES_ARTICULO.search(contexto)
-            else "Acceso al documento")
+    """Con qué texto se publica el enlace, según qué hay del otro lado."""
+    if _PAT_ES_PODCAST.search(contexto):
+        return "Escuchar el podcast"
+    if _PAT_ES_VIDEO.search(contexto):
+        return "Ver video"
+    if _PAT_ES_ARTICULO.search(contexto):
+        return "Acceso al artículo"
+    return "Acceso al documento"
 
 
 def _renombrar_links_crudos(soup):
@@ -1372,6 +1415,24 @@ _PAT_CAPTION = re.compile(r"^(figura|tabla|esquema)\s*\d*\s*(?:[\.:]|[-–—]|$
 # entre el título y la imagen en vez de arriba del epígrafe.
 _PAT_CAPTION_SOLO = re.compile(r"^(figura|tabla|esquema)\s*\d*\s*[.:]?\s*$", re.I)
 _LARGO_MAX_TITULO_FIGURA = 200
+
+
+# Rótulos con los que el asesor separa su DOCX y que en el aula sobran: el
+# bloque ya se presenta con su ícono y su título.
+_PAT_ETIQUETA_SECCION = re.compile(
+    r"^(consigna|enunciado|texto del foro|texto de la consigna)\s*[:.]?$", re.I)
+
+
+def _quitar_etiqueta_inicial(soup):
+    """Saca el rótulo de sección si abre el contenido."""
+    for el in soup.find_all(recursive=False):
+        texto = el.get_text(" ", strip=True)
+        if not texto:
+            continue
+        if getattr(el, "name", "") in ("p", "h1", "h2", "h3", "h4") \
+                and _PAT_ETIQUETA_SECCION.match(texto):
+            el.decompose()
+        return
 
 
 def _unir_epigrafe_partido(soup):
@@ -2253,6 +2314,24 @@ def _nota_suelta_en_negrita(soup):
         p.append(strong)
 
 
+# La fuente de la figura con su URL entre paréntesis al final ("Cuadro creado
+# con ChatGPT (https://chatgpt.com/).").
+_PAT_FUENTE_ENTRE_PARENTESIS = re.compile(
+    r"\s*\(\s*(https?://\S+?)\s*\)\s*\.?\s*$")
+
+
+def _nota_con_la_fuente_abajo(texto: str) -> str:
+    """El enlace de la fuente baja a su propio renglón, sin los paréntesis.
+
+    Entre paréntesis y en la misma línea, la URL parte el pie de la figura al
+    medio y queda ilegible. El equipo la manda abajo con un salto de línea
+    (shift+enter) y le saca los paréntesis y el punto final."""
+    m = _PAT_FUENTE_ENTRE_PARENTESIS.search(texto)
+    if not m:
+        return texto
+    return texto[:m.start()].rstrip() + "<br>" + m.group(1)
+
+
 def _nota_a_figcaption(soup):
     """Imagen + 'Nota. …' → <figure> con <figcaption>.
 
@@ -2289,7 +2368,8 @@ def _nota_a_figcaption(soup):
 
         cap = soup.new_tag("figcaption")
         interior = BeautifulSoup(
-            f'<span style="font-size: 10pt;"><strong>{m.group(1).strip()}</strong>'
+            f'<span style="font-size: 10pt;"><strong>'
+            f'{_nota_con_la_fuente_abajo(m.group(1).strip())}</strong>'
             "</span>", "html.parser")
         cap.append(interior)
 
@@ -2794,6 +2874,24 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
                         and not anterior.find("img"))
         if not ya_espaciado:
             hx.insert_before(BeautifulSoup("<p>&nbsp;</p>", "html.parser"))
+
+    # Etiqueta de sección del DOCX que quedó arriba de todo ("Consigna"):
+    # es el rótulo con que el asesor separa su documento, no contenido —
+    # el bloque del aula ya se presenta con su ícono y su título. Va al
+    # final, cuando el título del archivo y la tabla de metadatos ya se
+    # fueron y "Consigna" quedó efectivamente primero.
+    _quitar_etiqueta_inicial(soup)
+
+    # Párrafo vacío al final de un recuadro: viene del DOCX (el asesor cierra
+    # la caja con un renglón en blanco) y adentro del recuadro no hace falta
+    # —la caja ya trae su propio padding—, así que solo deja un hueco raro
+    # antes del borde.
+    for cuerpo in soup.find_all(class_="card-body"):
+        while True:
+            hijos = [x for x in cuerpo.find_all(recursive=False)]
+            if not hijos or not _es_espaciador(hijos[-1]):
+                break
+            hijos[-1].decompose()
 
     return aplicar_acento_del_tema(str(soup), tema)
 

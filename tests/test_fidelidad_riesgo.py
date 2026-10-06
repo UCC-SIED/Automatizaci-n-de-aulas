@@ -98,12 +98,17 @@ class TestTitulosOficialesComoEtiqueta:
         assert "fa-book-reader" in out
         assert "dp-callout-type-title-bar" in out
 
-    def test_no_pases_de_largo_es_el_recuadro_de_atencion(self):
+    def test_no_pases_de_largo_es_el_recuadro_importante(self):
+        """El catálogo tiene tres cajas con ese mismo título; la que usa el
+        equipo para destacar lo que no hay que saltearse es la de Importante
+        (ámbar, con el marcador), no la de Atención (roja, con el triángulo):
+        ese peso es para una advertencia, no para un resumen de ideas clave."""
         out = self._caja("No pases de largo",
                          "La gestión del riesgo no es un acto único.")
         assert "No pases de largo" in out
-        assert "dp-callout-color-danger" in out
-        assert "fa-exclamation-triangle" in out
+        assert "dp-callout-color-lg-warning" in out
+        assert "fa-bookmark" in out
+        assert "dp-callout-color-danger" not in out
 
 
 class TestLinkCrudoDentroDeUnRecuadro:

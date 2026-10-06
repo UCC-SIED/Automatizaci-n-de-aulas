@@ -24,6 +24,25 @@ import unicodedata
 from bs4 import BeautifulSoup
 
 ICONO_LECTURA = "$IMS-CC-FILEBASE$/Iconos/icono%20lectura.svg"
+# El ícono dice de qué recurso se trata: con el de lectura para todo, una
+# charla de YouTube y un podcast se anuncian como si fueran un libro.
+ICONO_VIDEO = "$IMS-CC-FILEBASE$/Iconos/Icono%20video.svg"
+ICONO_PODCAST = "$IMS-CC-FILEBASE$/Iconos/icono%20podcast.svg"
+_PAT_ES_VIDEO = re.compile(
+    r"youtu\.?be|youtube\.com|vimeo\.com|\[video\]|v[ií]deos?", re.I)
+_PAT_ES_PODCAST = re.compile(
+    r"spotify\.com|ivoox|anchor\.fm|podcasts?\.apple|\[podcast\]|"
+    r"podcasts?|audio", re.I)
+
+
+def _icono_de(referencia: str, url: str) -> str:
+    """Ícono que corresponde al tipo de recurso de esta referencia."""
+    pista = f"{referencia} {url}"
+    if _PAT_ES_PODCAST.search(pista):
+        return ICONO_PODCAST
+    if _PAT_ES_VIDEO.search(pista):
+        return ICONO_VIDEO
+    return ICONO_LECTURA
 _PAT_URL = re.compile(r"(https?://[^\s<>\"')\]]+)")
 # APA: año entre paréntesis p.ej. (2021) / (2022a,) / (2019, 15 de marzo)
 _PAT_APA_YEAR = re.compile(r"\(\d{4}")
@@ -49,15 +68,16 @@ def _es_header_sugerida(t: str) -> bool:
 
 def _fila_referencia(ref_html: str, url: str) -> str:
     """Construye un <div class="row"> con icono + texto (+ URL separada)."""
+    ICONO = _icono_de(ref_html, url)
     if url:
         icono = (f'<a class="inline_disabled dp-ext-ignore" href="{url}" '
                  f'target="_blank"><img role="presentation" '
-                 f'src="{ICONO_LECTURA}" alt="" loading="lazy"></a>')
+                 f'src="{ICONO}" alt="" loading="lazy"></a>')
         link_p = (f'<p class="text-break" style="margin: 0; padding: 0;">'
                   f'<a class="inline_disabled dp-ext-ignore" href="{url}" '
                   f'target="_blank">{url}</a></p>')
     else:
-        icono = (f'<img role="presentation" src="{ICONO_LECTURA}" alt="" '
+        icono = (f'<img role="presentation" src="{ICONO}" alt="" '
                  f'loading="lazy">')
         # Sin URL, la fila queda dos líneas más corta que sus vecinas con
         # link (texto + link + aire, contra solo texto + aire): sin este
@@ -115,7 +135,7 @@ def _bloque_columnas(refs: list) -> str:
             f'{filas}\n</div>')
 
 
-def construir_bibliografia(refs_html: str) -> str:
+def construir_bibliografia(refs_html: str, nivel: str = "h4") -> str:
     """HTML crudo de referencias → cuerpo del kl_custom_block con la
     estructura oficial. Devuelve '' si no hay referencias reconocibles."""
     if not refs_html:
@@ -163,15 +183,18 @@ def construir_bibliografia(refs_html: str) -> str:
 
     # Si el DOCX no clasifica (no trae headers), no inventar "Obligatoria":
     # se listan las referencias directas (como hace el equipo a mano).
+    # El bloque cierra con aire, como todo bloque de contenido del aula.
+    cierre = "<p>&nbsp;</p>"
     if not hubo_header:
-        return _bloque_columnas(obligatoria)
+        return _bloque_columnas(obligatoria) + "\n" + cierre
 
     partes = []
     if obligatoria:
-        partes.append('<h4 style="text-align: left;">Obligatoria</h4>')
+        partes.append(f'<{nivel} style="text-align: left;">Obligatoria</{nivel}>')
         partes.append(_bloque_columnas(obligatoria))
     if sugerida:
-        partes.append(
-            '<h4 style="text-align: left;">Sugerida y complementaria</h4>')
+        partes.append(f'<{nivel} style="text-align: left;">'
+                      f'Sugerida y complementaria</{nivel}>')
         partes.append(_bloque_columnas(sugerida))
+    partes.append(cierre)
     return "\n".join(partes)
