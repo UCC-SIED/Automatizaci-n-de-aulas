@@ -22,8 +22,6 @@ class TestComentariosMuertos:
         "Para maquetación: Nota. Figura elaborada con base en Out of the crisis, "
         "por W. E. Deming, 2000, Penguin.",
         "Nota. Figura elaborada con base en Sistemas de gestión de la calidad.",
-        "Para maquetación: Texto alternativo: Diagrama de Ishikawa.",
-        "Texto alternativo: Gráfico de barras sobre la frecuencia de reclamos.",
     ])
     def test_los_que_duplican_el_cuerpo_no_son_pedidos(self, texto):
         assert _clasificar(texto) is None
@@ -192,3 +190,21 @@ class TestGeniallyConRespuestaDelDisenador:
         assert "Texto previo de la página" in out
         assert "<h3>Siguiente sección</h3>" in out
         assert coment[0].get("_aplicado") is True
+
+
+class TestElTextoAlternativoSiEsUnPedido:
+    """El globo que DA el texto alternativo no es ruido: es el alt de la
+    figura. Durante un tiempo se descartó junto con la "Nota." que repite el
+    pie ya escrito, y las imágenes se publicaban sin descripción accesible."""
+
+    @pytest.mark.parametrize("texto", [
+        "Texto alternativo: Diagrama de Ishikawa.",
+        "Para maquetación: Texto alternativo: Gráfico de barras.",
+        "texto alt: Neurona con dendritas, cuerpo celular y axón.",
+    ])
+    def test_con_contenido_detras_es_el_alt(self, texto):
+        assert _clasificar(texto) == "texto_alternativo"
+
+    def test_el_rotulo_pelado_sigue_siendo_ruido(self):
+        assert _clasificar("Texto alternativo") is None
+        assert _clasificar("Nota. Figura elaborada con base en Deming.") is None

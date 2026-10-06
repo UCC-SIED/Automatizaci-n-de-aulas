@@ -42,7 +42,8 @@ _AUTO = {"subtitulo", "subsubtitulo", "recuadro_simple", "lectura", "video",
          "podcast", "sin_recuadro", "otra_pagina", "enlace_descargable",
          "genially_listo", "no_maquetar", "foro_en_lectura",
          "foro_lectura_y_espacio", "figura_expandible", "enlazar_actividad",
-         "destacar_tramo", "componente_en_el_texto"}
+         "destacar_tramo", "componente_en_el_texto",
+         "texto_alternativo"}
 
 # Nivel de encabezado por acción, según la política de jerarquía de la UCC:
 # H2 es el título de la página, H3 el subtítulo y H4 el sub-subtítulo.
@@ -94,6 +95,13 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     # en…") y el texto alternativo. El generador los toma del párrafo, no del
     # globo; acá son ruido del proceso editorial que quedó sin limpiar y no
     # tiene que aparecer como un pedido pendiente.
+    # "Texto alternativo: …" con contenido detrás NO es ruido: es el alt que
+    # el asesor escribe para la figura, y sin tomarlo la imagen se publica
+    # sin descripción accesible. Solo el rótulo pelado (sin texto) se
+    # descarta, junto con la "Nota." que repite el pie ya escrito.
+    if re.match(r"^\s*(?:para\s+(?:maquetacion|el\s+maquetado)\s*:\s*)?"
+                r"texto\s+alt\w*\s*[:.]\s*\S", n):
+        return "texto_alternativo"
     if re.match(r"^\s*(?:para\s+(?:maquetacion|el\s+maquetado)\s*:\s*)?"
                 r"(?:nota\s*[\.:]|texto\s+alt)", n):
         return None
@@ -311,12 +319,20 @@ def extraer_comentarios(docx_path) -> list:
     activos = set()
     anclado = {cid: [] for cid in textos}
     inicio_el = {}
+    # Orden en que los globos aparecen EN EL DOCUMENTO. comments.xml los
+    # guarda por w:id, que es el orden en que se crearon: si el asesor vuelve
+    # sobre una figura anterior, su globo queda último. Varios globos con el
+    # mismo texto anclado (el pie "Nota. Cuadro creado con ChatGPT…" debajo de
+    # cada figura) se reparten por posición, así que ese orden importa: sin
+    # esto, el texto alternativo de una figura terminaba en la de al lado.
+    orden_doc = {}
     for el in droot.iter():
         tag = el.tag
         if tag == f"{_W}commentRangeStart":
             cid = el.get(f"{_W}id")
             activos.add(cid)
             inicio_el.setdefault(cid, el)
+            orden_doc.setdefault(cid, len(orden_doc))
         elif tag == f"{_W}commentRangeEnd":
             activos.discard(el.get(f"{_W}id"))
         elif tag == f"{_W}t" and activos:
@@ -404,6 +420,7 @@ def extraer_comentarios(docx_path) -> list:
                 "accion": "genially_listo",
                 "autor": autores.get(cid, ""),
                 "_html_genially": html_listo,
+                "_orden": orden_doc.get(cid, len(orden_doc)),
             })
             continue
         if not accion:
@@ -413,6 +430,7 @@ def extraer_comentarios(docx_path) -> list:
             "anclado": _ancla(cid),
             "accion": accion,
             "autor": autores.get(cid, ""),
+            "_orden": orden_doc.get(cid, len(orden_doc)),
         })
     return out
 
@@ -501,12 +519,24 @@ def _buscar_elemento_final(soup, anclado: str):
     if len(objetivo) < 6:
         return None
     clave = objetivo[-40:]
-    resultado = None
+    aproximado = None
     for el in soup.find_all(_TAGS_BUSCABLES):
         t = _squash(el.get_text(" ", strip=True))
-        if t and (t.endswith(clave) or clave.endswith(t)):
-            resultado = el
-    return resultado
+        if not t:
+            continue
+        if t.endswith(clave):
+            # El bloque que de verdad cierra el tramo marcado: el primero que
+            # termina con el final del ancla. Antes se seguía recorriendo y
+            # ganaba el ÚLTIMO parecido, así que el componente se estiraba
+            # hasta el fondo de la página y se tragaba todo lo que venía
+            # después (figura, subtítulos y recuadros incluidos).
+            return el
+        # Un bloque corto que coincide con la cola del ancla sirve de
+        # aproximación, pero solo si tiene cuerpo suficiente como para no
+        # ser una coincidencia de dos palabras.
+        if len(t) >= 12 and clave.endswith(t):
+            aproximado = el
+    return aproximado
 
 
 def _imagen_cercana(el):
@@ -688,20 +718,54 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
     # como límite de cierre. Sin este piso, un ancla corta usada como "fin"
     # coincide con el propio elemento de arranque y trunca el componente a
     # un solo elemento.
+    # El límite lo marca el último globo del grupo QUE ESTÉ EN ESTA SECCIÓN.
+    # Dos componentes distintos del módulo suelen compartir la misma
+    # instrucción genérica ("para maquetación: recurso expander") y caen en el
+    # mismo grupo: mirando solo el último, el final de un expander se buscaba
+    # en la página del otro, no aparecía, y el componente se armaba sin
+    # límite — se llevaba puestos los subtítulos que venían después.
     grupos_fin = {}
     for grupo, cs in grupos_textos.items():
-        if len(_squash(cs[-1]["anclado"])) < 40:
-            continue
-        el_fin = _buscar_elemento_final(soup, cs[-1]["anclado"])
-        if el_fin is not None:
-            grupos_fin[grupo] = el_fin
+        for c_fin in reversed(cs):
+            if len(_squash(c_fin["anclado"])) < 40:
+                continue
+            el_fin = _buscar_elemento_final(soup, c_fin["anclado"])
+            if el_fin is not None:
+                grupos_fin[grupo] = el_fin
+                break
 
-    for c in comentarios:
+    # Varios globos distintos pueden colgar del MISMO texto, porque ese texto
+    # se repite en todo el módulo: el pie "Nota. Cuadro creado con ChatGPT…"
+    # es idéntico debajo de cada figura, y cada globo describe la suya. Como
+    # esta función corre una vez por sección, el que corresponde acá es el
+    # primero sin aplicar: los demás son de las secciones que siguen. Sin
+    # esto, la primera sección se llevaba los tres y las otras dos quedaban
+    # sin su texto alternativo.
+    anclas_usadas = set()
+    # Los textos alternativos se recorren en el orden del DOCUMENTO, no en el
+    # que se crearon los globos: todos cuelgan del mismo pie ("Nota. Cuadro
+    # creado con ChatGPT…"), que se repite debajo de cada figura, y lo que
+    # los distingue es la posición. El resto de los globos conserva su orden,
+    # del que depende qué componente se arma en cada sección.
+    alternativos = sorted((c for c in comentarios
+                           if c["accion"] == "texto_alternativo"),
+                          key=lambda c: c.get("_orden", 0))
+    orden = [c for c in comentarios
+             if c["accion"] != "texto_alternativo"] + alternativos
+
+    for c in orden:
         accion = c["accion"]
         if c.get("_aplicado"):
             continue
         if accion not in _AUTO and accion not in _COMPONENTES:
             continue
+        clave_ancla = (accion, _squash(c["anclado"]))
+        if accion == "texto_alternativo":
+            # Dos figuras de la misma sección no comparten alt: si el ancla ya
+            # se usó acá, este globo es de la figura de la página siguiente.
+            if clave_ancla in anclas_usadas:
+                continue
+            anclas_usadas.add(clave_ancla)
         if accion == "componente_en_el_texto":
             # El globo solo señala el nombre del componente que el asesor ya
             # escribió como primera línea de la caja: lo arma procesar_contenido
@@ -884,6 +948,16 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
             # El asesor pide NO encuadrar: se marca para que procesar_contenido
             # no lo convierta en recuadro por sus heurísticas.
             el["data-keep-plain"] = "1"
+        elif accion == "texto_alternativo":
+            # El asesor escribe el alt de la figura en un globo, anclado a su
+            # "Nota." o a la figura misma. Se deja como el párrafo que ya sabe
+            # leer procesar_contenido ("Texto alternativo: …"), que lo pasa al
+            # atributo alt y borra el párrafo: una sola forma de resolverlo,
+            # venga del cuerpo del DOCX o de un comentario.
+            alt = re.sub(r"^\s*(?:para\s+(?:maqueta(?:ci[óo]n|do)|el\s+"
+                         r"maquetado)\s*[:.]?\s*)?", "", c["instruccion"],
+                         flags=re.I).strip()
+            el.insert_after(BeautifulSoup(f"<p>{alt}</p>", "html.parser"))
         elif accion == "otra_pagina":
             # El contenido (típicamente el foro) vive en el DOCX de este
             # módulo pero el asesor aclaró que va en OTRA página: se saca

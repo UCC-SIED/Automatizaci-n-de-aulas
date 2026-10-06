@@ -158,3 +158,68 @@ class TestBibliografiaDeLaPagina:
     ])
     def test_el_icono_dice_de_que_recurso_se_trata(self, referencia, url, icono):
         assert _icono_de(referencia, url).endswith(icono)
+
+
+class TestTextoAlternativoDesdeElComentario:
+    """El asesor escribe el alt de la figura en un globo, anclado a su
+    "Nota.". Se descartaba junto con los comentarios que repiten el cuerpo,
+    y las imágenes se publicaban sin descripción accesible."""
+
+    def test_el_alt_llega_al_atributo_de_la_figura(self):
+        from maquetador.ingest.docx_comments import aplicar_comentarios
+        html = ('<p>Figura 2. Sinapsis</p><p><img src="__MEDIA__/x.png"/></p>'
+                "<p>Nota. Cuadro creado con ChatGPT.</p>")
+        s = BeautifulSoup(html, "html.parser")
+        aplicar_comentarios(s, [{
+            "accion": "texto_alternativo",
+            "instruccion": "Para maquetación: Texto alternativo: "
+                           "Neurotransmisores cruzan la sinapsis.",
+            "anclado": "Nota. Cuadro creado con ChatGPT."}])
+        out = procesar_contenido(str(s))
+        img = BeautifulSoup(out, "html.parser").find("img")
+        assert img["alt"] == "Neurotransmisores cruzan la sinapsis"
+        assert "Texto alternativo" not in out
+        assert "Para maquetación" not in out
+
+
+class TestElComponenteNoSeTragaLoQueSigue:
+    """El tramo del componente termina donde termina el texto que el asesor
+    marcó. Buscando el ÚLTIMO bloque parecido al final del ancla, el expander
+    se estiraba hasta el fondo de la página: en 1.3.3 se llevaba puestos dos
+    subtítulos que van sueltos, y en 1.3.1, la figura entera."""
+
+    def _soup(self):
+        return BeautifulSoup(
+            "<p>Intro de la página.</p>"
+            "<p><strong>Uno.</strong> Primera parte del desplegable, con "
+            "bastante texto para que valga como ancla larga.</p>"
+            "<p><strong>Dos.</strong> Segunda parte del desplegable, que "
+            "cierra el tramo marcado por el asesor.</p>"
+            "<h3>La corteza cerebral</h3><p>Esto va suelto, fuera.</p>",
+            "html.parser")
+
+    def test_el_final_es_el_primer_bloque_que_cierra_el_ancla(self):
+        from maquetador.ingest.docx_comments import _buscar_elemento_final
+        s = self._soup()
+        ancla = ("Uno. Primera parte del desplegable, con bastante texto para "
+                 "que valga como ancla larga.Dos. Segunda parte del "
+                 "desplegable, que cierra el tramo marcado por el asesor.")
+        el = _buscar_elemento_final(s, ancla)
+        assert el is not None
+        assert el.get_text(" ", strip=True).startswith("Dos.")
+
+    def test_lo_que_viene_despues_queda_afuera(self):
+        from maquetador.ingest.docx_comments import aplicar_comentarios
+        s = self._soup()
+        ancla = ("Uno. Primera parte del desplegable, con bastante texto para "
+                 "que valga como ancla larga.Dos. Segunda parte del "
+                 "desplegable, que cierra el tramo marcado por el asesor.")
+        aplicar_comentarios(s, [{"accion": "expander",
+                                 "instruccion": "para maquetación: recurso expander",
+                                 "anclado": ancla}])
+        out = procesar_contenido(str(s))
+        sopa = BeautifulSoup(out, "html.parser")
+        panel = sopa.find("div", class_="dp-panels-wrapper")
+        assert panel is not None
+        assert "La corteza cerebral" not in panel.get_text()
+        assert sopa.find("h3", class_=lambda c: not c) is not None
