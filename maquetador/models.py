@@ -100,6 +100,11 @@ class CourseSpec:
     issues: list = field(default_factory=list)         # issues globales del curso
     recursos_html: list = field(default_factory=list)  # herramientas .html sueltas
     material_suelto: list = field(default_factory=list)  # sin fila en la planilla
+    # Ids de Canvas Studio que llegan DESPUES de armar el aula: la
+    # coleccion se comparte recien al cerrar la maquetacion, asi que el
+    # id no esta cuando se genera el paquete por primera vez. Clave:
+    # "inicio" o el numero de la pagina ("1.4.1"); valor: el media id.
+    videos_studio: dict = field(default_factory=dict)
 
     def todos_los_items(self):
         for it in self.items_inicio:

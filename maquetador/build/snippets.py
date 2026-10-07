@@ -21,6 +21,8 @@ mano: el dp-wrapper los estiliza) y estiliza figuras y sus epígrafes.
 """
 
 import re
+import uuid
+from urllib.parse import quote
 import unicodedata
 
 from bs4 import BeautifulSoup, NavigableString
@@ -113,6 +115,12 @@ _PAT_EMBEBER_VIDEO = re.compile(
     re.I)
 _PAT_MARCADOR_VIDEO = re.compile(
     r"^\s*videos?\s*(?:m(?:[oó]dulo)?\s*)?\d*\s*[\.:]?\s*$", re.I)
+# "(AQUÍ VA VIDEO M1)" — la otra forma en que el asesor marca el lugar del
+# video, entre paréntesis y dentro del recuadro. Sin reconocerla, el recuadro
+# salía como un CTA que manda afuera y el texto del paréntesis se publicaba.
+_PAT_AQUI_VA_VIDEO = re.compile(
+    r"^\s*[\(\[]?\s*(?:aqu[ií]|ac[áa])\s+va\b[^:<]{0,30}?\bvideos?\b"
+    r"[^)\]]*[\)\]]?\s*\.?\s*$", re.I)
 _PAT_MARCADOR_VIDEO_FINAL = re.compile(
     r"\s*\bvideos?\s*(?:m(?:[oó]dulo)?\s*)?\d*\s*\.?\s*(?=</|$)", re.I)
 
@@ -146,7 +154,57 @@ def token_de_studio(url: str) -> tuple:
     return (m.group(1), m.group(2) or "")
 
 
-def bloque_video_studio(body_html: str = "", referencia: str = "") -> str:
+# El id con el que Canvas incrusta un video de Studio: un UUID y, pegado con
+# guion, el número del medio — el mismo que cierra el enlace de edición que
+# trae la planilla (".../caption/edit/1446"). El UUID no se puede deducir de
+# ese enlace: aparece recién en el embed que genera Canvas, cuando la
+# colección ya está compartida. Por eso se acepta tanto el id pelado como el
+# iframe entero pegado en la planilla.
+_PAT_MEDIA_ID = re.compile(
+    r"custom_arc_media_id(?:%3D|=)([0-9a-f-]{36}-\d+)"
+    r"|(?<![0-9a-f-])([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-"
+    r"[0-9a-f]{12}-\d+)", re.I)
+
+
+def media_id_de_studio(texto: str) -> str:
+    """El custom_arc_media_id que haya en el texto, o ""."""
+    m = _PAT_MEDIA_ID.search(texto or "")
+    return (m.group(1) or m.group(2)) if m else ""
+
+
+def embed_de_studio(media_id: str, titulo: str = "") -> str:
+    """Iframe de Canvas Studio, igual al que genera Canvas al incrustar.
+
+    El curso se resuelve con $CANVAS_COURSE_REFERENCE$ para que el paquete
+    sirva en cualquier aula."""
+    if not media_id:
+        return ""
+    lanzamiento = quote(
+        "https://uccor.instructuremedia.com/lti/launch"
+        "?custom_arc_launch_type=learn_embed"
+        f"&custom_arc_media_id={media_id}"
+        "&custom_arc_start_at=0"
+        "&custom_arc_transcript_downloadable=true", safe="")
+    attr_titulo = f' title="{titulo}"' if titulo else ""
+    return (f'<iframe class="lti-embed"'
+            f' style="width: 700px; height: 441px; display: inline-block;"'
+            f'{attr_titulo}'
+            f' src="$CANVAS_COURSE_REFERENCE$/external_tools/retrieve'
+            f'?display=borderless&amp;url={lanzamiento}"'
+            f' width="700" height="441" loading="lazy"'
+            f' allowfullscreen="allowfullscreen"'
+            f' webkitallowfullscreen="webkitallowfullscreen"'
+            f' mozallowfullscreen="mozallowfullscreen"'
+            f' allow="geolocation *; microphone *; camera *; midi *;'
+            f' encrypted-media *; autoplay *; clipboard-write *;'
+            f' display-capture *; fullscreen *"'
+            f' data-studio-resizable="true"'
+            f' data-studio-tray-enabled="true"'
+            f' data-studio-convertible-to-link="true"></iframe>')
+
+
+def bloque_video_studio(body_html: str = "", referencia: str = "",
+                        embed: str = "") -> str:
     """Bloque de video propio de la UCC (Canvas Studio).
 
     Los videos de desarrollo / introducción / conceptuales NO son un CTA: no
@@ -160,9 +218,9 @@ def bloque_video_studio(body_html: str = "", referencia: str = "") -> str:
     """
     intro = f'{body_html}<p>&nbsp;</p>' if body_html else ""
     cual = f": {referencia}" if referencia else ""
-    adentro = f"<!-- Pegar aquí el embed de Canvas Studio{cual} -->"
+    adentro = embed or f"<!-- Pegar aquí el embed de Canvas Studio{cual} -->"
     return f"""<div class="dp-content-block" data-title="Video" data-category="+UCC">
-<h2 class="dp-has-icon"><i class="dp-icon fab fa-youtube" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i></h2>
+<h2 class="dp-has-icon"><i class="dp-icon fab fa-youtube" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i>Video</h2>
 {intro}<div class="dp-embed-wrapper mx-auto d-block" style="text-align: center;">{adentro}</div>
 <p>&nbsp;</p>
 </div>"""
@@ -202,6 +260,119 @@ def resaltado_atencion(body_html: str, titulo: str = "No pases de largo") -> str
 </div>"""
 
 
+# Instructivo fijo que el equipo pega al pie de toda actividad que se entrega
+# en grupo: el DOCX del asesor no lo trae (no es contenido de la asignatura,
+# es cómo se usa Canvas) y sin él los alumnos entregan sin unirse al grupo.
+_PAT_ES_GRUPAL = re.compile(
+    r"\b(?:grupal(?:es)?|en\s+grupos?|informe\s+grupal|s[ií]ntesis\s+grupal|"
+    r"por\s+equipos?|cada\s+(?:grupo|equipo))\b", re.I)
+
+
+# La portada del DOCX de una actividad: carrera, asignatura, docente, título
+# de la actividad y la tabla de metadatos (módulos, fecha, modalidad). En
+# Canvas nada de eso va: la actividad ya se abre con su nombre y su fecha, y
+# el equipo arranca directo en la primera sección.
+_PAT_PORTADA_CARRERA = re.compile(
+    r"^\s*(?:maestr[ií]a|especializaci[óo]n|diplomatura|licenciatura|"
+    r"doctorado|carrera|programa)\b", re.I)
+_PAT_PORTADA_DOCENTE = re.compile(
+    r"^\s*(?:docente|profesor|autor|contenidista)\b", re.I)
+_PAT_PORTADA_TITULO = re.compile(
+    r"^\s*actividad\s+(?:obligatoria|sugerida|final|integradora|n[°º]?\s*\d)",
+    re.I)
+_PAT_META_ACTIVIDAD = re.compile(
+    r"^\s*(?:m[óo]dulos?|fecha\s+de\s+entrega|fecha|modalidad|formato|"
+    r"valor|ponderaci[óo]n|peso|entrega|duraci[óo]n)\b", re.I)
+# Rótulos de sección de la actividad: el asesor los escribe en negrita y a
+# veces con su propia redacción. Van todos como h3, con el nombre de la casa.
+_ROTULOS_DE_ACTIVIDAD = {
+    "consigna": "Consigna",
+    "contextualizacion": "Contextualización",
+    "criterios de evaluacion": "Criterios de evaluación",
+    "formato de entrega": "Pautas de presentación",
+    "pautas de presentacion": "Pautas de presentación",
+    "pautas de entrega": "Pautas de presentación",
+}
+
+
+def _quitar_portada_de_actividad(soup, nombre_curso: str = "") -> None:
+    """Saca la portada del DOCX: lo de arriba hasta la primera sección.
+
+    La portada es la carrera, la asignatura, el docente, el título de la
+    actividad y la tabla de metadatos (módulos, fecha, modalidad). Se corta
+    en el primer rótulo de sección o en el primer párrafo de contenido, así
+    que un DOCX que arranca directo en la consigna queda intacto."""
+    curso = _norm(nombre_curso)
+    hubo_portada = False
+    for el in list(soup.find_all(recursive=False)):
+        texto = el.get_text(" ", strip=True)
+        if not texto:
+            el.decompose()
+            continue
+        if _norm(texto) in _ROTULOS_DE_ACTIVIDAD:
+            return
+        if el.name == "table":
+            primera = el.find(["td", "th"])
+            if primera is not None and _PAT_META_ACTIVIDAD.match(
+                    primera.get_text(" ", strip=True)):
+                el.decompose()
+                continue
+            return
+        # La portada viene en negrita, no como encabezado: mammoth la
+        # entrega en <p> y es procesar_contenido el que después la sube a
+        # h2/h4. Así que acá se mira el texto, no la etiqueta.
+        if (_PAT_PORTADA_CARRERA.match(texto)
+                or _PAT_PORTADA_DOCENTE.match(texto)
+                or (curso and _norm(texto) == curso)):
+            el.decompose()
+            hubo_portada = True
+            continue
+        # El título de la actividad se saca solo si viene COMO PARTE de una
+        # portada (debajo de la carrera, la asignatura o el docente). Suelto
+        # es el título del caso, y de eso ya se encarga maquetar_actividad:
+        # le quita el prefijo y lo publica como H2 de la actividad.
+        if hubo_portada and _PAT_PORTADA_TITULO.match(texto):
+            el.decompose()
+            continue
+        return
+
+
+def _secciones_de_actividad_a_h3(soup) -> None:
+    """Cada rótulo de sección va como h3, con el nombre de la casa.
+
+    El asesor los manda en negrita o con su redacción ("Formato de entrega"
+    por "Pautas de presentación"): quedaban como párrafo suelto en medio de
+    la consigna, sin el estilo del tema y fuera del índice de la página."""
+    for el in list(soup.find_all(["p", "h2", "h3", "h4", "h5"])):
+        texto = el.get_text(" ", strip=True)
+        oficial = _ROTULOS_DE_ACTIVIDAD.get(_norm(texto))
+        if not oficial:
+            continue
+        nuevo = soup.new_tag("h3")
+        nuevo.string = oficial
+        el.replace_with(nuevo)
+
+
+def recuadro_actividad_grupal() -> str:
+    return """<div class="dp-callout dp-callout-placeholder card dp-callout-position-default dp-callout-type-info dp-callout-color-success">
+<div class="dp-callout-side-emphasis"><i class="fas fa-users dp-default-icon dp-i-shape-circle dp-i-size-large dp-i-border-light"> </i></div>
+<div class="card-body">
+<h3 class="card-title" style="text-align: left;"><strong>Actividad Grupal</strong></h3>
+<p style="text-align: left;">Para visualizar los grupos ingresá al curso y hacé clic en Personas &rarr; Grupos.</p>
+<p style="text-align: left;"><strong>Tu docente te indicará si debés elegir un grupo o si ya estás asignado al mismo.</strong></p>
+<ul style="text-align: left;">
+<li aria-level="1"><span>Verificá que estás unido a tu grupo antes de realizar la entrega.</span></li>
+<li aria-level="1"><span>Coordiná con tu equipo quién va a enviar.</span></li>
+<li aria-level="1"><span>La entrega la realiza un solo integrante en representación de todo el equipo, desde esta misma actividad.</span></li>
+<li aria-level="1"><span>No realices la entrega sin antes haberte unido a tu grupo.&nbsp;</span></li>
+</ul>
+<blockquote>
+<p style="text-align: left;">⚠ <strong>Importante:</strong> Si no ves los grupos o tenés problemas, contactá al docente.</p>
+</blockquote>
+</div>
+</div>"""
+
+
 # "Bitácora de aprendizaje": la ficha con barra lateral gruesa y encabezado
 # propio que el equipo arma a mano. No es un dp-callout —tiene su paleta y su
 # borde— así que no sigue el acento del tema: #003366 es parte del snippet.
@@ -214,6 +385,162 @@ def bitacora_de_aprendizaje(body_html: str,
 <div style="background-color: #f8f9fa; padding: 15px 20px; border-bottom: 1px solid #e1e1e1; display: flex; justify-content: space-between; align-items: center;"><span style="color: {_AZUL_BITACORA}; font-size: 1.1rem;"><i class="dp-icon fas fa-diagnoses" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i>&nbsp; <strong>{titulo}</strong></span> <span style="color: {_AZUL_BITACORA}; font-size: 1.2rem;"><br></span></div>
 <div style="padding: 20px; background-color: #ffffff;">
 {body_html}
+</div>
+</div>"""
+
+
+# "Quick check": el repaso de verdadero o falso que el asesor escribe como
+# una lista dentro de un recuadro. El componente es una grilla de tarjetas
+# que se corrigen solas al hacer clic; el azul y los íconos son del snippet,
+# no del tema del aula.
+_AZUL_QC = "#003366"
+_PAT_RESPUESTA_VF = re.compile(r"[\s(]*(verdadero|falso)[\s).]*$", re.I)
+_PAT_NUM_PREGUNTA = re.compile(r"^\s*\d+\s*[.)\-]?\s*")
+
+
+def preguntas_de_verdadero_o_falso(bloques: list) -> list:
+    """[(enunciado, 'Verdadero'|'Falso')] a partir de los párrafos/ítems.
+
+    El asesor a veces parte una pregunta larga en dos renglones ("…eliminar
+    las" / "emociones grupales? Falso"): se van juntando hasta encontrar la
+    respuesta, que siempre cierra el enunciado."""
+    preguntas, acumulado = [], ""
+    for texto in bloques:
+        texto = " ".join((texto or "").split())
+        if not texto:
+            continue
+        acumulado = f"{acumulado} {texto}".strip() if acumulado else texto
+        m = _PAT_RESPUESTA_VF.search(acumulado)
+        if not m:
+            continue
+        enunciado = _PAT_NUM_PREGUNTA.sub("", acumulado[:m.start()]).strip()
+        if enunciado:
+            preguntas.append((enunciado, m.group(1).capitalize()))
+        acumulado = ""
+    return preguntas
+
+
+def _tarjeta_quick_check(n: int, enunciado: str, correcta: str,
+                         ancho_completo: bool) -> str:
+    otra = "Falso" if correcta.lower() == "verdadero" else "Verdadero"
+    col = "col-12" if ancho_completo else "col-lg-6 col-md-6 col-sm-12"
+    ident = uuid.uuid4().hex[:12]
+    return f"""<div class="{col}" style="margin-bottom: 20px;">
+<div class="dp-qc" style="background-color: #ffffff; padding: 20px; border-radius: 10px; height: 100%; display: flex; flex-direction: column; justify-content: space-between; border: 1px solid #cbd5e0;" data-interactive-id="{ident}" data-interactive-type="Quick Check" data-interactive-title="Quick Check {n}">
+<div>
+<div class="dp-qc-question">
+<div style="background-color: #f0f4f8; padding: 10px 14px; border-radius: 6px; border-left: 4px solid {_AZUL_QC}; margin-bottom: 12px;">
+<p class="dp-text-bold cp-txt-dark" style="color: {_AZUL_QC}; margin: 0; font-size: 1rem;"><i class="fas fa-question-circle" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i> Pregunta {n}</p>
+</div>
+<p style="color: #2d3748; margin-bottom: 15px; font-size: 0.95rem;">{enunciado}</p>
+</div>
+<dl class="dp-qc-answers">
+<dt class="dp-qc-answer dp-qc-correct">
+<div class="dp-qc-content">
+<p>{correcta}</p>
+</div>
+</dt>
+<dd class="dp-qc-response d-none dp-qc-correct"><span class="dp-qc-answer-type"><i class="fas fa-fw fa-check"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i></span>
+<div class="dp-qc-content">
+<p>¡Gran trabajo! ¡Respuesta correcta!</p>
+</div>
+</dd>
+<dt class="dp-qc-answer">
+<div class="dp-qc-content">
+<p>{otra}</p>
+</div>
+</dt>
+<dd class="dp-qc-response d-none"><span class="dp-qc-answer-type"><i class="fas fa-fw fa-times"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i></span>
+<div class="dp-qc-content">
+<p>¡Revisá el material nuevamente para reforzar tus conocimientos!</p>
+</div>
+</dd>
+</dl>
+</div>
+<a class="dp-qc-submit btn dp-ext-ignore btn-dp-primary dp-hover-shadow-b1" style="display: none; margin-top: 15px;" role="button" href="#">Verificar respuesta</a>
+</div>
+</div>"""
+
+
+def quick_check(preguntas: list,
+                titulo: str = "Compruebe su comprensión") -> str:
+    """Grilla de tarjetas de verdadero/falso que se corrigen solas."""
+    if not preguntas:
+        return ""
+    tarjetas = []
+    impar_final = len(preguntas) % 2 == 1
+    for i, (enunciado, correcta) in enumerate(preguntas, 1):
+        tarjetas.append(_tarjeta_quick_check(
+            i, enunciado, correcta,
+            ancho_completo=impar_final and i == len(preguntas)))
+    return f"""<div class="dp-content-block" style="background-color: #f4f6f8; padding: 30px 20px; border-radius: 12px; border: 1px solid #e2e8f0;" data-title="Quick Check Set" data-category="Interactions">
+<div style="padding-left: 15px; margin-bottom: 25px;">
+<div style="display: inline-block; background-color: {_AZUL_QC}; color: #ffffff; padding: 4px 12px; border-radius: 20px; font-size: 0.85rem; margin-bottom: 10px;"><i class="dp-icon fas fa-bolt" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i> Check</div>
+<p class="dp-has-icon" style="color: {_AZUL_QC}; margin: 0;"><span style="font-size: 24pt;"><i class="dp-icon fas fa-chevron-circle-right" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i> {titulo}</span></p>
+</div>
+<div class="dp-column-container container-fluid pt-0">
+<div class="row pt-0">
+""" + chr(10).join(tarjetas) + """
+</div>
+</div>
+</div>"""
+
+
+# Galería de figuras: cuando el asesor presenta varias figuras seguidas que
+# son partes de un mismo todo, no van una abajo de la otra sino en una grilla
+# donde cada una se amplía al hacer clic. Paleta propia del snippet.
+_AZUL_GAL = "#0369a1"
+
+
+_PAT_ESTILO_IMG = re.compile(r'\s*style="[^"]*"')
+# La imagen llena la tarjeta: el ancho que traía (calculado para una figura
+# suelta en la página) la desbordaba.
+_ESTILO_IMG_GALERIA = (
+    ' style="cursor: pointer; width: 100% !important; '
+    'height: 100% !important; display: block !important; '
+    'object-fit: contain; border: medium none currentcolor;"')
+
+
+def _tarjeta_galeria(numero: str, titulo: str, img_html: str,
+                     nota: str) -> str:
+    img_html = _PAT_ESTILO_IMG.sub("", img_html).replace(
+        "<img", "<img" + _ESTILO_IMG_GALERIA, 1)
+    pie = (f'<p style="margin: 0; font-size: 8.5pt; color: #64748b; '
+           f'font-style: italic;">{nota}</p>') if nota else ""
+    # dp-heading-ignore: el título de la tarjeta es un rótulo, no un
+    # encabezado de la página — sin esa clase, el paso que promueve los
+    # párrafos en negrita lo convertía en <h3> adentro de la grilla.
+    encabezado = (f'<p class="dp-heading-ignore" style="margin: 0; '
+                  f'font-size: 10pt; color: #334155;">'
+                  f'<strong>{titulo}</strong></p>') if titulo else ""
+    return f"""<div class="col-lg-4 col-md-4 col-sm-6 col-xs-12 dp-no-shadow" style="margin-bottom: 20px; padding: 0 10px;">
+<div class="dp-shadow-b1" style="background: #ffffff; border-radius: 8px; padding: 15px; text-align: center; height: 100%; display: flex; flex-direction: column; justify-content: space-between; border: 1px solid #e2e8f0;">
+<div style="margin-bottom: 12px;"><span class="dp-shadow-b1" style="display: inline-block; background: #e0f2fe; color: {_AZUL_GAL}; font-size: 9pt; padding: 3px 12px; border-radius: 12px; margin-bottom: 6px;">Figura N° {numero}</span>
+{encabezado}
+</div>
+<div class="dp-shadow-b1" style="height: 180px; width: 100%; border-radius: 6px; margin-bottom: 12px; overflow: hidden; background: #f8fafc;">{img_html}</div>
+<div>
+{pie}
+</div>
+</div>
+</div>"""
+
+
+def galeria_de_figuras(figuras: list,
+                       titulo: str = "Galería de Figuras") -> str:
+    """Grilla de figuras que se amplían al hacer clic.
+
+    `figuras` es [(numero, titulo, html_de_la_imagen, nota)]."""
+    if not figuras:
+        return ""
+    tarjetas = chr(10).join(_tarjeta_galeria(*f) for f in figuras)
+    return f"""<h3 class="dp-heading"><strong>{titulo}</strong></h3>
+<p style="font-size: 0.9em; color: #64748b; margin-bottom: 20px;"><em>Tocá o hacé clic en cualquier imagen para ampliarla a pantalla completa.</em></p>
+<div class="dp-content-block dp-popup-gallery content-block dp-no-shadow" style="padding: 10px 0px; background: transparent; border-radius: 5px; border: medium none currentcolor;">
+<div class="dp-column-container container-fluid" style="padding: 0;">
+<div class="row" style="display: flex; flex-wrap: wrap; margin: 0 -5px;">
+{tarjetas}
+</div>
 </div>
 </div>"""
 
@@ -522,6 +849,15 @@ def _tabla_a_recuadro(tabla) -> str:
                 "", marca.get_text(" ", strip=True)).strip(" .:–—-")
             marca.decompose()
             return bloque_video_studio(str(frag).strip(), referencia)
+        # "(AQUÍ VA VIDEO M1)": el recuadro NO tiene contenido propio, solo
+        # marca el lugar. Es el bloque de Studio, no un CTA: envuelto en el
+        # CTA, además, el título "Video M1" de la barra era un marcador más y
+        # el bloque terminaba reemplazándolo, anidado adentro de la caja.
+        parrafos = [p for p in frag.find_all("p") if p.get_text(strip=True)]
+        if parrafos and all(_PAT_AQUI_VA_VIDEO.match(p.get_text(" ", strip=True))
+                            or _PAT_MARCADOR_VIDEO.match(p.get_text(" ", strip=True))
+                            for p in parrafos):
+            return bloque_video_studio(referencia=titulo)
 
     if tipo == "foro":
         return cta_titulo(titulo, body, ICONOS["foro"])
@@ -1507,6 +1843,7 @@ def limpiar_anclas_vacias(html: str) -> str:
 # Rótulos de sección del "Modelo de actividad": el asesor los escribe como
 # "Objetivo:" al principio de un párrafo y son encabezados, no texto corrido.
 _SECCIONES_ACTIVIDAD = ("objetivo", "objetivos", "consigna", "consignas",
+                        "contextualizacion", "contexto",
                         "pautas de presentacion", "criterios de evaluacion",
                         "criterio de evaluacion", "anexo")
 
@@ -1602,6 +1939,14 @@ def maquetar_actividad(html: str, tema: str = "", color_titulo: str = "") -> str
     # cualquier otro encabezado de Word que no sea "primero" — no hace
     # falta tratarlo como caso especial acá.
     primero = soup.find(["h1", "h2", "h3", "h4"])
+    # Si el DOCX no trae título de caso y arranca derecho en la primera
+    # sección ("Contextualización"), ese rótulo NO es el título: promoverlo
+    # dejaba la actividad encabezada por un H2 centrado que decía
+    # "Contextualización" y sin el rótulo de la sección.
+    if primero is not None and _norm(
+            re.sub(r"[:\s]+$", "", primero.get_text(" ", strip=True))
+            ) in _SECCIONES_ACTIVIDAD:
+        primero = None
     if primero is not None and not primero.get("class"):
         texto = primero.get_text(" ", strip=True)
         if _PAT_TITULO_GENERICO_ACTIVIDAD.match(texto):
@@ -1622,6 +1967,11 @@ def maquetar_actividad(html: str, tema: str = "", color_titulo: str = "") -> str
     # de p→h3 de más abajo lo tocaría si viniera como <p>) se deja: tiene
     # que terminar en el mismo nivel que sus hermanos armados desde <p>.
     for h3 in list(soup.find_all("h3")):
+        # El título de una caja ya armada (card-title) no es estructura del
+        # documento: bajarlo desalineaba el encabezado del recuadro respecto
+        # del mismo recuadro en el resto del aula.
+        if "card-title" in (h3.get("class") or []):
+            continue
         texto_h3 = h3.get_text(" ", strip=True)
         texto_sin_dp = re.sub(r"[:\s]+$", "", texto_h3)
         if _norm(texto_sin_dp) in _SECCIONES_ACTIVIDAD:
@@ -2726,6 +3076,11 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
         if p.find_parent(class_=("dp-callout", "dp-flip-card-deck",
                                   "dp-front-card", "dp-back-card")):
             continue
+        if "dp-heading-ignore" in (p.get("class") or []):
+            # El propio generador marca así lo que es un rótulo y no un
+            # encabezado (el título de una tarjeta de la galería, el epígrafe
+            # de una figura): promoverlo rompe la jerarquía de la página.
+            continue
         if p.find_parent(["td", "th"]):
             # Una celda de tabla en negrita es un encabezado de columna, no
             # un subtítulo de la página (pasaba con "Tipo de inconveniente",
@@ -2736,9 +3091,14 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
             continue
         texto = p.get_text(" ", strip=True)
         texto_strong = " ".join(s.get_text(" ", strip=True) for s in strongs)
+        # Un renglón en negrita que cierra con punto es una oración que el
+        # asesor quiso destacar, no un subtítulo: "Calificación mínima para
+        # aprobar la actividad: 70/100 (equivalente a 7)." salía de <h4> al
+        # pie de la actividad. Los encabezados no llevan punto final.
+        es_oracion = bool(re.search(r"[^.]\.$", texto)) and len(texto) > 40
         if (texto and texto == texto_strong and 10 <= len(texto) <= 90
                 and not texto.endswith(":") and not _NO_H3.match(texto)
-                and not p.find("img")):
+                and not es_oracion and not p.find("img")):
             if en_panel or _introducido_por_dos_puntos(p):
                 # El párrafo anterior termina en ":" (esto es lo que estaba
                 # introduciendo, no un subtítulo nuevo) o el párrafo vive
@@ -2765,7 +3125,14 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
     # inmediato) es un segundo marcador del mismo video que quedó duplicado
     # por error en el DOCX — se saca, no se arma un segundo hueco vacío.
     for p in list(soup.find_all("p")):
-        if not _PAT_MARCADOR_VIDEO.match(p.get_text(" ", strip=True)):
+        texto = p.get_text(" ", strip=True)
+        if not (_PAT_MARCADOR_VIDEO.match(texto)
+                or _PAT_AQUI_VA_VIDEO.match(texto)):
+            continue
+        # La barra de título de un CTA ya armado ("Video M1") es un rótulo,
+        # no un marcador: reemplazarla metía el bloque de video ADENTRO de la
+        # caja y dejaba el CTA sin título (pasó en 1.4.1).
+        if "card-title" in (p.get("class") or []):
             continue
         ya_hay_bloque = p.find_previous(attrs={"data-title": "Video"}) is not None
         if ya_hay_bloque:
@@ -2899,17 +3266,24 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
 def contenido_declara_video(html: str) -> bool:
     """¿Este HTML ya marca dónde va el video propio del módulo?
 
-    El asesor lo señala de tres formas en el cuerpo: con la marca de
+    El asesor lo señala de cuatro formas en el cuerpo: con la marca de
     maquetación ("Embeber video: GRyI - V_M1"), con el marcador suelto
-    ("VIDEO M2.") o invitando a verlo ("te invito a ver el siguiente
-    video"). De cualquiera de ellas sale el bloque en la página que
-    corresponda. Cuando eso pasa, el hueco que declara la planilla ya está
-    puesto: agregar otro en la Introducción deja el módulo con dos."""
+    ("VIDEO M2."), entre paréntesis ("(AQUÍ VA VIDEO M1)") o invitando a
+    verlo ("te invito a ver el siguiente video"). De cualquiera de ellas
+    sale el bloque en la página que corresponda. Cuando eso pasa, el hueco
+    que declara la planilla ya está puesto: agregar otro en la Introducción
+    deja el módulo con dos."""
     if not html:
         return False
-    for el in BeautifulSoup(html, "html.parser").find_all(["p", "td", "th"]):
+    soup = BeautifulSoup(html, "html.parser")
+    # El pedido del asesor por comentario ya viene resuelto: el marcador no
+    # está más como texto, en su lugar está el bloque armado.
+    if soup.find(attrs={"data-title": "Video"}) is not None:
+        return True
+    for el in soup.find_all(["p", "td", "th"]):
         texto = el.get_text(" ", strip=True)
         if (_PAT_EMBEBER_VIDEO.match(texto) or _PAT_MARCADOR_VIDEO.match(texto)
+                or _PAT_AQUI_VA_VIDEO.match(texto)
                 or (_PAT_VIDEO_INVIT.search(texto)
                     and not _PAT_URL_VIDEO.search(texto))):
             return True
@@ -2931,6 +3305,16 @@ def separar_bloque_de_video(html: str) -> tuple:
     bloque = soup.find("div", attrs={"data-title": "Video"}, recursive=False)
     if bloque is None:
         return html, ""
+    # El bloque se publica DESPUÉS del resto del contenido, así que si el
+    # video estaba en medio de la página hay que llevarse con él todo lo que
+    # venía abajo: si no, el orden se da vuelta. En 1.4.1 el video quedaba al
+    # final, después de la Conclusión, cuando va justo antes. El equipo a mano
+    # hace lo mismo: cierra el bloque de lectura en el video y lo que sigue
+    # cuelga del bloque nuevo.
+    for hermano in list(bloque.next_siblings):
+        if isinstance(hermano, NavigableString) and not hermano.strip():
+            continue
+        bloque.append(hermano.extract())
     # El molde de la página SIEMPRE cierra con un <p>&nbsp;</p> de aire antes
     # del borde del content-block — pero ese trailing spacer va después de
     # {resto}, no del bloque de video. Si el video absorbió el resto de la

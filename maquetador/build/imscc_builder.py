@@ -50,6 +50,12 @@ from maquetador.build.snippets import (separar_consignas, procesar_contenido,
                                        maquetar_actividad,
                                        nombre_publicado_de_figura,
                                        bloque_video_studio,
+                                       embed_de_studio,
+                                       media_id_de_studio,
+                                       recuadro_actividad_grupal,
+                                       _PAT_ES_GRUPAL,
+                                       _quitar_portada_de_actividad,
+                                       _secciones_de_actividad_a_h3,
                                        token_de_studio,
                                        contenido_declara_video,
                                        bloque_recurso_incrustado,
@@ -266,6 +272,7 @@ class GeneradorAula:
             getattr(spec, "imagenes_diseno", []))
         self._conciliar_figuras_mal_rotuladas()
         self.figuras_usadas = set()        # paths de DISEÑO aprovechados
+        self.videos_puestos = set()        # claves de --video ya incrustadas
 
     def _conciliar_figuras_mal_rotuladas(self):
         """Rescata las figuras de DISEÑO nombradas con el módulo equivocado."""
@@ -326,6 +333,7 @@ class GeneradorAula:
         # que apunte a un archivo inexistente es basura (módulos eliminados o
         # referencias colgadas que el aula base ya traía): se elimina.
         self._purgar_referencias_rotas()
+        self._incrustar_videos_de_studio()
 
         _escribir(self.working / "imsmanifest.xml", self.manifest)
         _escribir(self.working / "course_settings" / "module_meta.xml", self.meta)
@@ -379,6 +387,12 @@ class GeneradorAula:
             if item.tipo != TipoItem.VIDEO:
                 continue
             url = (item.detalle or {}).get("referencia", "")
+            # Si la planilla ya trae el id del medio (o el embed entero
+            # pegado), el video se incrusta aca mismo y no queda hueco.
+            media_id = media_id_de_studio(url)
+            if media_id:
+                return bloque_video_studio(
+                    referencia=url, embed=embed_de_studio(media_id, item.titulo))
             if token_de_studio(url)[0]:
                 self.spec.issues.append(Issue(Severidad.AVISO,
                     f"El video de este módulo ya está en Canvas Studio ({url}), "
@@ -778,7 +792,23 @@ class GeneradorAula:
                            if "video" in k and "introduc" in k), None)
         url_video = (video_item.detalle or {}).get("referencia", "") \
             if video_item else ""
-        if token_de_studio(url_video)[0]:
+        media_id = (self.spec.videos_studio or {}).get("inicio")             or media_id_de_studio(url_video)
+        if media_id:
+            # El bloque del aula base trae un <p> vacío donde va el video.
+            # En las aulas maquetadas el iframe va centrado en ese párrafo.
+            titulo = video_item.titulo if video_item else "Video de bienvenida"
+            embed = (f'<p style="text-align: center;">'
+                     f'{embed_de_studio(media_id, titulo)}</p>\n')
+            html, nv = self._llenar_bloque(html, "Te damos la bienvenida",
+                                           embed)
+            if nv:
+                cambios.append("video de bienvenida")
+                self.videos_puestos.add("inicio")
+            else:
+                self.spec.issues.append(Issue(Severidad.AVISO,
+                    "No encontré el bloque 'Te damos la bienvenida' para "
+                    f"poner el video ({media_id}).", "Página de inicio"))
+        elif token_de_studio(url_video)[0]:
             self.spec.issues.append(Issue(Severidad.AVISO,
                 f"El video de bienvenida ya está en Canvas Studio "
                 f"({url_video}): pegar su embed en el bloque 'Te damos la "
@@ -800,10 +830,12 @@ class GeneradorAula:
         if cambios:
             _escribir(pagina, html)
             logger.info(f"  [Inicio] personalizado: {', '.join(cambios)}")
+            pendiente = ("" if "video de bienvenida" in cambios
+                         else " El video de bienvenida se carga a mano en "
+                              "Canvas Studio.")
             self.spec.issues.append(Issue(Severidad.INFO,
                 "Página de inicio personalizada ("
-                + ", ".join(cambios) + "). El video de bienvenida se carga "
-                "a mano en Canvas Studio.", "Página de inicio"))
+                + ", ".join(cambios) + ")." + pendiente, "Página de inicio"))
 
     # ------------------------------------------------------------------ #
     def _construir_syllabus(self):
@@ -1040,6 +1072,30 @@ class GeneradorAula:
                 break
         return html[:inicio] + nuevo + html[fin:], True
 
+    def _llenar_bloque(self, html: str, titulo: str, cuerpo: str) -> tuple:
+        """Mete `cuerpo` DENTRO del bloque, antes de su aire de cierre.
+
+        A diferencia de _reemplazar_bloque_por_data_title, que cambia el
+        bloque entero, acá el <h2> con su ícono se conserva: lo único que
+        cambia es lo que cuelga abajo."""
+        ancla = re.search(rf'<div[^>]*\bdata-title="{re.escape(titulo)}"[^>]*>',
+                          html)
+        if not ancla:
+            return html, False
+        depth = 0
+        for mm in re.finditer(r'<div\b[^>]*>|</div>', html[ancla.start():]):
+            depth += -1 if mm.group(0).startswith("</div") else 1
+            if depth == 0:
+                corte = ancla.start() + mm.start()
+                # El bloque cierra con un <p>&nbsp;</p> de aire: el contenido
+                # va ANTES, para que el aire siga siendo lo último.
+                aire = re.search(r"(?:<p>(?:&nbsp;|\s)*</p>\s*)+$",
+                                 html[:corte])
+                if aire:
+                    corte = aire.start()
+                return html[:corte] + cuerpo + html[corte:], True
+        return html, False
+
     def _reemplazar_bloque_div(self, html: str, clase: str, nuevo: str) -> str:
         """Reemplaza el <div class="…clase…">…</div> (con divs anidados) por
         `nuevo`, cortando en el </div> balanceado. Si no lo encuentra, devuelve
@@ -1108,6 +1164,12 @@ class GeneradorAula:
         primeros = soup.find_all(recursive=False)
         if primeros and primeros[0].name == "table":
             primeros[0].decompose()   # tabla de metadatos de la plantilla
+        if es_actividad:
+            # La portada del DOCX (carrera, asignatura, docente, título de la
+            # actividad, tabla de metadatos) no va: Canvas ya muestra el
+            # nombre y la fecha. Y cada rótulo de sección va como h3.
+            _quitar_portada_de_actividad(soup, self.spec.nombre)
+            _secciones_de_actividad_a_h3(soup)
         # Pedidos de maquetación del asesor (comentarios del DOCX): igual que
         # en las páginas de contenido, un foro/actividad puede traer un link
         # real en un comentario (p.ej. el protocolo de transparencia) u otro
@@ -1118,8 +1180,17 @@ class GeneradorAula:
         for nombre, data, ctype in img.imagenes:
             self.media[f"{prefijo}_{nombre}"] = (data, ctype)
         html = str(soup).replace("__MEDIA__/", f"__MEDIA__/{prefijo}_")
-        return procesar_contenido(self._rutear_media(html), self.spec.tema,
-                                  bajar_h1_h2=not es_actividad)
+        salida = procesar_contenido(self._rutear_media(html), self.spec.tema,
+                                    bajar_h1_h2=not es_actividad)
+        if es_actividad and _PAT_ES_GRUPAL.search(soup.get_text(" ", strip=True)):
+            # Instructivo de grupos: no está en el DOCX (no es contenido de la
+            # asignatura) y el equipo lo pega al pie de toda entrega grupal.
+            salida += "\n" + recuadro_actividad_grupal()
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                f"'{path.stem[:50]}' se entrega en grupo: le agregué el "
+                "recuadro 'Actividad Grupal' al pie. Si es individual, "
+                "borralo en Canvas.", "Actividades"))
+        return salida
 
     def _rid_en_meta(self, content_type: str, patron_titulo: str) -> str:
         pat = re.compile(
@@ -2376,6 +2447,56 @@ class GeneradorAula:
                     "aula base (sin contenido). Suele pasar cuando el asesor "
                     "entrega un enlace (Google Docs) en vez de un archivo: "
                     "completar a mano en Canvas.", "Recursos a completar"))
+
+    # ------------------------------------------------------------------ #
+    _PAT_HUECO_VIDEO = re.compile(
+        r"<!--\s*Pegar aqu[ií] el embed de Canvas Studio([^>]*?)-->")
+
+    def _clave_de_pagina(self, titulo: str) -> str:
+        """La clave con la que se nombra esta pagina al pasar un video."""
+        m = re.match(r"\s*((?:\d+\.)+)", titulo or "")
+        if m:
+            return m.group(1).rstrip(".")
+        return "inicio"
+
+    def _incrustar_videos_de_studio(self):
+        """Reemplaza los huecos de video por el embed real.
+
+        El id de Studio no existe cuando se arma el aula —la coleccion se
+        comparte al cerrar la maquetacion— asi que el paquete sale con el
+        hueco comentado. Cuando los ids llegan, se vuelven a pasar (en la
+        columna de enlace de la planilla o con --video) y el mismo paquete
+        sale ya con los videos puestos, sin pegarlos a mano uno por uno."""
+        pedidos = dict(self.spec.videos_studio or {})
+        if not pedidos:
+            return
+        usados = set(self.videos_puestos)
+        for archivo in sorted((self.working / "wiki_content").glob("*.html")):
+            html = _leer(archivo)
+            if not self._PAT_HUECO_VIDEO.search(html):
+                continue
+            m = re.search(r"<title>(.*?)</title>", html, re.S)
+            titulo = re.sub(r"<[^>]+>", "", m.group(1)).strip() if m else ""
+            clave = self._clave_de_pagina(titulo)
+            # Un id se usa UNA vez: "inicio" es la clave de toda página sin
+            # número, así que el video de bienvenida se repetía en las tres
+            # introducciones de módulo, que lo que llevan es su propio hueco.
+            if clave in self.videos_puestos:
+                continue
+            media_id = pedidos.get(clave)
+            if not media_id:
+                continue
+            html = self._PAT_HUECO_VIDEO.sub(
+                lambda mm: embed_de_studio(media_id, titulo), html, count=1)
+            _escribir(archivo, html)
+            usados.add(clave)
+            self.videos_puestos.add(clave)
+            logger.info(f"Video de Studio incrustado en '{titulo}' ({media_id})")
+        for clave in pedidos:
+            if clave not in usados:
+                self.spec.issues.append(Issue(Severidad.AVISO,
+                    f"Me pasaste el video '{clave}' pero no encontre el hueco "
+                    "de video en esa pagina: revisa el numero.", "videos"))
 
     def _validar_xml_generado(self):
         """Cualquier XML mal formado en el paquete (p.ej. un '&' sin escapar

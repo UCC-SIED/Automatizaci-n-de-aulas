@@ -24,8 +24,14 @@ from bs4 import BeautifulSoup
 
 from maquetador.ingest.folder_scanner import normalizar
 from maquetador.build.snippets import (resaltado_simple, cta_titulo, ICONOS,
+                                       quick_check,
+                                       preguntas_de_verdadero_o_falso,
+                                       galeria_de_figuras,
+                                       _PAT_PIE_DE_FIGURA,
                                        bloque_recurso_incrustado,
-                                       _PAT_GENIALLY_URL, _PAT_SOLO_ARCHIVO)
+                                       _PAT_GENIALLY_URL, _PAT_SOLO_ARCHIVO,
+                                       bloque_video_studio,
+                                       _PAT_AQUI_VA_VIDEO)
 from maquetador.build.componentes_asesor import (
     extraer_pares, construir_panels, construir_flipcards,
     construir_tooltip, disparador_tooltip, aplicar_cita,
@@ -42,7 +48,7 @@ _AUTO = {"subtitulo", "subsubtitulo", "recuadro_simple", "lectura", "video",
          "podcast", "sin_recuadro", "otra_pagina", "enlace_descargable",
          "genially_listo", "no_maquetar", "foro_en_lectura",
          "foro_lectura_y_espacio", "figura_expandible", "enlazar_actividad",
-         "destacar_tramo", "componente_en_el_texto",
+         "destacar_tramo", "componente_en_el_texto", "quiz", "galeria",
          "texto_alternativo"}
 
 # Nivel de encabezado por acción, según la política de jerarquía de la UCC:
@@ -169,6 +175,11 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
         return "subsubtitulo"
     if "subtitulo" in n:
         return "subtitulo"
+    # "las figuras 3, 4, 5, 6 y 7 … se visualizan con el recurso galería de
+    # imágenes": varias figuras seguidas que son partes de un mismo todo van
+    # en una grilla donde cada una se amplía al clic, no una abajo de la otra.
+    if "galeria" in n or "galería" in instruccion.lower():
+        return "galeria"
     if "acordeon" in n:
         return "acordeon"
     # "Tabs"/"solapas"/"pestañas" — componente de DesignPLUS. Palabra completa:
@@ -596,6 +607,74 @@ def _tramo_hasta(el, hasta) -> list:
     return [el]
 
 
+# La primera pregunta del quick check arranca donde arranca la lista: antes
+# están la etiqueta de la caja ("No pases de largo") y la invitación a
+# repasar, que no son preguntas y se pegaban al enunciado de la primera.
+_PAT_ITEM_NUMERADO = re.compile(r"^\s*\d+\s*[.)\-]")
+
+
+def _bloques_de_quick_check(caja) -> list:
+    """Los renglones que son preguntas, sin la etiqueta ni la bajada."""
+    items = caja.find_all("li")
+    if items:
+        return [x.get_text(" ", strip=True) for x in items]
+    parrafos = [x.get_text(" ", strip=True) for x in caja.find_all("p")]
+    desde = next((i for i, t in enumerate(parrafos)
+                  if _PAT_ITEM_NUMERADO.match(t)), None)
+    return parrafos[desde:] if desde is not None else parrafos
+
+
+_PAT_NUMS = re.compile(r"\d+")
+_PAT_EPIGRAFE_SOLO = re.compile(r"^(figura|tabla)\s*(\d+)\s*[.:]?$", re.I)
+
+
+def _armar_galeria(soup, el, instruccion: str) -> bool:
+    """Agrupa en una galería las figuras que nombra el comentario.
+
+    Cada figura llega como cuatro párrafos sueltos: el epígrafe ("Figura 3"),
+    su título, la imagen y la nota. Se los junta en una tarjeta y se borran
+    los originales."""
+    numeros = [n for n in _PAT_NUMS.findall(instruccion)]
+    if not numeros:
+        return False
+    figuras, usados = [], []
+    hermano = el.find_next_sibling()
+    while hermano is not None:
+        siguiente = hermano.find_next_sibling()
+        m = _PAT_EPIGRAFE_SOLO.match(hermano.get_text(" ", strip=True))
+        if m and m.group(2) in numeros:
+            bloque, titulo, img_html, nota = [hermano], "", "", ""
+            x = siguiente
+            while x is not None and len(bloque) < 5:
+                texto = x.get_text(" ", strip=True)
+                img = x.find("img")
+                if img is not None:
+                    img_html = str(img)
+                elif _PAT_PIE_DE_FIGURA.match(texto):
+                    nota = texto
+                elif not titulo and texto:
+                    titulo = texto
+                else:
+                    break
+                bloque.append(x)
+                x = x.find_next_sibling()
+                if img_html and nota:
+                    break
+            if img_html:
+                figuras.append((m.group(2), titulo, img_html, nota))
+                usados.extend(bloque)
+                hermano = x
+                continue
+        hermano = siguiente
+    if len(figuras) < 2:
+        return False
+    usados[0].insert_before(BeautifulSoup(
+        galeria_de_figuras(figuras), "html.parser"))
+    for bloque in usados:
+        bloque.decompose()
+    return True
+
+
 def _texto_tooltip(instruccion: str) -> str:
     """Saca el contenido del popover del comentario: lo que va después de
     'emerja:'/'aparezca:'/'tooltip-->'. Si no hay marcador claro, '' (→ fallback)."""
@@ -937,9 +1016,18 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
                 cta_titulo("Lectura", f"<p>{inner}</p>", ICONOS["lectura"]),
                 "html.parser"))
         elif accion == "video":
-            el.replace_with(BeautifulSoup(
-                cta_titulo("Video", f"<p>{inner}</p>", ICONOS["video"]),
-                "html.parser"))
+            # "(AQUÍ VA VIDEO M1)" no es contenido: marca el lugar de un video
+            # PROPIO de la UCC. Va el bloque de Canvas Studio, no un CTA que
+            # manda afuera —y el texto del paréntesis no se publica.
+            texto = el.get_text(" ", strip=True)
+            if _PAT_AQUI_VA_VIDEO.match(texto):
+                el.replace_with(BeautifulSoup(
+                    bloque_video_studio(referencia=texto.strip("()[] ")),
+                    "html.parser"))
+            else:
+                el.replace_with(BeautifulSoup(
+                    cta_titulo("Video", f"<p>{inner}</p>", ICONOS["video"]),
+                    "html.parser"))
         elif accion == "podcast":
             el.replace_with(BeautifulSoup(
                 cta_titulo("Podcast", f"<p>{inner}</p>", ICONOS["podcast"]),
@@ -948,6 +1036,23 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
             # El asesor pide NO encuadrar: se marca para que procesar_contenido
             # no lo convierta en recuadro por sus heurísticas.
             el["data-keep-plain"] = "1"
+        elif accion == "galeria":
+            if not _armar_galeria(soup, el, c["instruccion"]):
+                c["_aplicado"] = False   # sin figuras que agrupar: se avisa
+        elif accion == "quiz":
+            # "Quick check": el asesor escribe el repaso de verdadero/falso
+            # como una lista adentro de un recuadro y comenta cómo quiere
+            # resolverlo. Toda esa caja se reemplaza por el componente, que
+            # corrige solo: antes quedaba como un recuadro de texto más y el
+            # pedido salía en los avisos para armarlo a mano.
+            caja = el.find_parent("table") or el
+            preguntas = preguntas_de_verdadero_o_falso(
+                _bloques_de_quick_check(caja))
+            if len(preguntas) >= 2:
+                caja.replace_with(BeautifulSoup(
+                    quick_check(preguntas), "html.parser"))
+            else:
+                c["_aplicado"] = False   # sin preguntas reconocibles: se avisa
         elif accion == "texto_alternativo":
             # El asesor escribe el alt de la figura en un globo, anclado a su
             # "Nota." o a la figura misma. Se deja como el párrafo que ya sabe
