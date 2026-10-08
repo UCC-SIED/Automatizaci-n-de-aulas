@@ -327,7 +327,6 @@ class GeneradorAula:
         for modulo in spec.modulos:
             self._procesar_modulo(modulo)
         self._eliminar_modulos_sobrantes()
-        self._eliminar_encuesta_valoracion()
         self._limpiar_recursos_no_usados()
         self._inyectar_afi()
         self._resolver_enlaces_de_actividad()
@@ -1740,12 +1739,17 @@ class GeneradorAula:
             shutil.copy2(path, self.working / destino_rel)
             self.recursos_nuevos.append((_gen_id(), destino_rel))
             url = "$IMS-CC-FILEBASE$/Recursos/" + quote(path.name)
-            iframe = (f'<iframe src="{url}" width="100%" height="100%" '
-                      'style="position: absolute; top: 0; left: 0; width: 100%; '
-                      'height: 100%;" frameborder="0" allowfullscreen="true" '
-                      f'title="{xml_escape(path.stem)}" loading="lazy"></iframe>')
-            bloques.append("<p>&nbsp;</p>\n"
-                           + bloque_recurso_incrustado(iframe))
+            # Alto fijo y sin envoltorio de proporción: la herramienta es una
+            # página con su propio layout, no un video. Con el envoltorio de
+            # 56,25% y position:absolute quedaba aplastada contra el borde y
+            # no se veía nada.
+            titulo = xml_escape(path.stem.replace("_", " "))
+            iframe = (f'<p><iframe src="{url}" width="100%" height="950px" '
+                      'style="border: medium none currentcolor;" '
+                      'frameborder="0" scrolling="yes" '
+                      'allowfullscreen="allowfullscreen" '
+                      f'title="{titulo}" loading="lazy"></iframe></p>')
+            bloques.append("<p>&nbsp;</p>\n" + iframe + "\n<p>&nbsp;</p>")
             self.spec.issues.append(Issue(Severidad.INFO,
                 f"'{path.name}' se publicó en los archivos del aula "
                 f"(Recursos/) y quedó incrustado en la Actividad final "
@@ -2296,11 +2300,12 @@ class GeneradorAula:
             "Limpieza"))
 
     def _eliminar_encuesta_valoracion(self):
-        """'Encuesta de valoración final' (aula base) es un Quiz clásico
-        (Quizzes::Quiz). El equipo usa New Quizzes, que el formato IMSCC no
-        puede generar, así que esa encuesta queda siempre vacía y hay que
-        rehacerla a mano en Canvas — se quita del paquete en vez de dejarla
-        como recurso muerto (pedido del usuario)."""
+        """Saca la 'Encuesta de valoración final' del aula base.
+
+        YA NO SE USA: el aula se entrega CON la encuesta. Se la quitaba por
+        ser un Quiz clásico (el equipo usa New Quizzes), pero en el aula
+        funciona y el equipo la quiere en el paquete. Queda el método por si
+        hiciera falta volver a sacarla en algún curso."""
         m = re.search(
             r'<module identifier="([^"]+)">\s*<title>\s*Encuesta de valoraci[óo]n',
             self.meta, re.IGNORECASE)

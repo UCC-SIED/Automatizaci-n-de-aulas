@@ -511,48 +511,36 @@ _ESTILO_IMG_GALERIA = (
     'object-fit: contain; border: medium none currentcolor;"')
 
 
-def _tarjeta_galeria(numero: str, titulo: str, img_html: str,
-                     nota: str) -> str:
+def _panel_de_figura(numero: str, titulo: str, img_html: str,
+                     nota: str) -> tuple:
+    """Una figura como panel de las solapas verticales."""
     img_html = _PAT_ESTILO_IMG.sub("", img_html).replace(
-        "<img", "<img" + _ESTILO_IMG_GALERIA, 1)
-    pie = (f'<p style="margin: 0; font-size: 8.5pt; color: #64748b; '
-           f'font-style: italic;">{nota}</p>') if nota else ""
-    # dp-heading-ignore: el título de la tarjeta es un rótulo, no un
-    # encabezado de la página — sin esa clase, el paso que promueve los
-    # párrafos en negrita lo convertía en <h3> adentro de la grilla.
-    encabezado = (f'<p class="dp-heading-ignore" style="margin: 0; '
-                  f'font-size: 10pt; color: #334155;">'
-                  f'<strong>{titulo}</strong></p>') if titulo else ""
-    return f"""<div class="col-lg-4 col-md-4 col-sm-6 col-xs-12 dp-no-shadow" style="margin-bottom: 20px; padding: 0 10px;">
-<div class="dp-shadow-b1" style="background: #ffffff; border-radius: 8px; padding: 15px; text-align: center; height: 100%; display: flex; flex-direction: column; justify-content: space-between; border: 1px solid #e2e8f0;">
-<div style="margin-bottom: 12px;"><span class="dp-shadow-b1" style="display: inline-block; background: #e0f2fe; color: {_AZUL_GAL}; font-size: 9pt; padding: 3px 12px; border-radius: 12px; margin-bottom: 6px;">Figura N° {numero}</span>
-{encabezado}
-</div>
-<div class="dp-shadow-b1" style="height: 180px; width: 100%; border-radius: 6px; margin-bottom: 12px; overflow: hidden; background: #f8fafc;">{img_html}</div>
-<div>
-{pie}
-</div>
-</div>
-</div>"""
+        "<img", '<img class="dp-popup-image"', 1)
+    pie = f"<figcaption>{_PIE_DE_GALERIA.format(nota=nota)}</figcaption>" if nota else ""
+    cuerpo = (f'<figure class="dp-max-width mx-auto d-block dp-image-rounded-10'
+              f' dp-image-padded dp-image-bordered dp-image-shadow"'
+              f' style="width: 700px; height: auto; text-align: center;">'
+              f"{img_html}{pie}</figure>")
+    return (f"<strong>Figura {numero}</strong>" if numero else titulo), cuerpo
 
 
-def galeria_de_figuras(figuras: list,
-                       titulo: str = "Galería de Figuras") -> str:
-    """Grilla de figuras que se amplían al hacer clic.
+_PIE_DE_GALERIA = ('<span style="font-size: 10pt;"><strong>{nota}</strong>'
+                   "</span>")
 
-    `figuras` es [(numero, titulo, html_de_la_imagen, nota)]."""
+
+def galeria_de_figuras(figuras: list, titulo: str = "") -> str:
+    """Las figuras de una serie, una por solapa vertical.
+
+    `figuras` es [(numero, titulo, html_de_la_imagen, nota)]. Van en
+    solapas y no en una grilla: son diagramas con texto adentro y en
+    miniatura no se leen —en la grilla había que ampliar cada una para
+    saber qué decía. El bloque no lleva título propio: ya viene anunciado
+    por el párrafo que lo presenta."""
     if not figuras:
         return ""
-    tarjetas = chr(10).join(_tarjeta_galeria(*f) for f in figuras)
-    return f"""<h3 class="dp-heading"><strong>{titulo}</strong></h3>
-<p style="font-size: 0.9em; color: #64748b; margin-bottom: 20px;"><em>Tocá o hacé clic en cualquier imagen para ampliarla a pantalla completa.</em></p>
-<div class="dp-content-block dp-popup-gallery content-block dp-no-shadow" style="padding: 10px 0px; background: transparent; border-radius: 5px; border: medium none currentcolor;">
-<div class="dp-column-container container-fluid" style="padding: 0;">
-<div class="row" style="display: flex; flex-wrap: wrap; margin: 0 -5px;">
-{tarjetas}
-</div>
-</div>
-</div>"""
+    pares = [_panel_de_figura(*f) for f in figuras]
+    return construir_panels(pares, "dp-tabs-pills-vertical")
+
 
 
 def resaltado_ejemplo(body_html: str, titulo: str = "Ejemplos que iluminan") -> str:
@@ -3051,6 +3039,12 @@ def estilar_tabla_datos(tabla, tema: str = "") -> None:
         for celda in fila.find_all(["td", "th"]):
             celda["class"] = "align-middle text-center"
             celda["style"] = f"padding: 12px 16px; {_TABLA_BORDE_CELDA}"
+            # Una celda con prosa va alineada a la izquierda: centrada se
+            # lee mal, con los renglones desparejos. Las cortas (un puntaje,
+            # un sí/no) quedan centradas, que es como las publica el equipo.
+            for p in celda.find_all("p"):
+                if len(p.get_text(" ", strip=True)) > 24:
+                    p["style"] = "text-align: left;"
 
     # Contenedor con scroll horizontal: en el celular la tabla no rompe la caja.
     if tabla.find_parent(class_="dp-table-scroll") is None:
@@ -3512,6 +3506,17 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
         sig = comp.find_next_sibling()
         if _es_espaciador(sig):
             sig.decompose()
+
+    # En una actividad, la tabla lleva aire arriba y abajo: pegada al
+    # párrafo que la presenta ("Por ejemplo:") o al rótulo que la sigue
+    # queda apretada. En las páginas de contenido manda la regla de
+    # _espaciar_figuras —solo se airea la tabla que es una figura, con su
+    # "Figura N." encima—, que es como se venía entregando.
+    for cont in soup.find_all(class_="dp-table-scroll") if not bajar_h1_h2 else []:
+        for vecino, metodo in ((cont.find_previous_sibling(), cont.insert_before),
+                               (cont.find_next_sibling(), cont.insert_after)):
+            if vecino is not None and not _es_espaciador(vecino):
+                metodo(BeautifulSoup("<p>&nbsp;</p>", "html.parser"))
 
     return aplicar_acento_del_tema(str(soup), tema)
 

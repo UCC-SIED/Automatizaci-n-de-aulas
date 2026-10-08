@@ -407,6 +407,12 @@ def construir_panels(pares: list, variante: str = "dp-expander-default") -> str:
     # solapas quedan angostas, del ancho del texto, en vez de repartirse
     # todo el ancho disponible. Vertical/expander/acordeón no la llevan.
     fill = " dp-panel-tab-width-fill" if variante == "dp-tabs-buttons" else ""
+    if variante == "dp-tabs-pills-vertical":
+        # Las píldoras verticales llevan su propia paleta: la solapa activa
+        # en primary sobre la columna gris, como la serie de figuras de 3.5.
+        return (f'<div class="dp-panels-wrapper {variante} '
+                'dp-panel-active-color-dp-primary dp-panel-color-dp-gray">\n'
+                f'{grupos}\n</div>')
     return (f'<div class="dp-panels-wrapper {variante} '
             'dp-panel-color-dp-primary dp-panel-active-color-dp-secondary '
             f'dp-panel-hover-color-dp-secondary{fill}">\n'

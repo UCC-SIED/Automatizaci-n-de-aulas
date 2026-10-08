@@ -110,36 +110,52 @@ class TestElQuickCheckDesdeElComentario:
 
 
 class TestLaGaleriaDeFiguras:
+    """La serie de figuras de 3.5 va en solapas verticales, una por
+    figura, y no en una grilla: son diagramas con texto adentro y en
+    miniatura no se leen —había que ampliar cada una para saber qué
+    decía. El bloque no lleva título propio: ya viene anunciado por el
+    párrafo que lo presenta."""
+
     FIGURAS = [("3", "Nivel 1 - Fundamento neurobiológico",
-                '<img src="__MEDIA__/f3.png">', "Nota. Elaboración propia."),
+                '<img src="__MEDIA__/f3.png">', "Figura creada con Claude"),
                ("4", "Nivel 2 - Hábitos estoicos",
                 '<img src="__MEDIA__/f4.png">', ""),
                ("5", "Nivel 3 - Equipos",
                 '<img src="__MEDIA__/f5.png">', "")]
 
-    def test_arma_la_grilla_con_una_tarjeta_por_figura(self):
+    def test_una_solapa_por_figura(self):
         s = BeautifulSoup(galeria_de_figuras(self.FIGURAS), "html.parser")
-        assert s.find(class_="dp-popup-gallery") is not None
+        panel = s.find(class_="dp-panels-wrapper")
+        assert panel is not None
+        assert "dp-tabs-pills-vertical" in panel.get("class")
+        titulos = [h.get_text(" ", strip=True)
+                   for h in s.find_all(class_="dp-panel-heading")]
+        assert titulos == ["Figura 3", "Figura 4", "Figura 5"]
         assert len(s.find_all("img")) == 3
 
+    def test_cada_figura_se_puede_ampliar(self):
+        s = BeautifulSoup(galeria_de_figuras(self.FIGURAS), "html.parser")
+        assert all("dp-popup-image" in (i.get("class") or [])
+                   for i in s.find_all("img"))
+
     def test_la_imagen_pierde_el_ancho_fijo_del_docx(self):
-        """Con el width: 700px que trae Word, la figura se sale de su celda
-        y rompe la grilla."""
+        """Con el width: 700px que trae Word, la figura se sale del panel."""
         out = galeria_de_figuras([("3", "T", '<img style="width: 700px;" '
                                    'src="__MEDIA__/f3.png">', "")])
-        assert "700px" not in out
-        assert "object-fit: contain" in out
+        assert "700px" not in out.split("<img")[1].split(">")[0]
 
-    def test_el_titulo_de_cada_tarjeta_no_se_vuelve_un_h3(self):
-        """El promotor de negritas a <h3> convertía el título de cada
-        tarjeta en un encabezado de sección: aparecían en el índice de la
-        página y con el estilo del tema encima de la grilla. El único h3 que
-        queda es el de la galería entera."""
+    def test_la_nota_va_de_pie_de_figura(self):
+        s = BeautifulSoup(galeria_de_figuras(self.FIGURAS), "html.parser")
+        pies = [f.get_text(" ", strip=True) for f in s.find_all("figcaption")]
+        assert pies == ["Figura creada con Claude"]
+
+    def test_el_bloque_no_agrega_un_titulo_propio(self):
+        out = galeria_de_figuras(self.FIGURAS)
+        assert "Galería de Figuras" not in out
+        assert "Tocá o hacé clic" not in out
+
+    def test_los_titulos_de_las_solapas_no_son_encabezados_de_la_pagina(self):
         s = BeautifulSoup(procesar_contenido(galeria_de_figuras(self.FIGURAS)),
                           "html.parser")
-        encabezados = [h.get_text(strip=True) for h in s.find_all("h3")]
-        assert encabezados == ["Galería de Figuras"]
-        assert "Nivel 1 - Fundamento neurobiológico" in str(s)
-
-    def test_el_titulo_oficial(self):
-        assert "Galería de Figuras" in galeria_de_figuras(self.FIGURAS)
+        assert [h.name for h in s.find_all(["h2", "h3"])
+                if not h.get("class")] == []
