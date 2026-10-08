@@ -28,7 +28,8 @@ import unicodedata
 from bs4 import BeautifulSoup, NavigableString
 from PIL import Image, UnidentifiedImageError
 from maquetador.build.componentes_asesor import (construir_flipcards,
-                                                   construir_panels, aplicar_cita)
+                                                   construir_panels, aplicar_cita,
+                                                   pares_de_tabla)
 
 # Acento institucional por aula base. Los snippets se arman con el de posgrado
 # y al final se repintan según el tema del curso (ver aplicar_acento_del_tema):
@@ -3076,6 +3077,75 @@ def aplicar_acento_del_tema(html: str, tema: str) -> str:
         lambda m: 'style="' + m.group(1).replace(ACCENT, acento) + '"', html)
 
 
+# ---------------------------------------------------------------------- #
+#  Indicaciones del complemento SiedUCC (Google Docs)
+# ---------------------------------------------------------------------- #
+# El asesor inserta los componentes con el complemento. Cada uno deja una
+# tabla con el contenido y, abajo, un bloque gris que arranca con esta
+# línea y sigue con pares "Clave: valor". Ese bloque es la instrucción:
+# dice QUÉ componente armar y la tabla de arriba dice DÓNDE empieza y
+# dónde termina —que es lo que antes había que adivinar leyendo el ancla
+# del comentario—. Nunca se publica.
+_SENTINELA_SIEDUCC = "SIEDUCC"
+_PAT_SENTINELA = re.compile(
+    r"^\s*SIEDUCC\s*[·.\-]\s*INDICACI[ÓO]N\s+INTERNA", re.I)
+_PAT_CLAVE_VALOR = re.compile(r"^\s*([A-Za-zÁÉÍÓÚÑáéíóúñ ]{3,20})\s*:\s*(.+?)\s*$")
+
+_COMPONENTE_PANEL = {"expander": "dp-expander-default",
+                     "acordeon": "dp-accordion-default",
+                     "tabs": "dp-tabs-buttons",
+                     "tabs_vertical": "dp-tabs-buttons-vertical"}
+
+
+def _datos_de_indicacion(tabla) -> dict:
+    """Los pares "Clave: valor" del bloque gris, normalizados."""
+    datos = {}
+    for p in tabla.find_all(["p", "li"]):
+        m = _PAT_CLAVE_VALOR.match(p.get_text(" ", strip=True))
+        if m:
+            datos[_norm(m.group(1))] = m.group(2).strip()
+    return datos
+
+
+def _aplicar_indicaciones_sieducc(soup) -> None:
+    for tabla in list(soup.find_all("table")):
+        if not _PAT_SENTINELA.match(tabla.get_text(" ", strip=True)[:80]):
+            continue
+        datos = _datos_de_indicacion(tabla)
+        componente = _norm(datos.get("componente", ""))
+        fuente = tabla.find_previous_sibling()
+        while fuente is not None and getattr(fuente, "name", "") not in (
+                "table", "p", "ul", "ol", "div", "figure"):
+            fuente = fuente.find_previous_sibling()
+
+        if componente == "no_maquetar":
+            if fuente is not None:
+                fuente.decompose()
+        elif componente in _COMPONENTE_PANEL and getattr(fuente, "name", "") == "table":
+            pares = pares_de_tabla(fuente)
+            if len(pares) >= 2:
+                fuente.replace_with(BeautifulSoup(
+                    construir_panels(pares, _COMPONENTE_PANEL[componente]),
+                    "html.parser"))
+        elif componente == "flip_card" and getattr(fuente, "name", "") == "table":
+            pares = pares_de_tabla(fuente)
+            if len(pares) >= 2:
+                fuente.replace_with(BeautifulSoup(
+                    construir_flipcards(pares), "html.parser"))
+        elif componente == "quick_check" and getattr(fuente, "name", "") == "table":
+            bloques = [p.get_text(" ", strip=True)
+                       for p in fuente.find_all(["p", "li"])]
+            preguntas = preguntas_de_verdadero_o_falso(
+                [b for b in bloques if _PAT_ITEM_NUMERADO_QC.match(b)])
+            if len(preguntas) >= 2:
+                fuente.replace_with(BeautifulSoup(
+                    quick_check(preguntas), "html.parser"))
+        tabla.decompose()
+
+
+_PAT_ITEM_NUMERADO_QC = re.compile(r"^\s*\d+\s*[.)\-]")
+
+
 def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> str:
     """`bajar_h1_h2=False` (actividades): maquetar_actividad necesita el
     nivel NATIVO h1/h2 vs h3 del DOCX para distinguir el título del caso
@@ -3086,6 +3156,10 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
     if not html:
         return html
     soup = BeautifulSoup(html, "html.parser")
+
+    # 0.-1 Indicaciones del complemento SiedUCC. Son instrucciones para
+    #      maquetar, no contenido: se leen y se sacan antes que nada.
+    _aplicar_indicaciones_sieducc(soup)
 
     # 0.0 Imágenes espaciadoras de Word (1x1 transparente): no son contenido
     #     y publicadas quedan como una caja vacía con borde al ancho de una
