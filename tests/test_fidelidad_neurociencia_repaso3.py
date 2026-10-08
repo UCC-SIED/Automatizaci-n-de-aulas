@@ -53,19 +53,33 @@ class TestSubtitulosConLetraComoTabs:
         assert "dp-panels-wrapper" not in procesar_contenido(html)
 
 
-class TestSinAireDebajoDelExpander:
-    """El componente ya trae su propio margen: el renglón de aire deja un
-    hueco de más (acordado sobre los lóbulos cerebrales de 1.3.3)."""
+class TestElAireDebajoDelExpander:
+    """El componente ya trae su propio margen, así que contra un subtítulo
+    o texto el renglón de aire sobra (los lóbulos cerebrales de 1.3.3).
+    Contra otra caja hace falta: una pegada a la otra no se distinguen (la
+    serie de figuras de 3.5, con el "Descubrí leyendo" justo abajo)."""
 
-    def test_el_aire_de_abajo_se_saca(self):
-        html = ("<h3>a. Frontal</h3><p>Uno.</p>"
-                "<h3>b. Parietal</h3><p>Dos.</p>"
-                "<p>&nbsp;</p><h3>La corteza cerebral</h3><p>Sigue.</p>")
+    PANELES = ("<h3>a. Frontal</h3><p>Uno.</p>"
+               "<h3>b. Parietal</h3><p>Dos.</p>")
+
+    def test_contra_un_subtitulo_el_aire_se_saca(self):
+        html = (self.PANELES
+                + "<p>&nbsp;</p><h3>La corteza cerebral</h3><p>Sigue.</p>")
         s = BeautifulSoup(procesar_contenido(html), "html.parser")
-        tabs = s.find(class_="dp-panels-wrapper")
-        assert tabs is not None
-        sig = tabs.find_next_sibling()
+        sig = s.find(class_="dp-panels-wrapper").find_next_sibling()
         assert sig is not None and sig.name == "h3"
+
+    def test_contra_un_recuadro_el_aire_se_queda(self):
+        html = (self.PANELES + "<p>&nbsp;</p>"
+                "<table><thead><tr><th><p><strong>Descubrí leyendo</strong>"
+                "</p></th></tr><tr><th><p>Revisá el capítulo 2 del libro.</p>"
+                "</th></tr></thead></table>")
+        s = BeautifulSoup(procesar_contenido(html), "html.parser")
+        sig = s.find(class_="dp-panels-wrapper").find_next_sibling()
+        assert sig is not None and sig.name == "p"
+        assert not sig.get_text().strip()
+        assert "dp-callout" in " ".join(
+            sig.find_next_sibling().get("class") or [])
 
 
 class TestElAltEntreElRotuloYElTitulo:

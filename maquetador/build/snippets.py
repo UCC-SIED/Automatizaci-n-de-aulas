@@ -1721,8 +1721,15 @@ def _subtitulos_con_letra_a_tabs(soup):
         for i, h in enumerate(grupo):
             cuerpo = []
             for hermano in h.find_next_siblings():
-                if hermano in grupo or getattr(hermano, "name", "") in (
-                        "h1", "h2", "h3"):
+                nombre = getattr(hermano, "name", "")
+                clases = " ".join(hermano.get("class") or [])
+                # La solapa llega hasta el próximo subtítulo o hasta la
+                # próxima caja: una tabla es un recuadro todavía sin armar y
+                # un div con clase dp- es un componente ya armado. Sin este
+                # corte, el "Descubrí leyendo" de abajo terminaba adentro de
+                # la última solapa.
+                if (hermano in grupo or nombre in ("h1", "h2", "h3", "table")
+                        or (nombre == "div" and "dp-" in clases)):
                     break
                 cuerpo.append(hermano)
             titulo = h.decode_contents().strip()
@@ -3499,13 +3506,20 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
         p.clear()
         p.append(NavigableString("\xa0"))
 
-    # Debajo de un expander/acordeón/tabs no va renglón de aire: el propio
-    # componente ya trae su margen y el hueco queda de más (acordado sobre
-    # los lóbulos cerebrales de 1.3.3).
+    # Debajo de un expander/acordeón/tabs no va renglón de aire cuando lo
+    # que sigue es texto o un subtítulo: el componente ya trae su margen y
+    # el hueco queda de más (los lóbulos cerebrales de 1.3.3). Pero si
+    # abajo hay otra caja —un CTA, un recuadro, otro componente— el aire sí
+    # va: una contra la otra quedan pegadas (la serie de figuras de 3.5,
+    # con el "Descubrí leyendo" justo debajo).
     for comp in soup.find_all(class_="dp-panels-wrapper"):
         sig = comp.find_next_sibling()
-        if _es_espaciador(sig):
-            sig.decompose()
+        if not _es_espaciador(sig):
+            continue
+        despues = sig.find_next_sibling()
+        if getattr(despues, "name", "") in ("div", "figure", "table"):
+            continue
+        sig.decompose()
 
     # En una actividad, la tabla lleva aire arriba y abajo: pegada al
     # párrafo que la presenta ("Por ejemplo:") o al rótulo que la sigue
