@@ -53,6 +53,8 @@ from maquetador.build.snippets import (separar_consignas, procesar_contenido,
                                        embed_de_studio,
                                        media_id_de_studio,
                                        recuadro_actividad_grupal,
+                                       enlazar_lecturas_con_bibliografia,
+                                       _es_espaciador,
                                        _PAT_ES_GRUPAL,
                                        _quitar_portada_de_actividad,
                                        _secciones_de_actividad_a_h3,
@@ -60,7 +62,7 @@ from maquetador.build.snippets import (separar_consignas, procesar_contenido,
                                        contenido_declara_video,
                                        bloque_recurso_incrustado,
                                        _FIG_CLASES_EXPANDIBLE, _FIG_ANCHO_MAX)
-from maquetador.build.bibliography import construir_bibliografia
+from maquetador.build.bibliography import construir_bibliografia, indice_de_obras
 from maquetador.extract.segmenter import ImagenInline, _MAMMOTH_STYLE_MAP
 from maquetador.ingest.folder_scanner import normalizar
 from maquetador.ingest.docx_comments import extraer_comentarios, aplicar_comentarios
@@ -312,6 +314,14 @@ class GeneradorAula:
         self.manifest = _leer(self.working / "imsmanifest.xml")
         self.meta = _leer(self.working / "course_settings" / "module_meta.xml")
 
+        # Las obras que manda a leer un recuadro 'Descubri leyendo' estan
+        # en la bibliografia del modulo, con su enlace: el recuadro solo
+        # trae el titulo. Se indexan antes de armar las paginas.
+        self.obras_citadas = {}
+        for modulo in spec.modulos:
+            refs = getattr(modulo, 'extras', {}).get('referencias', '')
+            for titulo, url in indice_de_obras(refs).items():
+                self.obras_citadas.setdefault(titulo, url)
         self._titulo_curso()
         self._asegurar_modulos()
         for modulo in spec.modulos:
@@ -571,6 +581,7 @@ class GeneradorAula:
                 body_html=self._rutear_media(item.fuente.html),
                 banner_src=banner, identifier=page_id,
                 tema=self.spec.tema)
+            html = enlazar_lecturas_con_bibliografia(html, self.obras_citadas)
             _escribir(self.working / href, html)
             self.modulo_por_slug[slug] = n
             nuevos.append((page_id, href, item.titulo))
@@ -755,6 +766,18 @@ class GeneradorAula:
                 parrafos = [p.text.strip() for p in doc.paragraphs
                             if p.text.strip()
                             and not normalizar(p.text).startswith("biograf")]
+                # El DOCX abre con el nombre del docente en una línea propia
+                # y en mayúsculas. Arriba, en la ficha, ya está: sin sacarlo
+                # la titulación empieza repitiéndolo. No se compara con el
+                # nombre de la ficha porque no coinciden —la bio suele traer
+                # un apellido más ("Luis ROLDÁN González de las Cuevas"
+                # contra "Luis Gonzalez de las Cuevas")—: una línea corta y
+                # toda en mayúsculas al principio de una biografía es el
+                # nombre, no hay otra cosa que pueda ser.
+                if parrafos and len(parrafos[0]) <= 70 \
+                        and parrafos[0] == parrafos[0].upper() \
+                        and any(c.isalpha() for c in parrafos[0]):
+                    parrafos = parrafos[1:]
                 renglones = [" ".join(parrafos)]
             except Exception:
                 renglones = []
@@ -1308,9 +1331,48 @@ class GeneradorAula:
                    + maquetar_actividad(body_html, self.spec.tema, color)
                    + "\n" + m.group(3))
         html = pat.sub(_reemplazo, html, count=1)
+        html = self._titulo_dentro_del_encabezado(html)
         _escribir(archivos[0], html)
         self.assignments_escritos.add(rid)
         return True
+
+    @staticmethod
+    def _titulo_dentro_del_encabezado(html: str) -> str:
+        """El título del caso va DENTRO del h2 con el ícono del aula base.
+
+        El bloque "Actividad" abre con un <h2> que solo trae el ícono de
+        tareas, y el título salía debajo, en un h2 propio: dos encabezados,
+        el ícono suelto arriba y el título sin él. El equipo los publica
+        como uno solo."""
+        soup = BeautifulSoup(html, "html.parser")
+        bloque = soup.find(attrs={"data-title": "Actividad"})
+        if bloque is None:
+            return html
+        encabezado = bloque.find("h2", class_="dp-has-icon")
+        titulo = bloque.find("h2", class_="dp-ignore-theme")
+        if encabezado is None or titulo is None:
+            return html
+        if encabezado.get_text(strip=True):
+            return html       # el aula base ya trae su propio texto
+        color = ""
+        for parte in (titulo.get("style") or "").split(";"):
+            if "color" in parte:
+                color = parte.split(":")[-1].strip()
+        encabezado["style"] = f"text-align: center; color: {color}" \
+            if color else "text-align: center;"
+        for hijo in list(titulo.children):
+            encabezado.append(hijo.extract())
+        titulo.decompose()
+        # El aula base deja su renglón de aire y el cuerpo trae el suyo: al
+        # juntar los dos encabezados quedaban dos seguidos.
+        sig = encabezado.find_next_sibling()
+        while sig is not None and _es_espaciador(sig):
+            siguiente = sig.find_next_sibling()
+            if not _es_espaciador(siguiente):
+                break
+            sig.decompose()
+            sig = siguiente
+        return str(soup)
 
     def _rid_actividad(self, n: int, etiqueta: str) -> tuple:
         """Elige el assignment del aula base según la etiqueta de la consigna."""

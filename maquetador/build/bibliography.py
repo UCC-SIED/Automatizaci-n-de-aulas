@@ -135,6 +135,30 @@ def _bloque_columnas(refs: list) -> str:
             f'{filas}\n</div>')
 
 
+def indice_de_obras(refs_html: str) -> dict:
+    """{título de la obra normalizado: URL} a partir de las referencias.
+
+    Los recuadros "Descubrí leyendo" mandan a leer un capítulo de un libro
+    que está en la bibliografía del módulo, con su enlace. En el recuadro el
+    asesor escribe solo el título, sin el link: el equipo se lo agrega a
+    mano sacándolo de ahí. Este índice es para no tener que hacerlo."""
+    if not refs_html:
+        return {}
+    indice = {}
+    for p in BeautifulSoup(refs_html, "html.parser").find_all("p"):
+        if not p.get_text(strip=True):
+            continue
+        ref, url = _separar_url(p)
+        if not url:
+            continue
+        # El título de la obra es lo que va en cursiva en la cita APA.
+        for em in BeautifulSoup(ref, "html.parser").find_all(["em", "i"]):
+            titulo = _norm(em.get_text(" ", strip=True)).strip(" .,:;")
+            if len(titulo) >= 8:
+                indice.setdefault(titulo, url)
+    return indice
+
+
 def construir_bibliografia(refs_html: str, nivel: str = "h4") -> str:
     """HTML crudo de referencias → cuerpo del kl_custom_block con la
     estructura oficial. Devuelve '' si no hay referencias reconocibles."""

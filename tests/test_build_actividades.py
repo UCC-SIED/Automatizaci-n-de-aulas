@@ -426,12 +426,16 @@ class TestColorYAireDelPlaceholderDeActividad:
         assert 'style="color: #003087; text-align: center;"' in out
         assert "#1b1e31" not in out   # el accent de posgrado no debe colarse
 
-    def test_sin_color_de_banner_sigue_usando_el_del_tema(self):
+    def test_sin_color_de_banner_va_el_azul_ucc(self):
+        """Antes caía en el acento del tema (#1b1e31 en posgrado). El aula
+        corregida de Neurociencia, que es de posgrado, tiene las tres
+        actividades con el título en el azul institucional."""
         from maquetador.build.snippets import maquetar_actividad
         out = maquetar_actividad(
             "<h2>Proyecto de ampliación de una planta</h2><p>Cuerpo.</p>",
             tema="posgrado")
-        assert "#1b1e31" in out
+        assert "#003087" in out
+        assert "#1b1e31" not in out
 
 
 class TestForoDeConsultasAlFinalDeLaAFI:

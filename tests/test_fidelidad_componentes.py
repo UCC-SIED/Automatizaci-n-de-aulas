@@ -264,12 +264,16 @@ class TestMaquetadoDeActividad:
         assert 'class="dp-ignore-theme"' in out
         assert "text-align: center" in out
 
-    @pytest.mark.parametrize("tema,color", [("educacion", "#003087"),
-                                            ("posgrado", "#1b1e31")])
-    def test_el_color_del_titulo_sale_del_aula_base(self, tema, color):
-        """Estaba fijo en el azul de educación: un curso de posgrado salía con
-        el título de la actividad del color equivocado."""
-        assert f"color: {color}" in maquetar_actividad(self.CUERPO, tema)
+    @pytest.mark.parametrize("tema", ["educacion", "posgrado"])
+    def test_el_titulo_va_siempre_en_el_azul_ucc(self, tema):
+        """El acento del tema manda en el contenido, pero no acá: las tres
+        actividades del aula corregida de Neurociencia —que es de posgrado—
+        tienen el título en #003087, igual que la AFI."""
+        assert "color: #003087" in maquetar_actividad(self.CUERPO, tema)
+
+    def test_el_placeholder_del_aula_base_puede_imponer_otro(self):
+        out = maquetar_actividad(self.CUERPO, "posgrado", "#1b1e31")
+        assert "color: #1b1e31" in out
 
     def test_le_saca_el_prefijo_que_duplica_el_nombre_del_item(self):
         out = maquetar_actividad(self.CUERPO)

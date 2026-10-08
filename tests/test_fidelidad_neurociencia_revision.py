@@ -66,13 +66,16 @@ class TestBitacoraDeAprendizaje:
 
 
 class TestNombreDelEnlaceSegunElRecurso:
-    """El enlace se publica con lo que el lector va a hacer del otro lado. La
-    pista sale de la cita APA, que declara el tipo entre corchetes."""
+    """El enlace se publica con lo que el lector va a hacer del otro lado.
+    El equipo usa DOS textos y nada más: "Ver video" cuando hay un video
+    —la pista sale de la cita APA, que lo declara entre corchetes— y
+    "Acceso al documento" para todo el resto. También para un artículo:
+    "Acceso al artículo" no existe en el aula."""
 
     @pytest.mark.parametrize("contexto,esperado", [
         ("Lahiperactina. (2024). Dos neuronas [Video]. YouTube.", "Ver video"),
-        ("Un episodio del podcast sobre liderazgo", "Escuchar el podcast"),
-        ("Te dejo el artículo completo", "Acceso al artículo"),
+        ("Un episodio del podcast sobre liderazgo", "Acceso al documento"),
+        ("Te dejo el artículo completo", "Acceso al documento"),
         ("Revisá el capítulo 2 del manual", "Acceso al documento"),
     ])
     def test_cada_recurso_con_su_texto(self, contexto, esperado):

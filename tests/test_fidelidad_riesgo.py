@@ -132,10 +132,14 @@ class TestLinkCrudoDentroDeUnRecuadro:
         assert enlace.parent.name == "p"
         assert enlace.parent.get_text(strip=True) == "Acceso al documento"
 
-    def test_si_el_texto_habla_de_un_articulo_dice_articulo(self):
+    def test_un_articulo_tambien_dice_acceso_al_documento(self):
+        """El aula usa dos textos y nada más: "Ver video" y "Acceso al
+        documento". Aunque la cita diga "artículo", el enlace se publica
+        como documento —"Acceso al artículo" no existe en el catálogo."""
         out = self._caja('<p>Te dejo el artículo completo: '
                          '<a href="https://x.org/a">https://x.org/a</a></p>')
-        assert "Acceso al artículo" in out
+        assert "Acceso al documento" in out
+        assert "Acceso al artículo" not in out
 
 
 class TestBajadaDeRecuadro:

@@ -10,7 +10,11 @@ import re
 
 from bs4 import BeautifulSoup
 
-_RE_NOMBRE_CONTENIDO = re.compile(r"^(.{2,60}?):\s+(.+)$", re.DOTALL)
+# El asesor separa el frente del dorso con dos puntos ("Zenón: disciplina…")
+# o con un igual ("Zenón = Disciplina estoica y coherencia."). Con el igual
+# sin reconocer, la flip card de 3.2 no se armaba y los cuatro filósofos
+# quedaban como cuatro renglones sueltos.
+_RE_NOMBRE_CONTENIDO = re.compile(r"^(.{2,60}?)\s*[:=]\s+(.+)$", re.DOTALL)
 
 
 def _celda(c) -> tuple:
@@ -77,15 +81,27 @@ def pares_de_tabla(tabla) -> list:
 
 
 def pares_de_texto(parrafos: list) -> list:
-    """Párrafos 'Nombre: contenido' → [(nombre, contenido)]."""
-    pares = []
+    """Párrafos 'Nombre: contenido' → [(nombre, contenido)].
+
+    El separador lo elige el asesor y lo mantiene en todo el componente. Se
+    fija con el primer par y a partir de ahí los demás tienen que usar el
+    mismo: en 3.2 los cuatro filósofos van con "=" y el párrafo que sigue
+    ("Este aporte resulta profundamente actual: …") lleva dos puntos de
+    puntuación normal —se colaba como una quinta tarjeta."""
+    pares, separador = [], ""
     for p in parrafos:
         txt = p.get_text(" ", strip=True)
         if _PAT_EPIGRAFE.match(txt):      # "Tabla 1: …" es epígrafe, no un par
             continue
         m = _RE_NOMBRE_CONTENIDO.match(txt)
-        if m:
-            pares.append((m.group(1).strip(), m.group(2).strip()))
+        if not m:
+            continue
+        suyo = "=" if "=" in txt[:m.end(1) + 2] else ":"
+        if not separador:
+            separador = suyo
+        elif suyo != separador:
+            break
+        pares.append((m.group(1).strip(), m.group(2).strip()))
     return pares
 
 
@@ -360,8 +376,15 @@ def extraer_pares(el, instruccion: str = "", hasta=None):
         actual = actual.find_next_sibling()
     pares = pares_de_texto(parrafos)
     if len(pares) >= 2:
-        consumidos = [p for p in parrafos
-                      if _RE_NOMBRE_CONTENIDO.match(p.get_text(" ", strip=True))]
+        # Solo los párrafos que terminaron siendo un par: pares_de_texto
+        # corta donde cambia el separador, y sin este recorte el párrafo que
+        # viene después se borraba de la página aunque no entrara al
+        # componente (pasó con el cierre de los cuatro filósofos en 3.2).
+        consumidos, nombres = [], [n for n, _ in pares]
+        for p in parrafos:
+            m = _RE_NOMBRE_CONTENIDO.match(p.get_text(" ", strip=True))
+            if m and m.group(1).strip() in nombres:
+                consumidos.append(p)
         return pares, consumidos
     return [], []
 
