@@ -462,9 +462,18 @@ def _tarjeta_quick_check(n: int, enunciado: str, correcta: str,
 </div>"""
 
 
+_BAJADA_QC = ("¿Cómo venís con las lecturas? Respondé estas preguntas clave "
+              "de verdadero o falso que te ayudarán a fijar los conocimientos.")
+
+
 def quick_check(preguntas: list,
-                titulo: str = "Compruebe su comprensión") -> str:
-    """Grilla de tarjetas de verdadero/falso que se corrigen solas."""
+                titulo: str = "¿Cómo vengo hasta acá?",
+                bajada: str = _BAJADA_QC) -> str:
+    """Grilla de tarjetas de verdadero/falso que se corrigen solas.
+
+    El título y la bajada son fijos: así se publica el componente en el
+    aula. Salía con "Compruebe su comprensión" y sin la bajada, y el
+    estudiante no sabía qué se esperaba que hiciera."""
     if not preguntas:
         return ""
     tarjetas = []
@@ -476,7 +485,8 @@ def quick_check(preguntas: list,
     return f"""<div class="dp-content-block" style="background-color: #f4f6f8; padding: 30px 20px; border-radius: 12px; border: 1px solid #e2e8f0;" data-title="Quick Check Set" data-category="Interactions">
 <div style="padding-left: 15px; margin-bottom: 25px;">
 <div style="display: inline-block; background-color: {_AZUL_QC}; color: #ffffff; padding: 4px 12px; border-radius: 20px; font-size: 0.85rem; margin-bottom: 10px;"><i class="dp-icon fas fa-bolt" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i> Check</div>
-<p class="dp-has-icon" style="color: {_AZUL_QC}; margin: 0;"><span style="font-size: 24pt;"><i class="dp-icon fas fa-chevron-circle-right" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i> {titulo}</span></p>
+<p class="dp-has-icon dp-heading-ignore" style="color: {_AZUL_QC}; margin: 0 0 8px 0;"><span style="font-size: 24pt;"><i class="dp-icon fas fa-chevron-circle-right" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i> {titulo}</span></p>
+<p class="dp-heading-ignore" style="color: #4a5568; margin: 0; font-size: 1rem;">{bajada}</p>
 </div>
 <div class="dp-column-container container-fluid pt-0">
 <div class="row pt-0">
@@ -1121,10 +1131,16 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
         sig, saltados = [], 0
         for hermano in p.find_next_siblings():
             texto_h = hermano.get_text(" ", strip=True)
-            if (getattr(hermano, "name", "") == "p" and saltados < 2
-                    and (not texto_h or _PAT_ALT_PARRAFO.match(texto_h)
-                         or (len(texto_h) <= 90 and hermano.find("strong")
-                             and not hermano.find("img")))):
+            # Un párrafo con imagen NUNCA se saltea aunque no tenga texto:
+            # es justamente la figura que hay que reemplazar. En 3.5 se lo
+            # tomaba por un renglón en blanco y la figura de diseño se
+            # insertaba aparte, dejando las dos imágenes publicadas.
+            de_relleno = (getattr(hermano, "name", "") == "p"
+                          and not hermano.find("img")
+                          and (not texto_h or _PAT_ALT_PARRAFO.match(texto_h)
+                               or (len(texto_h) <= 90
+                                   and hermano.find("strong"))))
+            if de_relleno and saltados < 2:
                 saltados += 1
                 continue
             sig.append(hermano)
@@ -1185,6 +1201,10 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
         if clase == "img":
             vecino["src"] = f"__DISENO__/{nombre_publicado_de_figura(path)}"
             vecino["style"] = f"width: {_ancho_de_figura(path)}px; height: auto;"
+            # Una figura de DISEÑO es un diagrama denso en texto (el modelo
+            # MINE, el cuadro comparativo): siempre se tiene que poder
+            # ampliar para leerla, igual que cuando reemplaza una tabla.
+            vecino["class"] = _FIG_CLASES_EXPANDIBLE.split()
             usadas.add(path)
         elif clase == "table":
             # Una figura de diseño que reemplaza una TABLA de datos es, por
@@ -1952,6 +1972,11 @@ def _unir_epigrafe_partido(soup):
             p.append(hijo)
         sig.decompose()
 _NO_H3 = re.compile(r"^(figura|tabla|esquema|nota\s*[\.:]|fuente\s*[\.:])", re.I)
+# "1. El diario estoico de Marco Aurelio en versión empresarial": un
+# subtítulo numerado es una rama del subtítulo de la sección, no otro
+# subtítulo de sección. Va un nivel más abajo (h4), como lo publica el
+# equipo en 3.3.
+_PAT_SUBTITULO_NUMERADO = re.compile(r"^\s*\d{1,2}\s*[.)]\s+\S")
 _PAT_URL = re.compile(r"(https?://[^\s<>\"')\]]+)")
 
 
@@ -3299,6 +3324,17 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
             h3 = soup.new_tag("h3")
             h3.string = texto
             p.replace_with(h3)
+
+    # 2.4 Un subtítulo numerado ("1. El diario estoico…") cuelga del
+    #     subtítulo de su sección, no compite con él: va un nivel más
+    #     abajo. Va DESPUÉS del paso 2 para alcanzar también a los que
+    #     llegan en negrita, y solo en páginas de contenido: en una
+    #     actividad, una consigna numerada no es un encabezado y de eso ya
+    #     se encarga maquetar_actividad.
+    for h in soup.find_all("h3") if bajar_h1_h2 else []:
+        if not h.get("class") and _PAT_SUBTITULO_NUMERADO.match(
+                h.get_text(" ", strip=True)):
+            h.name = "h4"
 
     # 2.5 Subtítulos con ordinal de letra seguidos ("a. Inteligencia
     #     emocional", "b. Capacidad de persuasión") → tabs. El asesor los

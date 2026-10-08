@@ -64,8 +64,10 @@ class TestLaGrillaDelQuickCheck:
                for d in s.find_all(attrs={"data-interactive-id": True})]
         assert len(set(ids)) == len(ids)
 
-    def test_el_titulo_oficial(self):
-        assert "Compruebe su comprensión" in quick_check(self.PREGUNTAS)
+    def test_el_titulo_y_la_bajada_oficiales(self):
+        out = quick_check(self.PREGUNTAS)
+        assert "¿Cómo vengo hasta acá?" in out
+        assert "¿Cómo venís con las lecturas?" in out
 
 
 class TestElQuickCheckDesdeElComentario:
@@ -88,7 +90,7 @@ class TestElQuickCheckDesdeElComentario:
 
     def test_la_tabla_se_vuelve_la_grilla(self):
         out = self._aplicar(self.HTML)
-        assert "Compruebe su comprensión" in out
+        assert "¿Cómo vengo hasta acá?" in out
         assert "<table" not in out
 
     def test_el_rotulo_de_la_caja_no_entra_como_pregunta(self):
@@ -104,7 +106,7 @@ class TestElQuickCheckDesdeElComentario:
         """Mejor el texto como venía que una grilla de una sola tarjeta."""
         out = self._aplicar("<table><tbody><tr><td>"
                             "<p>1. Única. Verdadero</p></td></tr></tbody></table>")
-        assert "Compruebe su comprensión" not in out
+        assert "¿Cómo vengo hasta acá?" not in out
 
 
 class TestLaGaleriaDeFiguras:

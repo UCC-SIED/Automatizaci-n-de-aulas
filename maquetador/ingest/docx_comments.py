@@ -926,6 +926,22 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
             c["_aplicado"] = True
             continue
 
+        # El resaltado simple encuadra TODO el tramo que el asesor marcó, no
+        # solo el párrafo donde arranca: en 3.3 el recuadro se quedaba con la
+        # pregunta de apertura y las tres preguntas del diario salían sueltas
+        # debajo de la caja.
+        if accion == "recuadro_simple":
+            fin = _buscar_elemento_final(soup, c["anclado"])
+            tramo = _tramo_hasta(el, fin)
+            if len(tramo) > 1:
+                piezas = "".join(str(x) for x in tramo)
+                tramo[0].replace_with(BeautifulSoup(
+                    resaltado_simple(piezas), "html.parser"))
+                for elemento in tramo[1:]:
+                    elemento.decompose()
+                c["_aplicado"] = True
+                continue
+
         # El comentario del asesor suele anclar sobre una tabla de pares
         # título/contenido (o un fragmento dentro de ella): el componente se
         # arma desde esa tabla, así que se sube al <table> contenedor.

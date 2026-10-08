@@ -383,16 +383,26 @@ class TestFiguraDeDisenoQueReemplazaUnaTabla:
         assert "dp-image-shadow" in out
         assert "width: 700px" in out
 
-    def test_una_figura_que_reemplaza_una_imagen_comun_sigue_en_600(self):
-        """Solo cuando reemplaza una TABLA se asume densa: una figura que
-        reemplaza una imagen embebida común no cambia de comportamiento."""
+    def test_tambien_cuando_reemplaza_una_imagen_embebida(self):
+        """Toda figura de DISEÑO es un diagrama denso en texto y se tiene
+        que poder ampliar, reemplace una tabla o una imagen del asesor: así
+        están las tres del aula corregida de Neurociencia. La que NO se
+        amplía es la imagen embebida que se publica tal cual, sin figura de
+        diseño que la reemplace."""
         from pathlib import Path
         from maquetador.build.snippets import reemplazar_figuras_diseno
         html = ('<p>Figura 1. Evolución de la gestión de calidad</p>'
                 '<p><img src="__MEDIA__/orig.jpg"></p>')
         out = reemplazar_figuras_diseno(
             html, 1, {(1, "figura", 1): Path("M_1 fig 1.jpg")}, set())
-        assert "dp-popup-image" not in out
+        assert "dp-popup-image" in out
+
+    def test_una_imagen_sin_figura_de_diseno_no_se_amplia(self):
+        from maquetador.build.snippets import reemplazar_figuras_diseno
+        html = ('<p>Figura 1. Evolución de la gestión de calidad</p>'
+                '<p><img src="__MEDIA__/orig.jpg"></p>')
+        assert "dp-popup-image" not in reemplazar_figuras_diseno(
+            html, 1, {}, set())
 
 
 class TestFiguraAmpliablePorComentario:
