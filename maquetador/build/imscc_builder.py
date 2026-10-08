@@ -331,6 +331,7 @@ class GeneradorAula:
         self._inyectar_afi()
         self._resolver_enlaces_de_actividad()
         self._avisar_recursos_vacios()
+        self._avisar_figuras_de_diseno_sin_usar()
         self._personalizar_inicio()
         self._construir_syllabus()
         self._empaquetar_media()
@@ -2531,6 +2532,24 @@ class GeneradorAula:
             if rref:
                 self._eliminar_item_por_rref(rref)
                 logger.info("  Foro de apertura (no pedido) eliminado")
+
+    def _avisar_figuras_de_diseno_sin_usar(self):
+        """Diseño mandó una figura y en el aula no quedó ubicada.
+
+        Pasa cuando el epígrafe del DOCX no coincide con el nombre del
+        archivo (la figura dice "Figura 4" y el archivo es "M_2 fig 3") o
+        cuando el asesor no dejó el epígrafe. Sin este aviso la figura se
+        pierde en silencio: el aula sale con la imagen del asesor, o sin
+        nada, y nadie se entera hasta la revisión en Canvas."""
+        for clave, path in sorted(self.indice_diseno.items(), key=lambda x: str(x[0])):
+            if path in self.figuras_usadas:
+                continue
+            modulo = clave[0] if isinstance(clave, tuple) and clave else "?"
+            que = " ".join(str(x) for x in clave[1:]) if isinstance(clave, tuple) else clave
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                f"La figura de diseño '{Path(path).name}' ({que}) no quedó "
+                "ubicada en ninguna página: revisá que el epígrafe del DOCX "
+                "coincida con el número del archivo.", f"Módulo {modulo}"))
 
     def _avisar_recursos_vacios(self):
         """Tras maquetar, los foros/actividades que QUEDAN pero no recibieron

@@ -47,6 +47,7 @@ _W15 = "{http://schemas.microsoft.com/office/word/2012/wordml}"
 _AUTO = {"subtitulo", "subsubtitulo", "recuadro_simple", "lectura", "video",
          "podcast", "sin_recuadro", "otra_pagina", "enlace_descargable",
          "genially_listo", "no_maquetar", "foro_en_lectura",
+         "figura_de_diseno",
          "foro_lectura_y_espacio", "figura_expandible", "enlazar_actividad",
          "destacar_tramo", "componente_en_el_texto", "quiz", "galeria",
          "texto_alternativo"}
@@ -237,6 +238,12 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     # que tiene que leerse aparte del cuerpo (el prompt de IA que el estudiante
     # copia y pega). No es un párrafo suelto como el recuadro simple: son
     # varios, y hay que encuadrarlos juntos.
+    # "Reemplazar esta figura por la que está en carpeta diseño": es lo que
+    # el generador hace solo cuando diseño mandó la figura con ese número.
+    # Avisarlo era una falsa alarma en cada corrida; si la figura NO está,
+    # lo dice _avisar_figuras_de_diseno_sin_usar.
+    if "reemplazar" in n and "figura" in n and ("diseno" in n or "diseño" in n):
+        return "figura_de_diseno"
     if "cursiva" in n or "destacad" in n or "destacar" in n:
         return "destacar_tramo"
     if "lectura" in n:

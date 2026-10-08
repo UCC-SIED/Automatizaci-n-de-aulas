@@ -93,16 +93,45 @@ def pares_de_texto(parrafos: list) -> list:
         txt = p.get_text(" ", strip=True)
         if _PAT_EPIGRAFE.match(txt):      # "Tabla 1: …" es epígrafe, no un par
             continue
-        m = _RE_NOMBRE_CONTENIDO.match(txt)
-        if not m:
-            continue
-        suyo = "=" if "=" in txt[:m.end(1) + 2] else ":"
+        negrita = _par_con_titulo_en_negrita(p, txt)
+        if negrita:
+            suyo, par = "negrita", negrita
+        else:
+            m = _RE_NOMBRE_CONTENIDO.match(txt)
+            if not m:
+                continue
+            suyo = "=" if "=" in txt[:m.end(1) + 2] else ":"
+            par = (m.group(1).strip(), m.group(2).strip())
         if not separador:
             separador = suyo
         elif suyo != separador:
             break
-        pares.append((m.group(1).strip(), m.group(2).strip()))
+        pares.append(par)
     return pares
+
+
+def _par_con_titulo_en_negrita(el, txt: str):
+    """"<strong>Hipotálamo</strong>, que participa en…" → (título, resto).
+
+    En una lista el asesor marca el término en negrita y sigue con lo que
+    tenga a mano: coma, punto o nada. Exigir dos puntos dejaba sin armar
+    los dos pedidos de tabs verticales de Neurociencia (el cerebro
+    profundo en 1.3.3 y los desafíos éticos en 1.2.1), que venían con coma
+    y con punto."""
+    if getattr(el, "name", "") != "li":
+        # Fuera de una lista, un párrafo que arranca en negrita lo resuelve
+        # pares_de_secciones (modo "negrita"), que además junta los
+        # párrafos que cuelgan de cada título.
+        return None
+    fuerte = el.find(["strong", "b"])
+    if fuerte is None:
+        return None
+    titulo = fuerte.get_text(" ", strip=True).strip(" .,:;—–-")
+    if not _es_titulo_corto(titulo) or not txt.startswith(
+            fuerte.get_text(" ", strip=True)[:12]):
+        return None
+    resto = txt[len(fuerte.get_text(" ", strip=True)):].strip(" .,:;—–-")
+    return (titulo, resto) if len(resto) >= 10 else None
 
 
 # Etiquetas que forman el flujo de contenido de una sección. Se corta en
