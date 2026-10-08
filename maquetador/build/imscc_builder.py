@@ -1719,6 +1719,37 @@ class GeneradorAula:
             "corresponda — " + ", ".join(p.name for p in sueltos) + ".",
             "Archivos del aula"))
 
+    def _copiar_html_completo(self, origen: Path, destino: Path) -> None:
+        """Copia la herramienta y, si es un fragmento, la completa.
+
+        El asesor exporta el .html sin el esqueleto: arranca en <title> y
+        cierra en </script>, sin doctype, sin <html> y sin declarar el
+        charset. Pegado dentro de la página del aula no se nota, pero el
+        iframe lo sirve como documento propio: el navegador entra en modo
+        quirks y, sin charset, los acentos salen rotos."""
+        texto = origen.read_text(encoding="utf-8", errors="replace")
+        cabeza = texto.lstrip()[:400].lower()
+        if cabeza.startswith("<!doctype") or cabeza.startswith("<html"):
+            shutil.copy2(origen, destino)
+            return
+        titulo = ""
+        m = re.search(r"<title>(.*?)</title>", texto, re.S | re.I)
+        if m:
+            titulo = m.group(1).strip()
+            texto = texto[:m.start()] + texto[m.end():]
+        destino.write_text(
+            '<!DOCTYPE html>\n<html lang="es">\n<head>\n'
+            '<meta charset="utf-8">\n'
+            '<meta name="viewport" content="width=device-width, '
+            'initial-scale=1">\n'
+            f"<title>{titulo or origen.stem}</title>\n"
+            f"</head>\n<body>\n{texto.strip()}\n</body>\n</html>\n",
+            encoding="utf-8")
+        self.spec.issues.append(Issue(Severidad.INFO,
+            f"'{origen.name}' venía sin el esqueleto HTML (sin doctype ni "
+            "charset): se lo agregué al publicarlo, si no el iframe lo abre "
+            "en modo quirks y con los acentos rotos.", "AFI"))
+
     def _herramienta_html_incrustada(self) -> str:
         """Publica la herramienta HTML de la AFI y devuelve su bloque embebido.
 
@@ -1736,9 +1767,13 @@ class GeneradorAula:
             destino_rel = f"web_resources/Recursos/{path.name}"
             (self.working / "web_resources" / "Recursos").mkdir(
                 parents=True, exist_ok=True)
-            shutil.copy2(path, self.working / destino_rel)
+            self._copiar_html_completo(path, self.working / destino_rel)
             self.recursos_nuevos.append((_gen_id(), destino_rel))
-            url = "$IMS-CC-FILEBASE$/Recursos/" + quote(path.name)
+            # $IMS-CC-FILEBASE$ lo reescribe Canvas al importar. Si en el
+            # iframe no llega a resolverse, se pasa el link del archivo ya
+            # subido con --afi-url y el paquete sale apuntando ahí.
+            url = (getattr(self.spec, "afi_url", "")
+                   or "$IMS-CC-FILEBASE$/Recursos/" + quote(path.name))
             # Alto fijo y sin envoltorio de proporción: la herramienta es una
             # página con su propio layout, no un video. Con el envoltorio de
             # 56,25% y position:absolute quedaba aplastada contra el borde y

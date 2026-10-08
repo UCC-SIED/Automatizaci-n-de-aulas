@@ -105,6 +105,9 @@ class CourseSpec:
     # id no esta cuando se genera el paquete por primera vez. Clave:
     # "inicio" o el numero de la pagina ("1.4.1"); valor: el media id.
     videos_studio: dict = field(default_factory=dict)
+    # Link del archivo de la herramienta de la AFI, ya subido al aula.
+    # Solo hace falta si $IMS-CC-FILEBASE$ no resuelve en el iframe.
+    afi_url: str = ""
 
     def todos_los_items(self):
         for it in self.items_inicio:

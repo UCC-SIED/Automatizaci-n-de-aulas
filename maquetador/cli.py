@@ -57,6 +57,10 @@ def main():
                              "de armar el aula: --video 1.4.1=<id> o "
                              "--video inicio=<id>. Acepta el id pelado "
                              "(<uuid>-<numero>) o el iframe entero.")
+    parser.add_argument("--afi-url", default="", metavar="URL",
+                        help="Link del archivo de la herramienta de la "
+                             "AFI ya subido al aula, para el iframe. Solo "
+                             "hace falta si $IMS-CC-FILEBASE$ no resuelve.")
     parser.add_argument("--generar", action="store_true",
                         help="Generar el paquete .imscc (implica --extraer). "
                              "Requiere --tema y que no haya issues bloqueantes.")
@@ -80,6 +84,7 @@ def main():
                   "copias desde Canvas.")
             sys.exit(1)
         spec.videos_studio[clave.strip().strip(".")] = media_id
+    spec.afi_url = args.afi_url.strip()
     print(generar_reporte_texto(spec))
 
     media = {}
