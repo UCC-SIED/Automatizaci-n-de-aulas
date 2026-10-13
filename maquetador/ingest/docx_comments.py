@@ -24,8 +24,14 @@ from bs4 import BeautifulSoup
 
 from maquetador.ingest.folder_scanner import normalizar
 from maquetador.build.snippets import (resaltado_simple, cta_titulo, ICONOS,
+                                       quick_check,
+                                       preguntas_de_verdadero_o_falso,
+                                       galeria_de_figuras,
+                                       _PAT_PIE_DE_FIGURA,
                                        bloque_recurso_incrustado,
-                                       _PAT_GENIALLY_URL, _PAT_SOLO_ARCHIVO)
+                                       _PAT_GENIALLY_URL, _PAT_SOLO_ARCHIVO,
+                                       bloque_video_studio,
+                                       _PAT_AQUI_VA_VIDEO)
 from maquetador.build.componentes_asesor import (
     extraer_pares, construir_panels, construir_flipcards,
     construir_tooltip, disparador_tooltip, aplicar_cita,
@@ -41,8 +47,10 @@ _W15 = "{http://schemas.microsoft.com/office/word/2012/wordml}"
 _AUTO = {"subtitulo", "subsubtitulo", "recuadro_simple", "lectura", "video",
          "podcast", "sin_recuadro", "otra_pagina", "enlace_descargable",
          "genially_listo", "no_maquetar", "foro_en_lectura",
+         "figura_de_diseno",
          "foro_lectura_y_espacio", "figura_expandible", "enlazar_actividad",
-         "destacar_tramo", "componente_en_el_texto"}
+         "destacar_tramo", "componente_en_el_texto", "quiz", "galeria",
+         "texto_alternativo"}
 
 # Nivel de encabezado por acción, según la política de jerarquía de la UCC:
 # H2 es el título de la página, H3 el subtítulo y H4 el sub-subtítulo.
@@ -94,6 +102,13 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     # en…") y el texto alternativo. El generador los toma del párrafo, no del
     # globo; acá son ruido del proceso editorial que quedó sin limpiar y no
     # tiene que aparecer como un pedido pendiente.
+    # "Texto alternativo: …" con contenido detrás NO es ruido: es el alt que
+    # el asesor escribe para la figura, y sin tomarlo la imagen se publica
+    # sin descripción accesible. Solo el rótulo pelado (sin texto) se
+    # descarta, junto con la "Nota." que repite el pie ya escrito.
+    if re.match(r"^\s*(?:para\s+(?:maquetacion|el\s+maquetado)\s*:\s*)?"
+                r"texto\s+alt\w*\s*[:.]\s*\S", n):
+        return "texto_alternativo"
     if re.match(r"^\s*(?:para\s+(?:maquetacion|el\s+maquetado)\s*:\s*)?"
                 r"(?:nota\s*[\.:]|texto\s+alt)", n):
         return None
@@ -161,6 +176,11 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
         return "subsubtitulo"
     if "subtitulo" in n:
         return "subtitulo"
+    # "las figuras 3, 4, 5, 6 y 7 … se visualizan con el recurso galería de
+    # imágenes": varias figuras seguidas que son partes de un mismo todo van
+    # en una grilla donde cada una se amplía al clic, no una abajo de la otra.
+    if "galeria" in n or "galería" in instruccion.lower():
+        return "galeria"
     if "acordeon" in n:
         return "acordeon"
     # "Tabs"/"solapas"/"pestañas" — componente de DesignPLUS. Palabra completa:
@@ -218,6 +238,12 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     # que tiene que leerse aparte del cuerpo (el prompt de IA que el estudiante
     # copia y pega). No es un párrafo suelto como el recuadro simple: son
     # varios, y hay que encuadrarlos juntos.
+    # "Reemplazar esta figura por la que está en carpeta diseño": es lo que
+    # el generador hace solo cuando diseño mandó la figura con ese número.
+    # Avisarlo era una falsa alarma en cada corrida; si la figura NO está,
+    # lo dice _avisar_figuras_de_diseno_sin_usar.
+    if "reemplazar" in n and "figura" in n and ("diseno" in n or "diseño" in n):
+        return "figura_de_diseno"
     if "cursiva" in n or "destacad" in n or "destacar" in n:
         return "destacar_tramo"
     if "lectura" in n:
@@ -311,12 +337,20 @@ def extraer_comentarios(docx_path) -> list:
     activos = set()
     anclado = {cid: [] for cid in textos}
     inicio_el = {}
+    # Orden en que los globos aparecen EN EL DOCUMENTO. comments.xml los
+    # guarda por w:id, que es el orden en que se crearon: si el asesor vuelve
+    # sobre una figura anterior, su globo queda último. Varios globos con el
+    # mismo texto anclado (el pie "Nota. Cuadro creado con ChatGPT…" debajo de
+    # cada figura) se reparten por posición, así que ese orden importa: sin
+    # esto, el texto alternativo de una figura terminaba en la de al lado.
+    orden_doc = {}
     for el in droot.iter():
         tag = el.tag
         if tag == f"{_W}commentRangeStart":
             cid = el.get(f"{_W}id")
             activos.add(cid)
             inicio_el.setdefault(cid, el)
+            orden_doc.setdefault(cid, len(orden_doc))
         elif tag == f"{_W}commentRangeEnd":
             activos.discard(el.get(f"{_W}id"))
         elif tag == f"{_W}t" and activos:
@@ -404,6 +438,7 @@ def extraer_comentarios(docx_path) -> list:
                 "accion": "genially_listo",
                 "autor": autores.get(cid, ""),
                 "_html_genially": html_listo,
+                "_orden": orden_doc.get(cid, len(orden_doc)),
             })
             continue
         if not accion:
@@ -413,6 +448,7 @@ def extraer_comentarios(docx_path) -> list:
             "anclado": _ancla(cid),
             "accion": accion,
             "autor": autores.get(cid, ""),
+            "_orden": orden_doc.get(cid, len(orden_doc)),
         })
     return out
 
@@ -501,12 +537,24 @@ def _buscar_elemento_final(soup, anclado: str):
     if len(objetivo) < 6:
         return None
     clave = objetivo[-40:]
-    resultado = None
+    aproximado = None
     for el in soup.find_all(_TAGS_BUSCABLES):
         t = _squash(el.get_text(" ", strip=True))
-        if t and (t.endswith(clave) or clave.endswith(t)):
-            resultado = el
-    return resultado
+        if not t:
+            continue
+        if t.endswith(clave):
+            # El bloque que de verdad cierra el tramo marcado: el primero que
+            # termina con el final del ancla. Antes se seguía recorriendo y
+            # ganaba el ÚLTIMO parecido, así que el componente se estiraba
+            # hasta el fondo de la página y se tragaba todo lo que venía
+            # después (figura, subtítulos y recuadros incluidos).
+            return el
+        # Un bloque corto que coincide con la cola del ancla sirve de
+        # aproximación, pero solo si tiene cuerpo suficiente como para no
+        # ser una coincidencia de dos palabras.
+        if len(t) >= 12 and clave.endswith(t):
+            aproximado = el
+    return aproximado
 
 
 def _imagen_cercana(el):
@@ -564,6 +612,74 @@ def _tramo_hasta(el, hasta) -> list:
         if actual is not None:
             tramo.append(actual)
     return [el]
+
+
+# La primera pregunta del quick check arranca donde arranca la lista: antes
+# están la etiqueta de la caja ("No pases de largo") y la invitación a
+# repasar, que no son preguntas y se pegaban al enunciado de la primera.
+_PAT_ITEM_NUMERADO = re.compile(r"^\s*\d+\s*[.)\-]")
+
+
+def _bloques_de_quick_check(caja) -> list:
+    """Los renglones que son preguntas, sin la etiqueta ni la bajada."""
+    items = caja.find_all("li")
+    if items:
+        return [x.get_text(" ", strip=True) for x in items]
+    parrafos = [x.get_text(" ", strip=True) for x in caja.find_all("p")]
+    desde = next((i for i, t in enumerate(parrafos)
+                  if _PAT_ITEM_NUMERADO.match(t)), None)
+    return parrafos[desde:] if desde is not None else parrafos
+
+
+_PAT_NUMS = re.compile(r"\d+")
+_PAT_EPIGRAFE_SOLO = re.compile(r"^(figura|tabla)\s*(\d+)\s*[.:]?$", re.I)
+
+
+def _armar_galeria(soup, el, instruccion: str) -> bool:
+    """Agrupa en una galería las figuras que nombra el comentario.
+
+    Cada figura llega como cuatro párrafos sueltos: el epígrafe ("Figura 3"),
+    su título, la imagen y la nota. Se los junta en una tarjeta y se borran
+    los originales."""
+    numeros = [n for n in _PAT_NUMS.findall(instruccion)]
+    if not numeros:
+        return False
+    figuras, usados = [], []
+    hermano = el.find_next_sibling()
+    while hermano is not None:
+        siguiente = hermano.find_next_sibling()
+        m = _PAT_EPIGRAFE_SOLO.match(hermano.get_text(" ", strip=True))
+        if m and m.group(2) in numeros:
+            bloque, titulo, img_html, nota = [hermano], "", "", ""
+            x = siguiente
+            while x is not None and len(bloque) < 5:
+                texto = x.get_text(" ", strip=True)
+                img = x.find("img")
+                if img is not None:
+                    img_html = str(img)
+                elif _PAT_PIE_DE_FIGURA.match(texto):
+                    nota = texto
+                elif not titulo and texto:
+                    titulo = texto
+                else:
+                    break
+                bloque.append(x)
+                x = x.find_next_sibling()
+                if img_html and nota:
+                    break
+            if img_html:
+                figuras.append((m.group(2), titulo, img_html, nota))
+                usados.extend(bloque)
+                hermano = x
+                continue
+        hermano = siguiente
+    if len(figuras) < 2:
+        return False
+    usados[0].insert_before(BeautifulSoup(
+        galeria_de_figuras(figuras), "html.parser"))
+    for bloque in usados:
+        bloque.decompose()
+    return True
 
 
 def _texto_tooltip(instruccion: str) -> str:
@@ -688,20 +804,54 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
     # como límite de cierre. Sin este piso, un ancla corta usada como "fin"
     # coincide con el propio elemento de arranque y trunca el componente a
     # un solo elemento.
+    # El límite lo marca el último globo del grupo QUE ESTÉ EN ESTA SECCIÓN.
+    # Dos componentes distintos del módulo suelen compartir la misma
+    # instrucción genérica ("para maquetación: recurso expander") y caen en el
+    # mismo grupo: mirando solo el último, el final de un expander se buscaba
+    # en la página del otro, no aparecía, y el componente se armaba sin
+    # límite — se llevaba puestos los subtítulos que venían después.
     grupos_fin = {}
     for grupo, cs in grupos_textos.items():
-        if len(_squash(cs[-1]["anclado"])) < 40:
-            continue
-        el_fin = _buscar_elemento_final(soup, cs[-1]["anclado"])
-        if el_fin is not None:
-            grupos_fin[grupo] = el_fin
+        for c_fin in reversed(cs):
+            if len(_squash(c_fin["anclado"])) < 40:
+                continue
+            el_fin = _buscar_elemento_final(soup, c_fin["anclado"])
+            if el_fin is not None:
+                grupos_fin[grupo] = el_fin
+                break
 
-    for c in comentarios:
+    # Varios globos distintos pueden colgar del MISMO texto, porque ese texto
+    # se repite en todo el módulo: el pie "Nota. Cuadro creado con ChatGPT…"
+    # es idéntico debajo de cada figura, y cada globo describe la suya. Como
+    # esta función corre una vez por sección, el que corresponde acá es el
+    # primero sin aplicar: los demás son de las secciones que siguen. Sin
+    # esto, la primera sección se llevaba los tres y las otras dos quedaban
+    # sin su texto alternativo.
+    anclas_usadas = set()
+    # Los textos alternativos se recorren en el orden del DOCUMENTO, no en el
+    # que se crearon los globos: todos cuelgan del mismo pie ("Nota. Cuadro
+    # creado con ChatGPT…"), que se repite debajo de cada figura, y lo que
+    # los distingue es la posición. El resto de los globos conserva su orden,
+    # del que depende qué componente se arma en cada sección.
+    alternativos = sorted((c for c in comentarios
+                           if c["accion"] == "texto_alternativo"),
+                          key=lambda c: c.get("_orden", 0))
+    orden = [c for c in comentarios
+             if c["accion"] != "texto_alternativo"] + alternativos
+
+    for c in orden:
         accion = c["accion"]
         if c.get("_aplicado"):
             continue
         if accion not in _AUTO and accion not in _COMPONENTES:
             continue
+        clave_ancla = (accion, _squash(c["anclado"]))
+        if accion == "texto_alternativo":
+            # Dos figuras de la misma sección no comparten alt: si el ancla ya
+            # se usó acá, este globo es de la figura de la página siguiente.
+            if clave_ancla in anclas_usadas:
+                continue
+            anclas_usadas.add(clave_ancla)
         if accion == "componente_en_el_texto":
             # El globo solo señala el nombre del componente que el asesor ya
             # escribió como primera línea de la caja: lo arma procesar_contenido
@@ -782,6 +932,22 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
         if accion == "recuadro_simple" and el.find_parent(class_="dp-callout"):
             c["_aplicado"] = True
             continue
+
+        # El resaltado simple encuadra TODO el tramo que el asesor marcó, no
+        # solo el párrafo donde arranca: en 3.3 el recuadro se quedaba con la
+        # pregunta de apertura y las tres preguntas del diario salían sueltas
+        # debajo de la caja.
+        if accion == "recuadro_simple":
+            fin = _buscar_elemento_final(soup, c["anclado"])
+            tramo = _tramo_hasta(el, fin)
+            if len(tramo) > 1:
+                piezas = "".join(str(x) for x in tramo)
+                tramo[0].replace_with(BeautifulSoup(
+                    resaltado_simple(piezas), "html.parser"))
+                for elemento in tramo[1:]:
+                    elemento.decompose()
+                c["_aplicado"] = True
+                continue
 
         # El comentario del asesor suele anclar sobre una tabla de pares
         # título/contenido (o un fragmento dentro de ella): el componente se
@@ -873,9 +1039,18 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
                 cta_titulo("Lectura", f"<p>{inner}</p>", ICONOS["lectura"]),
                 "html.parser"))
         elif accion == "video":
-            el.replace_with(BeautifulSoup(
-                cta_titulo("Video", f"<p>{inner}</p>", ICONOS["video"]),
-                "html.parser"))
+            # "(AQUÍ VA VIDEO M1)" no es contenido: marca el lugar de un video
+            # PROPIO de la UCC. Va el bloque de Canvas Studio, no un CTA que
+            # manda afuera —y el texto del paréntesis no se publica.
+            texto = el.get_text(" ", strip=True)
+            if _PAT_AQUI_VA_VIDEO.match(texto):
+                el.replace_with(BeautifulSoup(
+                    bloque_video_studio(referencia=texto.strip("()[] ")),
+                    "html.parser"))
+            else:
+                el.replace_with(BeautifulSoup(
+                    cta_titulo("Video", f"<p>{inner}</p>", ICONOS["video"]),
+                    "html.parser"))
         elif accion == "podcast":
             el.replace_with(BeautifulSoup(
                 cta_titulo("Podcast", f"<p>{inner}</p>", ICONOS["podcast"]),
@@ -884,6 +1059,33 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
             # El asesor pide NO encuadrar: se marca para que procesar_contenido
             # no lo convierta en recuadro por sus heurísticas.
             el["data-keep-plain"] = "1"
+        elif accion == "galeria":
+            if not _armar_galeria(soup, el, c["instruccion"]):
+                c["_aplicado"] = False   # sin figuras que agrupar: se avisa
+        elif accion == "quiz":
+            # "Quick check": el asesor escribe el repaso de verdadero/falso
+            # como una lista adentro de un recuadro y comenta cómo quiere
+            # resolverlo. Toda esa caja se reemplaza por el componente, que
+            # corrige solo: antes quedaba como un recuadro de texto más y el
+            # pedido salía en los avisos para armarlo a mano.
+            caja = el.find_parent("table") or el
+            preguntas = preguntas_de_verdadero_o_falso(
+                _bloques_de_quick_check(caja))
+            if len(preguntas) >= 2:
+                caja.replace_with(BeautifulSoup(
+                    quick_check(preguntas), "html.parser"))
+            else:
+                c["_aplicado"] = False   # sin preguntas reconocibles: se avisa
+        elif accion == "texto_alternativo":
+            # El asesor escribe el alt de la figura en un globo, anclado a su
+            # "Nota." o a la figura misma. Se deja como el párrafo que ya sabe
+            # leer procesar_contenido ("Texto alternativo: …"), que lo pasa al
+            # atributo alt y borra el párrafo: una sola forma de resolverlo,
+            # venga del cuerpo del DOCX o de un comentario.
+            alt = re.sub(r"^\s*(?:para\s+(?:maqueta(?:ci[óo]n|do)|el\s+"
+                         r"maquetado)\s*[:.]?\s*)?", "", c["instruccion"],
+                         flags=re.I).strip()
+            el.insert_after(BeautifulSoup(f"<p>{alt}</p>", "html.parser"))
         elif accion == "otra_pagina":
             # El contenido (típicamente el foro) vive en el DOCX de este
             # módulo pero el asesor aclaró que va en OTRA página: se saca

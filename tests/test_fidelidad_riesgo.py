@@ -98,12 +98,17 @@ class TestTitulosOficialesComoEtiqueta:
         assert "fa-book-reader" in out
         assert "dp-callout-type-title-bar" in out
 
-    def test_no_pases_de_largo_es_el_recuadro_de_atencion(self):
+    def test_no_pases_de_largo_es_el_recuadro_importante(self):
+        """El catálogo tiene tres cajas con ese mismo título; la que usa el
+        equipo para destacar lo que no hay que saltearse es la de Importante
+        (ámbar, con el marcador), no la de Atención (roja, con el triángulo):
+        ese peso es para una advertencia, no para un resumen de ideas clave."""
         out = self._caja("No pases de largo",
                          "La gestión del riesgo no es un acto único.")
         assert "No pases de largo" in out
-        assert "dp-callout-color-danger" in out
-        assert "fa-exclamation-triangle" in out
+        assert "dp-callout-color-lg-warning" in out
+        assert "fa-bookmark" in out
+        assert "dp-callout-color-danger" not in out
 
 
 class TestLinkCrudoDentroDeUnRecuadro:
@@ -127,10 +132,14 @@ class TestLinkCrudoDentroDeUnRecuadro:
         assert enlace.parent.name == "p"
         assert enlace.parent.get_text(strip=True) == "Acceso al documento"
 
-    def test_si_el_texto_habla_de_un_articulo_dice_articulo(self):
+    def test_un_articulo_tambien_dice_acceso_al_documento(self):
+        """El aula usa dos textos y nada más: "Ver video" y "Acceso al
+        documento". Aunque la cita diga "artículo", el enlace se publica
+        como documento —"Acceso al artículo" no existe en el catálogo."""
         out = self._caja('<p>Te dejo el artículo completo: '
                          '<a href="https://x.org/a">https://x.org/a</a></p>')
-        assert "Acceso al artículo" in out
+        assert "Acceso al documento" in out
+        assert "Acceso al artículo" not in out
 
 
 class TestBajadaDeRecuadro:

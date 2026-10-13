@@ -120,7 +120,11 @@ def pagina_contenido(titulo: str, body_html: str, banner_src: str,
 def pagina_bibliografia(titulo: str, body_html: str, banner_src: str,
                         identifier: str, tema: str = "") -> str:
     """Página 'Bibliografía MN' con estructura oficial kl_custom_block_0."""
-    bib_body = construir_bibliografia(body_html) or procesar_contenido(body_html, tema)
+    # En la página de Bibliografía el h2 es el título del bloque, así que
+    # "Obligatoria"/"Sugerida y complementaria" son h3. El h4 es del
+    # índice del Programa, donde además cuelgan de un h3 por módulo.
+    bib_body = (construir_bibliografia(body_html, nivel="h3")
+                or procesar_contenido(body_html, tema))
     return f"""{_cabecera(titulo, identifier)}
 <div id="dp-wrapper" class="{DP_WRAPPER_CLASSES}" {_attrs_str(DP_WRAPPER_ATTRS)}>
 {_banner(banner_src, titulo)}

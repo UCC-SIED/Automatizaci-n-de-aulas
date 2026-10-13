@@ -10,7 +10,11 @@ import re
 
 from bs4 import BeautifulSoup
 
-_RE_NOMBRE_CONTENIDO = re.compile(r"^(.{2,60}?):\s+(.+)$", re.DOTALL)
+# El asesor separa el frente del dorso con dos puntos ("Zenón: disciplina…")
+# o con un igual ("Zenón = Disciplina estoica y coherencia."). Con el igual
+# sin reconocer, la flip card de 3.2 no se armaba y los cuatro filósofos
+# quedaban como cuatro renglones sueltos.
+_RE_NOMBRE_CONTENIDO = re.compile(r"^(.{2,60}?)\s*[:=]\s+(.+)$", re.DOTALL)
 
 
 def _celda(c) -> tuple:
@@ -77,16 +81,57 @@ def pares_de_tabla(tabla) -> list:
 
 
 def pares_de_texto(parrafos: list) -> list:
-    """Párrafos 'Nombre: contenido' → [(nombre, contenido)]."""
-    pares = []
+    """Párrafos 'Nombre: contenido' → [(nombre, contenido)].
+
+    El separador lo elige el asesor y lo mantiene en todo el componente. Se
+    fija con el primer par y a partir de ahí los demás tienen que usar el
+    mismo: en 3.2 los cuatro filósofos van con "=" y el párrafo que sigue
+    ("Este aporte resulta profundamente actual: …") lleva dos puntos de
+    puntuación normal —se colaba como una quinta tarjeta."""
+    pares, separador = [], ""
     for p in parrafos:
         txt = p.get_text(" ", strip=True)
         if _PAT_EPIGRAFE.match(txt):      # "Tabla 1: …" es epígrafe, no un par
             continue
-        m = _RE_NOMBRE_CONTENIDO.match(txt)
-        if m:
-            pares.append((m.group(1).strip(), m.group(2).strip()))
+        negrita = _par_con_titulo_en_negrita(p, txt)
+        if negrita:
+            suyo, par = "negrita", negrita
+        else:
+            m = _RE_NOMBRE_CONTENIDO.match(txt)
+            if not m:
+                continue
+            suyo = "=" if "=" in txt[:m.end(1) + 2] else ":"
+            par = (m.group(1).strip(), m.group(2).strip())
+        if not separador:
+            separador = suyo
+        elif suyo != separador:
+            break
+        pares.append(par)
     return pares
+
+
+def _par_con_titulo_en_negrita(el, txt: str):
+    """"<strong>Hipotálamo</strong>, que participa en…" → (título, resto).
+
+    En una lista el asesor marca el término en negrita y sigue con lo que
+    tenga a mano: coma, punto o nada. Exigir dos puntos dejaba sin armar
+    los dos pedidos de tabs verticales de Neurociencia (el cerebro
+    profundo en 1.3.3 y los desafíos éticos en 1.2.1), que venían con coma
+    y con punto."""
+    if getattr(el, "name", "") != "li":
+        # Fuera de una lista, un párrafo que arranca en negrita lo resuelve
+        # pares_de_secciones (modo "negrita"), que además junta los
+        # párrafos que cuelgan de cada título.
+        return None
+    fuerte = el.find(["strong", "b"])
+    if fuerte is None:
+        return None
+    titulo = fuerte.get_text(" ", strip=True).strip(" .,:;—–-")
+    if not _es_titulo_corto(titulo) or not txt.startswith(
+            fuerte.get_text(" ", strip=True)[:12]):
+        return None
+    resto = txt[len(fuerte.get_text(" ", strip=True)):].strip(" .,:;—–-")
+    return (titulo, resto) if len(resto) >= 10 else None
 
 
 # Etiquetas que forman el flujo de contenido de una sección. Se corta en
@@ -360,8 +405,15 @@ def extraer_pares(el, instruccion: str = "", hasta=None):
         actual = actual.find_next_sibling()
     pares = pares_de_texto(parrafos)
     if len(pares) >= 2:
-        consumidos = [p for p in parrafos
-                      if _RE_NOMBRE_CONTENIDO.match(p.get_text(" ", strip=True))]
+        # Solo los párrafos que terminaron siendo un par: pares_de_texto
+        # corta donde cambia el separador, y sin este recorte el párrafo que
+        # viene después se borraba de la página aunque no entrara al
+        # componente (pasó con el cierre de los cuatro filósofos en 3.2).
+        consumidos, nombres = [], [n for n, _ in pares]
+        for p in parrafos:
+            m = _RE_NOMBRE_CONTENIDO.match(p.get_text(" ", strip=True))
+            if m and m.group(1).strip() in nombres:
+                consumidos.append(p)
         return pares, consumidos
     return [], []
 
@@ -384,6 +436,12 @@ def construir_panels(pares: list, variante: str = "dp-expander-default") -> str:
     # solapas quedan angostas, del ancho del texto, en vez de repartirse
     # todo el ancho disponible. Vertical/expander/acordeón no la llevan.
     fill = " dp-panel-tab-width-fill" if variante == "dp-tabs-buttons" else ""
+    if variante == "dp-tabs-pills-vertical":
+        # Las píldoras verticales llevan su propia paleta: la solapa activa
+        # en primary sobre la columna gris, como la serie de figuras de 3.5.
+        return (f'<div class="dp-panels-wrapper {variante} '
+                'dp-panel-active-color-dp-primary dp-panel-color-dp-gray">\n'
+                f'{grupos}\n</div>')
     return (f'<div class="dp-panels-wrapper {variante} '
             'dp-panel-color-dp-primary dp-panel-active-color-dp-secondary '
             f'dp-panel-hover-color-dp-secondary{fill}">\n'

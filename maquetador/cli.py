@@ -51,6 +51,16 @@ def main():
     parser.add_argument("--extraer", action="store_true",
                         help="Además del plan, extraer el HTML de cada sección "
                              "y mostrar el resumen de extracción")
+    parser.add_argument("--video", action="append", default=[],
+                        metavar="PAGINA=MEDIA_ID",
+                        help="Video de Canvas Studio que llego despues "
+                             "de armar el aula: --video 1.4.1=<id> o "
+                             "--video inicio=<id>. Acepta el id pelado "
+                             "(<uuid>-<numero>) o el iframe entero.")
+    parser.add_argument("--afi-url", default="", metavar="URL",
+                        help="Link del archivo de la herramienta de la "
+                             "AFI ya subido al aula, para el iframe. Solo "
+                             "hace falta si $IMS-CC-FILEBASE$ no resuelve.")
     parser.add_argument("--generar", action="store_true",
                         help="Generar el paquete .imscc (implica --extraer). "
                              "Requiere --tema y que no haya issues bloqueantes.")
@@ -64,6 +74,17 @@ def main():
         sys.exit(1)
 
     spec = analizar_curso(carpeta, args.tema)
+    for par in args.video:
+        from maquetador.build.snippets import media_id_de_studio
+        clave, _, valor = par.partition("=")
+        media_id = media_id_de_studio(valor)
+        if not media_id:
+            print(f"⛔ --video {par}: no reconozco un id de Canvas Studio "
+                  "ahi. Va el id del medio (<uuid>-<numero>) o el iframe que "
+                  "copias desde Canvas.")
+            sys.exit(1)
+        spec.videos_studio[clave.strip().strip(".")] = media_id
+    spec.afi_url = args.afi_url.strip()
     print(generar_reporte_texto(spec))
 
     media = {}

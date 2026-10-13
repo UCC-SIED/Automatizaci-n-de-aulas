@@ -50,11 +50,19 @@ from maquetador.build.snippets import (separar_consignas, procesar_contenido,
                                        maquetar_actividad,
                                        nombre_publicado_de_figura,
                                        bloque_video_studio,
+                                       embed_de_studio,
+                                       media_id_de_studio,
+                                       recuadro_actividad_grupal,
+                                       enlazar_lecturas_con_bibliografia,
+                                       _es_espaciador,
+                                       _PAT_ES_GRUPAL,
+                                       _quitar_portada_de_actividad,
+                                       _secciones_de_actividad_a_h3,
                                        token_de_studio,
                                        contenido_declara_video,
                                        bloque_recurso_incrustado,
                                        _FIG_CLASES_EXPANDIBLE, _FIG_ANCHO_MAX)
-from maquetador.build.bibliography import construir_bibliografia
+from maquetador.build.bibliography import construir_bibliografia, indice_de_obras
 from maquetador.extract.segmenter import ImagenInline, _MAMMOTH_STYLE_MAP
 from maquetador.ingest.folder_scanner import normalizar
 from maquetador.ingest.docx_comments import extraer_comentarios, aplicar_comentarios
@@ -266,6 +274,7 @@ class GeneradorAula:
             getattr(spec, "imagenes_diseno", []))
         self._conciliar_figuras_mal_rotuladas()
         self.figuras_usadas = set()        # paths de DISEÑO aprovechados
+        self.videos_puestos = set()        # claves de --video ya incrustadas
 
     def _conciliar_figuras_mal_rotuladas(self):
         """Rescata las figuras de DISEÑO nombradas con el módulo equivocado."""
@@ -305,16 +314,24 @@ class GeneradorAula:
         self.manifest = _leer(self.working / "imsmanifest.xml")
         self.meta = _leer(self.working / "course_settings" / "module_meta.xml")
 
+        # Las obras que manda a leer un recuadro 'Descubri leyendo' estan
+        # en la bibliografia del modulo, con su enlace: el recuadro solo
+        # trae el titulo. Se indexan antes de armar las paginas.
+        self.obras_citadas = {}
+        for modulo in spec.modulos:
+            refs = getattr(modulo, 'extras', {}).get('referencias', '')
+            for titulo, url in indice_de_obras(refs).items():
+                self.obras_citadas.setdefault(titulo, url)
         self._titulo_curso()
         self._asegurar_modulos()
         for modulo in spec.modulos:
             self._procesar_modulo(modulo)
         self._eliminar_modulos_sobrantes()
-        self._eliminar_encuesta_valoracion()
         self._limpiar_recursos_no_usados()
         self._inyectar_afi()
         self._resolver_enlaces_de_actividad()
         self._avisar_recursos_vacios()
+        self._avisar_figuras_de_diseno_sin_usar()
         self._personalizar_inicio()
         self._construir_syllabus()
         self._empaquetar_media()
@@ -326,6 +343,7 @@ class GeneradorAula:
         # que apunte a un archivo inexistente es basura (módulos eliminados o
         # referencias colgadas que el aula base ya traía): se elimina.
         self._purgar_referencias_rotas()
+        self._incrustar_videos_de_studio()
 
         _escribir(self.working / "imsmanifest.xml", self.manifest)
         _escribir(self.working / "course_settings" / "module_meta.xml", self.meta)
@@ -379,6 +397,12 @@ class GeneradorAula:
             if item.tipo != TipoItem.VIDEO:
                 continue
             url = (item.detalle or {}).get("referencia", "")
+            # Si la planilla ya trae el id del medio (o el embed entero
+            # pegado), el video se incrusta aca mismo y no queda hueco.
+            media_id = media_id_de_studio(url)
+            if media_id:
+                return bloque_video_studio(
+                    referencia=url, embed=embed_de_studio(media_id, item.titulo))
             if token_de_studio(url)[0]:
                 self.spec.issues.append(Issue(Severidad.AVISO,
                     f"El video de este módulo ya está en Canvas Studio ({url}), "
@@ -557,6 +581,7 @@ class GeneradorAula:
                 body_html=self._rutear_media(item.fuente.html),
                 banner_src=banner, identifier=page_id,
                 tema=self.spec.tema)
+            html = enlazar_lecturas_con_bibliografia(html, self.obras_citadas)
             _escribir(self.working / href, html)
             self.modulo_por_slug[slug] = n
             nuevos.append((page_id, href, item.titulo))
@@ -741,6 +766,18 @@ class GeneradorAula:
                 parrafos = [p.text.strip() for p in doc.paragraphs
                             if p.text.strip()
                             and not normalizar(p.text).startswith("biograf")]
+                # El DOCX abre con el nombre del docente en una línea propia
+                # y en mayúsculas. Arriba, en la ficha, ya está: sin sacarlo
+                # la titulación empieza repitiéndolo. No se compara con el
+                # nombre de la ficha porque no coinciden —la bio suele traer
+                # un apellido más ("Luis ROLDÁN González de las Cuevas"
+                # contra "Luis Gonzalez de las Cuevas")—: una línea corta y
+                # toda en mayúsculas al principio de una biografía es el
+                # nombre, no hay otra cosa que pueda ser.
+                if parrafos and len(parrafos[0]) <= 70 \
+                        and parrafos[0] == parrafos[0].upper() \
+                        and any(c.isalpha() for c in parrafos[0]):
+                    parrafos = parrafos[1:]
                 renglones = [" ".join(parrafos)]
             except Exception:
                 renglones = []
@@ -778,7 +815,23 @@ class GeneradorAula:
                            if "video" in k and "introduc" in k), None)
         url_video = (video_item.detalle or {}).get("referencia", "") \
             if video_item else ""
-        if token_de_studio(url_video)[0]:
+        media_id = (self.spec.videos_studio or {}).get("inicio")             or media_id_de_studio(url_video)
+        if media_id:
+            # El bloque del aula base trae un <p> vacío donde va el video.
+            # En las aulas maquetadas el iframe va centrado en ese párrafo.
+            titulo = video_item.titulo if video_item else "Video de bienvenida"
+            embed = (f'<p style="text-align: center;">'
+                     f'{embed_de_studio(media_id, titulo)}</p>\n')
+            html, nv = self._llenar_bloque(html, "Te damos la bienvenida",
+                                           embed)
+            if nv:
+                cambios.append("video de bienvenida")
+                self.videos_puestos.add("inicio")
+            else:
+                self.spec.issues.append(Issue(Severidad.AVISO,
+                    "No encontré el bloque 'Te damos la bienvenida' para "
+                    f"poner el video ({media_id}).", "Página de inicio"))
+        elif token_de_studio(url_video)[0]:
             self.spec.issues.append(Issue(Severidad.AVISO,
                 f"El video de bienvenida ya está en Canvas Studio "
                 f"({url_video}): pegar su embed en el bloque 'Te damos la "
@@ -800,10 +853,12 @@ class GeneradorAula:
         if cambios:
             _escribir(pagina, html)
             logger.info(f"  [Inicio] personalizado: {', '.join(cambios)}")
+            pendiente = ("" if "video de bienvenida" in cambios
+                         else " El video de bienvenida se carga a mano en "
+                              "Canvas Studio.")
             self.spec.issues.append(Issue(Severidad.INFO,
                 "Página de inicio personalizada ("
-                + ", ".join(cambios) + "). El video de bienvenida se carga "
-                "a mano en Canvas Studio.", "Página de inicio"))
+                + ", ".join(cambios) + ")." + pendiente, "Página de inicio"))
 
     # ------------------------------------------------------------------ #
     def _construir_syllabus(self):
@@ -1040,6 +1095,30 @@ class GeneradorAula:
                 break
         return html[:inicio] + nuevo + html[fin:], True
 
+    def _llenar_bloque(self, html: str, titulo: str, cuerpo: str) -> tuple:
+        """Mete `cuerpo` DENTRO del bloque, antes de su aire de cierre.
+
+        A diferencia de _reemplazar_bloque_por_data_title, que cambia el
+        bloque entero, acá el <h2> con su ícono se conserva: lo único que
+        cambia es lo que cuelga abajo."""
+        ancla = re.search(rf'<div[^>]*\bdata-title="{re.escape(titulo)}"[^>]*>',
+                          html)
+        if not ancla:
+            return html, False
+        depth = 0
+        for mm in re.finditer(r'<div\b[^>]*>|</div>', html[ancla.start():]):
+            depth += -1 if mm.group(0).startswith("</div") else 1
+            if depth == 0:
+                corte = ancla.start() + mm.start()
+                # El bloque cierra con un <p>&nbsp;</p> de aire: el contenido
+                # va ANTES, para que el aire siga siendo lo último.
+                aire = re.search(r"(?:<p>(?:&nbsp;|\s)*</p>\s*)+$",
+                                 html[:corte])
+                if aire:
+                    corte = aire.start()
+                return html[:corte] + cuerpo + html[corte:], True
+        return html, False
+
     def _reemplazar_bloque_div(self, html: str, clase: str, nuevo: str) -> str:
         """Reemplaza el <div class="…clase…">…</div> (con divs anidados) por
         `nuevo`, cortando en el </div> balanceado. Si no lo encuentra, devuelve
@@ -1108,6 +1187,12 @@ class GeneradorAula:
         primeros = soup.find_all(recursive=False)
         if primeros and primeros[0].name == "table":
             primeros[0].decompose()   # tabla de metadatos de la plantilla
+        if es_actividad:
+            # La portada del DOCX (carrera, asignatura, docente, título de la
+            # actividad, tabla de metadatos) no va: Canvas ya muestra el
+            # nombre y la fecha. Y cada rótulo de sección va como h3.
+            _quitar_portada_de_actividad(soup, self.spec.nombre)
+            _secciones_de_actividad_a_h3(soup)
         # Pedidos de maquetación del asesor (comentarios del DOCX): igual que
         # en las páginas de contenido, un foro/actividad puede traer un link
         # real en un comentario (p.ej. el protocolo de transparencia) u otro
@@ -1118,8 +1203,17 @@ class GeneradorAula:
         for nombre, data, ctype in img.imagenes:
             self.media[f"{prefijo}_{nombre}"] = (data, ctype)
         html = str(soup).replace("__MEDIA__/", f"__MEDIA__/{prefijo}_")
-        return procesar_contenido(self._rutear_media(html), self.spec.tema,
-                                  bajar_h1_h2=not es_actividad)
+        salida = procesar_contenido(self._rutear_media(html), self.spec.tema,
+                                    bajar_h1_h2=not es_actividad)
+        if es_actividad and _PAT_ES_GRUPAL.search(soup.get_text(" ", strip=True)):
+            # Instructivo de grupos: no está en el DOCX (no es contenido de la
+            # asignatura) y el equipo lo pega al pie de toda entrega grupal.
+            salida += "\n" + recuadro_actividad_grupal()
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                f"'{path.stem[:50]}' se entrega en grupo: le agregué el "
+                "recuadro 'Actividad Grupal' al pie. Si es individual, "
+                "borralo en Canvas.", "Actividades"))
+        return salida
 
     def _rid_en_meta(self, content_type: str, patron_titulo: str) -> str:
         pat = re.compile(
@@ -1237,9 +1331,48 @@ class GeneradorAula:
                    + maquetar_actividad(body_html, self.spec.tema, color)
                    + "\n" + m.group(3))
         html = pat.sub(_reemplazo, html, count=1)
+        html = self._titulo_dentro_del_encabezado(html)
         _escribir(archivos[0], html)
         self.assignments_escritos.add(rid)
         return True
+
+    @staticmethod
+    def _titulo_dentro_del_encabezado(html: str) -> str:
+        """El título del caso va DENTRO del h2 con el ícono del aula base.
+
+        El bloque "Actividad" abre con un <h2> que solo trae el ícono de
+        tareas, y el título salía debajo, en un h2 propio: dos encabezados,
+        el ícono suelto arriba y el título sin él. El equipo los publica
+        como uno solo."""
+        soup = BeautifulSoup(html, "html.parser")
+        bloque = soup.find(attrs={"data-title": "Actividad"})
+        if bloque is None:
+            return html
+        encabezado = bloque.find("h2", class_="dp-has-icon")
+        titulo = bloque.find("h2", class_="dp-ignore-theme")
+        if encabezado is None or titulo is None:
+            return html
+        if encabezado.get_text(strip=True):
+            return html       # el aula base ya trae su propio texto
+        color = ""
+        for parte in (titulo.get("style") or "").split(";"):
+            if "color" in parte:
+                color = parte.split(":")[-1].strip()
+        encabezado["style"] = f"text-align: center; color: {color}" \
+            if color else "text-align: center;"
+        for hijo in list(titulo.children):
+            encabezado.append(hijo.extract())
+        titulo.decompose()
+        # El aula base deja su renglón de aire y el cuerpo trae el suyo: al
+        # juntar los dos encabezados quedaban dos seguidos.
+        sig = encabezado.find_next_sibling()
+        while sig is not None and _es_espaciador(sig):
+            siguiente = sig.find_next_sibling()
+            if not _es_espaciador(siguiente):
+                break
+            sig.decompose()
+            sig = siguiente
+        return str(soup)
 
     def _rid_actividad(self, n: int, etiqueta: str) -> tuple:
         """Elige el assignment del aula base según la etiqueta de la consigna."""
@@ -1587,6 +1720,37 @@ class GeneradorAula:
             "corresponda — " + ", ".join(p.name for p in sueltos) + ".",
             "Archivos del aula"))
 
+    def _copiar_html_completo(self, origen: Path, destino: Path) -> None:
+        """Copia la herramienta y, si es un fragmento, la completa.
+
+        El asesor exporta el .html sin el esqueleto: arranca en <title> y
+        cierra en </script>, sin doctype, sin <html> y sin declarar el
+        charset. Pegado dentro de la página del aula no se nota, pero el
+        iframe lo sirve como documento propio: el navegador entra en modo
+        quirks y, sin charset, los acentos salen rotos."""
+        texto = origen.read_text(encoding="utf-8", errors="replace")
+        cabeza = texto.lstrip()[:400].lower()
+        if cabeza.startswith("<!doctype") or cabeza.startswith("<html"):
+            shutil.copy2(origen, destino)
+            return
+        titulo = ""
+        m = re.search(r"<title>(.*?)</title>", texto, re.S | re.I)
+        if m:
+            titulo = m.group(1).strip()
+            texto = texto[:m.start()] + texto[m.end():]
+        destino.write_text(
+            '<!DOCTYPE html>\n<html lang="es">\n<head>\n'
+            '<meta charset="utf-8">\n'
+            '<meta name="viewport" content="width=device-width, '
+            'initial-scale=1">\n'
+            f"<title>{titulo or origen.stem}</title>\n"
+            f"</head>\n<body>\n{texto.strip()}\n</body>\n</html>\n",
+            encoding="utf-8")
+        self.spec.issues.append(Issue(Severidad.INFO,
+            f"'{origen.name}' venía sin el esqueleto HTML (sin doctype ni "
+            "charset): se lo agregué al publicarlo, si no el iframe lo abre "
+            "en modo quirks y con los acentos rotos.", "AFI"))
+
     def _herramienta_html_incrustada(self) -> str:
         """Publica la herramienta HTML de la AFI y devuelve su bloque embebido.
 
@@ -1604,15 +1768,24 @@ class GeneradorAula:
             destino_rel = f"web_resources/Recursos/{path.name}"
             (self.working / "web_resources" / "Recursos").mkdir(
                 parents=True, exist_ok=True)
-            shutil.copy2(path, self.working / destino_rel)
+            self._copiar_html_completo(path, self.working / destino_rel)
             self.recursos_nuevos.append((_gen_id(), destino_rel))
-            url = "$IMS-CC-FILEBASE$/Recursos/" + quote(path.name)
-            iframe = (f'<iframe src="{url}" width="100%" height="100%" '
-                      'style="position: absolute; top: 0; left: 0; width: 100%; '
-                      'height: 100%;" frameborder="0" allowfullscreen="true" '
-                      f'title="{xml_escape(path.stem)}" loading="lazy"></iframe>')
-            bloques.append("<p>&nbsp;</p>\n"
-                           + bloque_recurso_incrustado(iframe))
+            # $IMS-CC-FILEBASE$ lo reescribe Canvas al importar. Si en el
+            # iframe no llega a resolverse, se pasa el link del archivo ya
+            # subido con --afi-url y el paquete sale apuntando ahí.
+            url = (getattr(self.spec, "afi_url", "")
+                   or "$IMS-CC-FILEBASE$/Recursos/" + quote(path.name))
+            # Alto fijo y sin envoltorio de proporción: la herramienta es una
+            # página con su propio layout, no un video. Con el envoltorio de
+            # 56,25% y position:absolute quedaba aplastada contra el borde y
+            # no se veía nada.
+            titulo = xml_escape(path.stem.replace("_", " "))
+            iframe = (f'<p><iframe src="{url}" width="100%" height="950px" '
+                      'style="border: medium none currentcolor;" '
+                      'frameborder="0" scrolling="yes" '
+                      'allowfullscreen="allowfullscreen" '
+                      f'title="{titulo}" loading="lazy"></iframe></p>')
+            bloques.append("<p>&nbsp;</p>\n" + iframe + "\n<p>&nbsp;</p>")
             self.spec.issues.append(Issue(Severidad.INFO,
                 f"'{path.name}' se publicó en los archivos del aula "
                 f"(Recursos/) y quedó incrustado en la Actividad final "
@@ -2163,11 +2336,12 @@ class GeneradorAula:
             "Limpieza"))
 
     def _eliminar_encuesta_valoracion(self):
-        """'Encuesta de valoración final' (aula base) es un Quiz clásico
-        (Quizzes::Quiz). El equipo usa New Quizzes, que el formato IMSCC no
-        puede generar, así que esa encuesta queda siempre vacía y hay que
-        rehacerla a mano en Canvas — se quita del paquete en vez de dejarla
-        como recurso muerto (pedido del usuario)."""
+        """Saca la 'Encuesta de valoración final' del aula base.
+
+        YA NO SE USA: el aula se entrega CON la encuesta. Se la quitaba por
+        ser un Quiz clásico (el equipo usa New Quizzes), pero en el aula
+        funciona y el equipo la quiere en el paquete. Queda el método por si
+        hiciera falta volver a sacarla en algún curso."""
         m = re.search(
             r'<module identifier="([^"]+)">\s*<title>\s*Encuesta de valoraci[óo]n',
             self.meta, re.IGNORECASE)
@@ -2359,6 +2533,24 @@ class GeneradorAula:
                 self._eliminar_item_por_rref(rref)
                 logger.info("  Foro de apertura (no pedido) eliminado")
 
+    def _avisar_figuras_de_diseno_sin_usar(self):
+        """Diseño mandó una figura y en el aula no quedó ubicada.
+
+        Pasa cuando el epígrafe del DOCX no coincide con el nombre del
+        archivo (la figura dice "Figura 4" y el archivo es "M_2 fig 3") o
+        cuando el asesor no dejó el epígrafe. Sin este aviso la figura se
+        pierde en silencio: el aula sale con la imagen del asesor, o sin
+        nada, y nadie se entera hasta la revisión en Canvas."""
+        for clave, path in sorted(self.indice_diseno.items(), key=lambda x: str(x[0])):
+            if path in self.figuras_usadas:
+                continue
+            modulo = clave[0] if isinstance(clave, tuple) and clave else "?"
+            que = " ".join(str(x) for x in clave[1:]) if isinstance(clave, tuple) else clave
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                f"La figura de diseño '{Path(path).name}' ({que}) no quedó "
+                "ubicada en ninguna página: revisá que el epígrafe del DOCX "
+                "coincida con el número del archivo.", f"Módulo {modulo}"))
+
     def _avisar_recursos_vacios(self):
         """Tras maquetar, los foros/actividades que QUEDAN pero no recibieron
         contenido (el asesor entregó un enlace de Google Docs en vez de un DOCX,
@@ -2376,6 +2568,56 @@ class GeneradorAula:
                     "aula base (sin contenido). Suele pasar cuando el asesor "
                     "entrega un enlace (Google Docs) en vez de un archivo: "
                     "completar a mano en Canvas.", "Recursos a completar"))
+
+    # ------------------------------------------------------------------ #
+    _PAT_HUECO_VIDEO = re.compile(
+        r"<!--\s*Pegar aqu[ií] el embed de Canvas Studio([^>]*?)-->")
+
+    def _clave_de_pagina(self, titulo: str) -> str:
+        """La clave con la que se nombra esta pagina al pasar un video."""
+        m = re.match(r"\s*((?:\d+\.)+)", titulo or "")
+        if m:
+            return m.group(1).rstrip(".")
+        return "inicio"
+
+    def _incrustar_videos_de_studio(self):
+        """Reemplaza los huecos de video por el embed real.
+
+        El id de Studio no existe cuando se arma el aula —la coleccion se
+        comparte al cerrar la maquetacion— asi que el paquete sale con el
+        hueco comentado. Cuando los ids llegan, se vuelven a pasar (en la
+        columna de enlace de la planilla o con --video) y el mismo paquete
+        sale ya con los videos puestos, sin pegarlos a mano uno por uno."""
+        pedidos = dict(self.spec.videos_studio or {})
+        if not pedidos:
+            return
+        usados = set(self.videos_puestos)
+        for archivo in sorted((self.working / "wiki_content").glob("*.html")):
+            html = _leer(archivo)
+            if not self._PAT_HUECO_VIDEO.search(html):
+                continue
+            m = re.search(r"<title>(.*?)</title>", html, re.S)
+            titulo = re.sub(r"<[^>]+>", "", m.group(1)).strip() if m else ""
+            clave = self._clave_de_pagina(titulo)
+            # Un id se usa UNA vez: "inicio" es la clave de toda página sin
+            # número, así que el video de bienvenida se repetía en las tres
+            # introducciones de módulo, que lo que llevan es su propio hueco.
+            if clave in self.videos_puestos:
+                continue
+            media_id = pedidos.get(clave)
+            if not media_id:
+                continue
+            html = self._PAT_HUECO_VIDEO.sub(
+                lambda mm: embed_de_studio(media_id, titulo), html, count=1)
+            _escribir(archivo, html)
+            usados.add(clave)
+            self.videos_puestos.add(clave)
+            logger.info(f"Video de Studio incrustado en '{titulo}' ({media_id})")
+        for clave in pedidos:
+            if clave not in usados:
+                self.spec.issues.append(Issue(Severidad.AVISO,
+                    f"Me pasaste el video '{clave}' pero no encontre el hueco "
+                    "de video en esa pagina: revisa el numero.", "videos"))
 
     def _validar_xml_generado(self):
         """Cualquier XML mal formado en el paquete (p.ej. un '&' sin escapar

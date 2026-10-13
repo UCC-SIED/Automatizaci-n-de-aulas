@@ -21,18 +21,24 @@ mano: el dp-wrapper los estiliza) y estiliza figuras y sus epígrafes.
 """
 
 import re
+import uuid
+from urllib.parse import quote
 import unicodedata
 
 from bs4 import BeautifulSoup, NavigableString
 from PIL import Image, UnidentifiedImageError
 from maquetador.build.componentes_asesor import (construir_flipcards,
-                                                   construir_panels, aplicar_cita)
+                                                   construir_panels, aplicar_cita,
+                                                   pares_de_tabla)
 
 # Acento institucional por aula base. Los snippets se arman con el de posgrado
 # y al final se repintan según el tema del curso (ver aplicar_acento_del_tema):
 # hasta ahora TODO curso salía con el color de posgrado, también los de
 # educación.
 ACENTO_POR_TEMA = {"educacion": "#003087", "posgrado": "#1b1e31"}
+# El azul institucional. El acento del tema cambia el color del contenido,
+# pero el título de una actividad va siempre en este azul.
+AZUL_UCC = "#003087"
 
 # Estilo institucional de tabla de datos ("Estándares para Recursos Visuales y
 # Datos" + catálogo de snippets). El encabezado NO usa el mismo color que los
@@ -113,6 +119,12 @@ _PAT_EMBEBER_VIDEO = re.compile(
     re.I)
 _PAT_MARCADOR_VIDEO = re.compile(
     r"^\s*videos?\s*(?:m(?:[oó]dulo)?\s*)?\d*\s*[\.:]?\s*$", re.I)
+# "(AQUÍ VA VIDEO M1)" — la otra forma en que el asesor marca el lugar del
+# video, entre paréntesis y dentro del recuadro. Sin reconocerla, el recuadro
+# salía como un CTA que manda afuera y el texto del paréntesis se publicaba.
+_PAT_AQUI_VA_VIDEO = re.compile(
+    r"^\s*[\(\[]?\s*(?:aqu[ií]|ac[áa])\s+va\b[^:<]{0,30}?\bvideos?\b"
+    r"[^)\]]*[\)\]]?\s*\.?\s*$", re.I)
 _PAT_MARCADOR_VIDEO_FINAL = re.compile(
     r"\s*\bvideos?\s*(?:m(?:[oó]dulo)?\s*)?\d*\s*\.?\s*(?=</|$)", re.I)
 
@@ -146,7 +158,57 @@ def token_de_studio(url: str) -> tuple:
     return (m.group(1), m.group(2) or "")
 
 
-def bloque_video_studio(body_html: str = "", referencia: str = "") -> str:
+# El id con el que Canvas incrusta un video de Studio: un UUID y, pegado con
+# guion, el número del medio — el mismo que cierra el enlace de edición que
+# trae la planilla (".../caption/edit/1446"). El UUID no se puede deducir de
+# ese enlace: aparece recién en el embed que genera Canvas, cuando la
+# colección ya está compartida. Por eso se acepta tanto el id pelado como el
+# iframe entero pegado en la planilla.
+_PAT_MEDIA_ID = re.compile(
+    r"custom_arc_media_id(?:%3D|=)([0-9a-f-]{36}-\d+)"
+    r"|(?<![0-9a-f-])([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-"
+    r"[0-9a-f]{12}-\d+)", re.I)
+
+
+def media_id_de_studio(texto: str) -> str:
+    """El custom_arc_media_id que haya en el texto, o ""."""
+    m = _PAT_MEDIA_ID.search(texto or "")
+    return (m.group(1) or m.group(2)) if m else ""
+
+
+def embed_de_studio(media_id: str, titulo: str = "") -> str:
+    """Iframe de Canvas Studio, igual al que genera Canvas al incrustar.
+
+    El curso se resuelve con $CANVAS_COURSE_REFERENCE$ para que el paquete
+    sirva en cualquier aula."""
+    if not media_id:
+        return ""
+    lanzamiento = quote(
+        "https://uccor.instructuremedia.com/lti/launch"
+        "?custom_arc_launch_type=learn_embed"
+        f"&custom_arc_media_id={media_id}"
+        "&custom_arc_start_at=0"
+        "&custom_arc_transcript_downloadable=true", safe="")
+    attr_titulo = f' title="{titulo}"' if titulo else ""
+    return (f'<iframe class="lti-embed"'
+            f' style="width: 700px; height: 441px; display: inline-block;"'
+            f'{attr_titulo}'
+            f' src="$CANVAS_COURSE_REFERENCE$/external_tools/retrieve'
+            f'?display=borderless&amp;url={lanzamiento}"'
+            f' width="700" height="441" loading="lazy"'
+            f' allowfullscreen="allowfullscreen"'
+            f' webkitallowfullscreen="webkitallowfullscreen"'
+            f' mozallowfullscreen="mozallowfullscreen"'
+            f' allow="geolocation *; microphone *; camera *; midi *;'
+            f' encrypted-media *; autoplay *; clipboard-write *;'
+            f' display-capture *; fullscreen *"'
+            f' data-studio-resizable="true"'
+            f' data-studio-tray-enabled="true"'
+            f' data-studio-convertible-to-link="true"></iframe>')
+
+
+def bloque_video_studio(body_html: str = "", referencia: str = "",
+                        embed: str = "") -> str:
     """Bloque de video propio de la UCC (Canvas Studio).
 
     Los videos de desarrollo / introducción / conceptuales NO son un CTA: no
@@ -160,9 +222,9 @@ def bloque_video_studio(body_html: str = "", referencia: str = "") -> str:
     """
     intro = f'{body_html}<p>&nbsp;</p>' if body_html else ""
     cual = f": {referencia}" if referencia else ""
-    adentro = f"<!-- Pegar aquí el embed de Canvas Studio{cual} -->"
+    adentro = embed or f"<!-- Pegar aquí el embed de Canvas Studio{cual} -->"
     return f"""<div class="dp-content-block" data-title="Video" data-category="+UCC">
-<h2 class="dp-has-icon"><i class="dp-icon fab fa-youtube" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i></h2>
+<h2 class="dp-has-icon"><i class="dp-icon fab fa-youtube" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i>Video</h2>
 {intro}<div class="dp-embed-wrapper mx-auto d-block" style="text-align: center;">{adentro}</div>
 <p>&nbsp;</p>
 </div>"""
@@ -185,13 +247,301 @@ def resaltado_profundizacion(titulo: str, body_html: str) -> str:
 
 
 def resaltado_atencion(body_html: str, titulo: str = "No pases de largo") -> str:
-    return f"""<div class="dp-callout dp-callout-placeholder card dp-callout-position-default dp-callout-type-info dp-callout-color-danger">
-<div class="dp-callout-side-emphasis"><i class="dp-icon dp-default-icon fas fa-exclamation-triangle">​</i></div>
+    """"No pases de largo" — la variante IMPORTANTE del catálogo.
+
+    El título es el mismo para tres cajas distintas (Atención en rojo con el
+    triángulo, Importante en ámbar con el marcador, y la verde). La que usa
+    el equipo para destacar lo que no hay que saltearse es la de Importante:
+    el rojo del triángulo es para una advertencia, y ese peso no lo tiene un
+    resumen de ideas clave.
+    """
+    return f"""<div class="dp-callout dp-callout-placeholder card dp-callout-position-default dp-callout-type-info dp-callout-color-lg-warning" style="border-width: 1px !important; border-style: solid !important;">
+<div class="dp-callout-side-emphasis"><i class="dp-icon fas fa-bookmark dp-default-icon" style="color: #ffffff;">​</i></div>
 <div class="card-body">
 <h3 class="card-title">{titulo}</h3>
 {body_html}
 </div>
 </div>"""
+
+
+# Instructivo fijo que el equipo pega al pie de toda actividad que se entrega
+# en grupo: el DOCX del asesor no lo trae (no es contenido de la asignatura,
+# es cómo se usa Canvas) y sin él los alumnos entregan sin unirse al grupo.
+_PAT_ES_GRUPAL = re.compile(
+    r"\b(?:grupal(?:es)?|en\s+grupos?|informe\s+grupal|s[ií]ntesis\s+grupal|"
+    r"por\s+equipos?|cada\s+(?:grupo|equipo))\b", re.I)
+
+
+# La portada del DOCX de una actividad: carrera, asignatura, docente, título
+# de la actividad y la tabla de metadatos (módulos, fecha, modalidad). En
+# Canvas nada de eso va: la actividad ya se abre con su nombre y su fecha, y
+# el equipo arranca directo en la primera sección.
+_PAT_PORTADA_CARRERA = re.compile(
+    r"^\s*(?:maestr[ií]a|especializaci[óo]n|diplomatura|licenciatura|"
+    r"doctorado|carrera|programa)\b", re.I)
+_PAT_PORTADA_DOCENTE = re.compile(
+    r"^\s*(?:docente|profesor|autor|contenidista)\b", re.I)
+_PAT_PORTADA_TITULO = re.compile(
+    r"^\s*actividad\s+(?:obligatoria|sugerida|final|integradora|n[°º]?\s*\d)",
+    re.I)
+_PAT_META_ACTIVIDAD = re.compile(
+    r"^\s*(?:m[óo]dulos?|fecha\s+de\s+entrega|fecha|modalidad|formato|"
+    r"valor|ponderaci[óo]n|peso|entrega|duraci[óo]n)\b", re.I)
+# Rótulos de sección de la actividad: el asesor los escribe en negrita y a
+# veces con su propia redacción. Van todos como h3, con el nombre de la casa.
+_ROTULOS_DE_ACTIVIDAD = {
+    "consigna": "Consigna",
+    "contextualizacion": "Contextualización",
+    "criterios de evaluacion": "Criterios de evaluación",
+    "formato de entrega": "Pautas de presentación",
+    "pautas de presentacion": "Pautas de presentación",
+    "pautas de entrega": "Pautas de presentación",
+}
+
+
+def _quitar_portada_de_actividad(soup, nombre_curso: str = "") -> None:
+    """Saca la portada del DOCX: lo de arriba hasta la primera sección.
+
+    La portada es la carrera, la asignatura, el docente, el título de la
+    actividad y la tabla de metadatos (módulos, fecha, modalidad). Se corta
+    en el primer rótulo de sección o en el primer párrafo de contenido, así
+    que un DOCX que arranca directo en la consigna queda intacto."""
+    curso = _norm(nombre_curso)
+    for el in list(soup.find_all(recursive=False)):
+        texto = el.get_text(" ", strip=True)
+        if not texto:
+            el.decompose()
+            continue
+        if _norm(texto) in _ROTULOS_DE_ACTIVIDAD:
+            return
+        if el.name == "table":
+            primera = el.find(["td", "th"])
+            if primera is not None and _PAT_META_ACTIVIDAD.match(
+                    primera.get_text(" ", strip=True)):
+                el.decompose()
+                continue
+            return
+        # La portada viene en negrita, no como encabezado: mammoth la
+        # entrega en <p> y es procesar_contenido el que después la sube a
+        # h2/h4. Así que acá se mira el texto, no la etiqueta.
+        if (_PAT_PORTADA_CARRERA.match(texto)
+                or _PAT_PORTADA_DOCENTE.match(texto)
+                or (curso and _norm(texto) == curso)):
+            el.decompose()
+            continue
+        # El título de la actividad NO se saca: maquetar_actividad le quita
+        # el prefijo que duplica el nombre del ítem en Canvas ("Actividad
+        # Obligatoria 1: ") y publica el resto como H2 de la actividad. Pero
+        # la tabla de metadatos va justo abajo, así que el barrido sigue.
+        if _PAT_PORTADA_TITULO.match(texto):
+            continue
+        return
+
+
+def _secciones_de_actividad_a_h3(soup) -> None:
+    """Cada rótulo de sección va como h3, con el nombre de la casa.
+
+    El asesor los manda en negrita o con su redacción ("Formato de entrega"
+    por "Pautas de presentación"): quedaban como párrafo suelto en medio de
+    la consigna, sin el estilo del tema y fuera del índice de la página."""
+    for el in list(soup.find_all(["p", "h2", "h3", "h4", "h5"])):
+        texto = el.get_text(" ", strip=True)
+        oficial = _ROTULOS_DE_ACTIVIDAD.get(_norm(texto))
+        if not oficial:
+            continue
+        nuevo = soup.new_tag("h3")
+        nuevo.string = oficial
+        el.replace_with(nuevo)
+
+
+def recuadro_actividad_grupal() -> str:
+    return """<div class="dp-callout dp-callout-placeholder card dp-callout-position-default dp-callout-type-info dp-callout-color-success">
+<div class="dp-callout-side-emphasis"><i class="fas fa-users dp-default-icon dp-i-shape-circle dp-i-size-large dp-i-border-light"> </i></div>
+<div class="card-body">
+<h3 class="card-title" style="text-align: left;"><strong>Actividad Grupal</strong></h3>
+<p style="text-align: left;">Para visualizar los grupos ingresá al curso y hacé clic en Personas &rarr; Grupos.</p>
+<p style="text-align: left;"><strong>Tu docente te indicará si debés elegir un grupo o si ya estás asignado al mismo.</strong></p>
+<ul style="text-align: left;">
+<li aria-level="1"><span>Verificá que estás unido a tu grupo antes de realizar la entrega.</span></li>
+<li aria-level="1"><span>Coordiná con tu equipo quién va a enviar.</span></li>
+<li aria-level="1"><span>La entrega la realiza un solo integrante en representación de todo el equipo, desde esta misma actividad.</span></li>
+<li aria-level="1"><span>No realices la entrega sin antes haberte unido a tu grupo.&nbsp;</span></li>
+</ul>
+<blockquote>
+<p style="text-align: left;">⚠ <strong>Importante:</strong> Si no ves los grupos o tenés problemas, contactá al docente.</p>
+</blockquote>
+</div>
+</div>"""
+
+
+# "Bitácora de aprendizaje": la ficha con barra lateral gruesa y encabezado
+# propio que el equipo arma a mano. No es un dp-callout —tiene su paleta y su
+# borde— así que no sigue el acento del tema: #003366 es parte del snippet.
+_AZUL_BITACORA = "#003366"
+
+
+def bitacora_de_aprendizaje(body_html: str,
+                            titulo: str = "Bitácora de aprendizaje") -> str:
+    return f"""<div style="margin: 20px 0px; border-width: 1px 1px 1px 10px; border-style: solid; border-color: #e1e1e1 #e1e1e1 #e1e1e1 {_AZUL_BITACORA}; border-radius: 8px; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
+<div style="background-color: #f8f9fa; padding: 15px 20px; border-bottom: 1px solid #e1e1e1; display: flex; justify-content: space-between; align-items: center;"><span style="color: {_AZUL_BITACORA}; font-size: 1.1rem;"><i class="dp-icon fas fa-diagnoses" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i>&nbsp; <strong>{titulo}</strong></span> <span style="color: {_AZUL_BITACORA}; font-size: 1.2rem;"><br></span></div>
+<div style="padding: 20px; background-color: #ffffff;">
+{body_html}
+</div>
+</div>"""
+
+
+# "Quick check": el repaso de verdadero o falso que el asesor escribe como
+# una lista dentro de un recuadro. El componente es una grilla de tarjetas
+# que se corrigen solas al hacer clic; el azul y los íconos son del snippet,
+# no del tema del aula.
+_AZUL_QC = "#003366"
+_PAT_RESPUESTA_VF = re.compile(r"[\s(]*(verdadero|falso)[\s).]*$", re.I)
+_PAT_NUM_PREGUNTA = re.compile(r"^\s*\d+\s*[.)\-]?\s*")
+
+
+def preguntas_de_verdadero_o_falso(bloques: list) -> list:
+    """[(enunciado, 'Verdadero'|'Falso')] a partir de los párrafos/ítems.
+
+    El asesor a veces parte una pregunta larga en dos renglones ("…eliminar
+    las" / "emociones grupales? Falso"): se van juntando hasta encontrar la
+    respuesta, que siempre cierra el enunciado."""
+    preguntas, acumulado = [], ""
+    for texto in bloques:
+        texto = " ".join((texto or "").split())
+        if not texto:
+            continue
+        acumulado = f"{acumulado} {texto}".strip() if acumulado else texto
+        m = _PAT_RESPUESTA_VF.search(acumulado)
+        if not m:
+            continue
+        enunciado = _PAT_NUM_PREGUNTA.sub("", acumulado[:m.start()]).strip()
+        if enunciado:
+            preguntas.append((enunciado, m.group(1).capitalize()))
+        acumulado = ""
+    return preguntas
+
+
+def _tarjeta_quick_check(n: int, enunciado: str, correcta: str,
+                         ancho_completo: bool) -> str:
+    otra = "Falso" if correcta.lower() == "verdadero" else "Verdadero"
+    col = "col-12" if ancho_completo else "col-lg-6 col-md-6 col-sm-12"
+    ident = uuid.uuid4().hex[:12]
+    return f"""<div class="{col}" style="margin-bottom: 20px;">
+<div class="dp-qc" style="background-color: #ffffff; padding: 20px; border-radius: 10px; height: 100%; display: flex; flex-direction: column; justify-content: space-between; border: 1px solid #cbd5e0;" data-interactive-id="{ident}" data-interactive-type="Quick Check" data-interactive-title="Quick Check {n}">
+<div>
+<div class="dp-qc-question">
+<div style="background-color: #f0f4f8; padding: 10px 14px; border-radius: 6px; border-left: 4px solid {_AZUL_QC}; margin-bottom: 12px;">
+<p class="dp-text-bold cp-txt-dark" style="color: {_AZUL_QC}; margin: 0; font-size: 1rem;"><i class="fas fa-question-circle" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i> Pregunta {n}</p>
+</div>
+<p style="color: #2d3748; margin-bottom: 15px; font-size: 0.95rem;">{enunciado}</p>
+</div>
+<dl class="dp-qc-answers">
+<dt class="dp-qc-answer dp-qc-correct">
+<div class="dp-qc-content">
+<p>{correcta}</p>
+</div>
+</dt>
+<dd class="dp-qc-response d-none dp-qc-correct"><span class="dp-qc-answer-type"><i class="fas fa-fw fa-check"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i></span>
+<div class="dp-qc-content">
+<p>¡Gran trabajo! ¡Respuesta correcta!</p>
+</div>
+</dd>
+<dt class="dp-qc-answer">
+<div class="dp-qc-content">
+<p>{otra}</p>
+</div>
+</dt>
+<dd class="dp-qc-response d-none"><span class="dp-qc-answer-type"><i class="fas fa-fw fa-times"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i></span>
+<div class="dp-qc-content">
+<p>¡Revisá el material nuevamente para reforzar tus conocimientos!</p>
+</div>
+</dd>
+</dl>
+</div>
+<a class="dp-qc-submit btn dp-ext-ignore btn-dp-primary dp-hover-shadow-b1" style="display: none; margin-top: 15px;" role="button" href="#">Verificar respuesta</a>
+</div>
+</div>"""
+
+
+_BAJADA_QC = ("¿Cómo venís con las lecturas? Respondé estas preguntas clave "
+              "de verdadero o falso que te ayudarán a fijar los conocimientos.")
+
+
+def quick_check(preguntas: list,
+                titulo: str = "¿Cómo vengo hasta acá?",
+                bajada: str = _BAJADA_QC) -> str:
+    """Grilla de tarjetas de verdadero/falso que se corrigen solas.
+
+    El título y la bajada son fijos: así se publica el componente en el
+    aula. Salía con "Compruebe su comprensión" y sin la bajada, y el
+    estudiante no sabía qué se esperaba que hiciera."""
+    if not preguntas:
+        return ""
+    tarjetas = []
+    impar_final = len(preguntas) % 2 == 1
+    for i, (enunciado, correcta) in enumerate(preguntas, 1):
+        tarjetas.append(_tarjeta_quick_check(
+            i, enunciado, correcta,
+            ancho_completo=impar_final and i == len(preguntas)))
+    return f"""<div class="dp-content-block" style="background-color: #f4f6f8; padding: 30px 20px; border-radius: 12px; border: 1px solid #e2e8f0;" data-title="Quick Check Set" data-category="Interactions">
+<div style="padding-left: 15px; margin-bottom: 25px;">
+<div style="display: inline-block; background-color: {_AZUL_QC}; color: #ffffff; padding: 4px 12px; border-radius: 20px; font-size: 0.85rem; margin-bottom: 10px;"><i class="dp-icon fas fa-bolt" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i> Check</div>
+<p class="dp-has-icon dp-heading-ignore" style="color: {_AZUL_QC}; margin: 0 0 8px 0;"><span style="font-size: 24pt;"><i class="dp-icon fas fa-chevron-circle-right" aria-hidden="true"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i> {titulo}</span></p>
+<p class="dp-heading-ignore" style="color: #4a5568; margin: 0; font-size: 1rem;">{bajada}</p>
+</div>
+<div class="dp-column-container container-fluid pt-0">
+<div class="row pt-0">
+""" + chr(10).join(tarjetas) + """
+</div>
+</div>
+</div>"""
+
+
+# Galería de figuras: cuando el asesor presenta varias figuras seguidas que
+# son partes de un mismo todo, no van una abajo de la otra sino en una grilla
+# donde cada una se amplía al hacer clic. Paleta propia del snippet.
+_AZUL_GAL = "#0369a1"
+
+
+_PAT_ESTILO_IMG = re.compile(r'\s*style="[^"]*"')
+# La imagen llena la tarjeta: el ancho que traía (calculado para una figura
+# suelta en la página) la desbordaba.
+_ESTILO_IMG_GALERIA = (
+    ' style="cursor: pointer; width: 100% !important; '
+    'height: 100% !important; display: block !important; '
+    'object-fit: contain; border: medium none currentcolor;"')
+
+
+def _panel_de_figura(numero: str, titulo: str, img_html: str,
+                     nota: str) -> tuple:
+    """Una figura como panel de las solapas verticales."""
+    img_html = _PAT_ESTILO_IMG.sub("", img_html).replace(
+        "<img", '<img class="dp-popup-image"', 1)
+    pie = f"<figcaption>{_PIE_DE_GALERIA.format(nota=nota)}</figcaption>" if nota else ""
+    cuerpo = (f'<figure class="dp-max-width mx-auto d-block dp-image-rounded-10'
+              f' dp-image-padded dp-image-bordered dp-image-shadow"'
+              f' style="width: 700px; height: auto; text-align: center;">'
+              f"{img_html}{pie}</figure>")
+    return (f"<strong>Figura {numero}</strong>" if numero else titulo), cuerpo
+
+
+_PIE_DE_GALERIA = ('<span style="font-size: 10pt;"><strong>{nota}</strong>'
+                   "</span>")
+
+
+def galeria_de_figuras(figuras: list, titulo: str = "") -> str:
+    """Las figuras de una serie, una por solapa vertical.
+
+    `figuras` es [(numero, titulo, html_de_la_imagen, nota)]. Van en
+    solapas y no en una grilla: son diagramas con texto adentro y en
+    miniatura no se leen —en la grilla había que ampliar cada una para
+    saber qué decía. El bloque no lleva título propio: ya viene anunciado
+    por el párrafo que lo presenta."""
+    if not figuras:
+        return ""
+    pares = [_panel_de_figura(*f) for f in figuras]
+    return construir_panels(pares, "dp-tabs-pills-vertical")
+
 
 
 def resaltado_ejemplo(body_html: str, titulo: str = "Ejemplos que iluminan") -> str:
@@ -356,6 +706,10 @@ def _clasificar_recuadro(etiqueta: str, texto_completo: str) -> tuple:
         return "ejemplo", "Ejemplos que iluminan"
     if "laboratorio de ideas" in n:
         return "laboratorio_ideas", "Laboratorio de ideas"
+    # "Bitácora de aprendizaje": ficha propia, con barra lateral gruesa y su
+    # encabezado. Sin reconocerla salía de recuadro simple, sin título.
+    if "bitacora" in n:
+        return "bitacora", "Bitácora de aprendizaje"
     return "simple", ""
 
 
@@ -494,6 +848,15 @@ def _tabla_a_recuadro(tabla) -> str:
                 "", marca.get_text(" ", strip=True)).strip(" .:–—-")
             marca.decompose()
             return bloque_video_studio(str(frag).strip(), referencia)
+        # "(AQUÍ VA VIDEO M1)": el recuadro NO tiene contenido propio, solo
+        # marca el lugar. Es el bloque de Studio, no un CTA: envuelto en el
+        # CTA, además, el título "Video M1" de la barra era un marcador más y
+        # el bloque terminaba reemplazándolo, anidado adentro de la caja.
+        parrafos = [p for p in frag.find_all("p") if p.get_text(strip=True)]
+        if parrafos and all(_PAT_AQUI_VA_VIDEO.match(p.get_text(" ", strip=True))
+                            or _PAT_MARCADOR_VIDEO.match(p.get_text(" ", strip=True))
+                            for p in parrafos):
+            return bloque_video_studio(referencia=titulo)
 
     if tipo == "foro":
         return cta_titulo(titulo, body, ICONOS["foro"])
@@ -533,6 +896,8 @@ def _tabla_a_recuadro(tabla) -> str:
         return resaltado_ejemplo(body, titulo)
     if tipo == "laboratorio_ideas":
         return resaltado_laboratorio_ideas(body, titulo)
+    if tipo == "bitacora":
+        return bitacora_de_aprendizaje(body, titulo)
     return resaltado_simple(body)
 
 
@@ -747,7 +1112,29 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
         vecinos MÁS CERCANOS (el siguiente antes que el anterior, porque el
         epígrafe suele estar arriba de la imagen) y la imagen embebida del
         docente por sobre una tabla."""
-        sig = list(p.find_next_siblings())
+        # Hacia adelante se saltean los renglones que son parte del propio
+        # epígrafe —el título de la figura y el "texto alternativo:" que
+        # deja el asesor— para llegar a lo que hay que reemplazar. Sin esto,
+        # la tabla de la Figura 1 de 2.2 quedaba a tres hermanos de
+        # distancia y se publicaba además de la imagen que la reemplaza.
+        sig, saltados = [], 0
+        for hermano in p.find_next_siblings():
+            texto_h = hermano.get_text(" ", strip=True)
+            # Un párrafo con imagen NUNCA se saltea aunque no tenga texto:
+            # es justamente la figura que hay que reemplazar. En 3.5 se lo
+            # tomaba por un renglón en blanco y la figura de diseño se
+            # insertaba aparte, dejando las dos imágenes publicadas.
+            de_relleno = (getattr(hermano, "name", "") == "p"
+                          and not hermano.find("img")
+                          and (not texto_h or _PAT_ALT_PARRAFO.match(texto_h)
+                               or (len(texto_h) <= 90
+                                   and hermano.find("strong"))))
+            if de_relleno and saltados < 2:
+                saltados += 1
+                continue
+            sig.append(hermano)
+            if len(sig) >= 2:
+                break
         prev = list(p.find_previous_siblings())
         cercanos = []
         for i in range(2):
@@ -803,6 +1190,10 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
         if clase == "img":
             vecino["src"] = f"__DISENO__/{nombre_publicado_de_figura(path)}"
             vecino["style"] = f"width: {_ancho_de_figura(path)}px; height: auto;"
+            # Una figura de DISEÑO es un diagrama denso en texto (el modelo
+            # MINE, el cuadro comparativo): siempre se tiene que poder
+            # ampliar para leerla, igual que cuando reemplaza una tabla.
+            vecino["class"] = _FIG_CLASES_EXPANDIBLE.split()
             usadas.add(path)
         elif clase == "table":
             # Una figura de diseño que reemplaza una TABLA de datos es, por
@@ -1277,13 +1668,167 @@ def _bajada_de_recuadro(soup):
             "html.parser"))
 
 
-_PAT_ES_ARTICULO = re.compile(r"\bart[íi]culos?\b|\barticles?\b|\bpapers?\b", re.I)
+# De qué recurso se trata, para nombrar el enlace con lo que el lector va
+# a hacer con él. La pista sale de la cita APA que lo acompaña, que
+# declara el tipo entre corchetes ("[Video]. YouTube").
+_PAT_ES_ARTICULO = re.compile(
+    r"\bart[íi]culos?\b|\barticles?\b|\bpapers?\b", re.I)
+_PAT_ES_VIDEO = re.compile(
+    r"youtu\.?be|youtube\.com|vimeo\.com|\[video\]", re.I)
+_PAT_ES_PODCAST = re.compile(
+    r"spotify\.com|ivoox|anchor\.fm|podcasts?\.apple|\[podcast\]|podcasts?\b", re.I)
 
 
 def _texto_de_acceso(contexto: str) -> str:
-    """"Acceso al artículo" / "Acceso al documento" según de qué se hable."""
-    return ("Acceso al artículo" if _PAT_ES_ARTICULO.search(contexto)
-            else "Acceso al documento")
+    """Con qué texto se publica el enlace, según qué hay del otro lado.
+
+    El equipo usa DOS textos, no más: "Ver video" cuando del otro lado hay
+    un video y "Acceso al documento" para todo el resto —también para un
+    artículo, aunque la cita diga "artículo"."""
+    if _PAT_ES_VIDEO.search(contexto):
+        return "Ver video"
+    return "Acceso al documento"
+
+
+_PAT_ORDINAL_LETRA = re.compile(r"^\s*([a-h])\s*[.)]\s+\S", re.I)
+
+
+def _subtitulos_con_letra_a_tabs(soup):
+    """Dos o más subtítulos seguidos con ordinal de letra → tabs.
+
+    "a. Inteligencia emocional" y "b. Capacidad de persuasión" no son dos
+    secciones sueltas: son las ramas de la enumeración que el párrafo de
+    arriba acaba de anunciar ("…dos que son básicos: a) …; y b) …"). El
+    asesor las marca como subtítulo y el equipo las arma como solapas."""
+    encabezados = [h for h in soup.find_all("h3")
+                   if not h.get("class")
+                   and _PAT_ORDINAL_LETRA.match(h.get_text(" ", strip=True))]
+    if len(encabezados) < 2:
+        return
+    # Solo sirven las que son hermanas entre sí y van en orden (a, b, c…).
+    grupos, actual = [], []
+    for h in encabezados:
+        if actual and (h.parent is not actual[-1].parent
+                       or _letra(h) != _letra(actual[-1]) + 1):
+            grupos.append(actual)
+            actual = []
+        actual.append(h)
+    grupos.append(actual)
+
+    for grupo in grupos:
+        if len(grupo) < 2:
+            continue
+        pares = []
+        for i, h in enumerate(grupo):
+            cuerpo = []
+            for hermano in h.find_next_siblings():
+                nombre = getattr(hermano, "name", "")
+                clases = " ".join(hermano.get("class") or [])
+                # La solapa llega hasta el próximo subtítulo o hasta la
+                # próxima caja: una tabla es un recuadro todavía sin armar y
+                # un div con clase dp- es un componente ya armado. Sin este
+                # corte, el "Descubrí leyendo" de abajo terminaba adentro de
+                # la última solapa.
+                if (hermano in grupo or nombre in ("h1", "h2", "h3", "table")
+                        or (nombre == "div" and "dp-" in clases)):
+                    break
+                cuerpo.append(hermano)
+            titulo = h.decode_contents().strip()
+            pares.append((titulo, "".join(str(x) for x in cuerpo)))
+            for x in cuerpo:
+                x.extract()
+        tabs = BeautifulSoup(
+            construir_panels(pares, "dp-tabs-buttons"), "html.parser")
+        grupo[0].replace_with(tabs)
+        for h in grupo[1:]:
+            h.decompose()
+
+
+def _letra(h) -> int:
+    return ord(_PAT_ORDINAL_LETRA.match(
+        h.get_text(" ", strip=True)).group(1).lower())
+
+
+def enlazar_lecturas_con_bibliografia(html: str, indice: dict) -> str:
+    """Al recuadro de lectura le pone el enlace de la obra que manda a leer.
+
+    El asesor escribe "En el libro <em>Neurociencia empresarial</em>, de
+    Roldán (2025), revisá el capítulo 2…" y el link del libro vive en la
+    bibliografía del módulo, no en el recuadro: el alumno leía la consigna
+    sin tener de dónde bajar el material. `indice` viene de
+    `bibliography.indice_de_obras`."""
+    if not html or not indice:
+        return html
+    soup = BeautifulSoup(html, "html.parser")
+    for caja in soup.find_all(class_="dp-callout"):
+        cuerpo = caja.find(class_="card-body") or caja
+        # Solo el recuadro de lectura: en los demás ("Auriculares on", "Para
+        # pensar") una cursiva es el título de otra cosa y engancharía el
+        # enlace equivocado.
+        es_lectura = ("Descubrí leyendo" in cuerpo.get_text()
+                      or caja.find("i", class_="fa-book-reader") is not None)
+        if not es_lectura:
+            continue
+        if cuerpo.find("a", href=True):
+            continue          # el recuadro ya trae su enlace
+        url = ""
+        for em in cuerpo.find_all(["em", "i"]):
+            titulo = _norm(em.get_text(" ", strip=True)).strip(" .,:;“”\"")
+            if len(titulo) < 8:
+                continue
+            # El recuadro cita el título corto ("Neurociencia empresarial")
+            # y la bibliografía el completo, con subtítulo y todo.
+            for obra, u in indice.items():
+                if obra == titulo or obra.startswith(titulo + " ") \
+                        or obra.startswith(titulo + "."):
+                    url = u
+                    break
+            if url:
+                break
+        if not url:
+            continue
+        parrafo = BeautifulSoup(
+            f'<p><a class="inline_disabled" href="{url}" target="_blank">'
+            f'Acceso al documento</a></p>', "html.parser")
+        cuerpo.append(parrafo)
+    return str(soup)
+
+
+def _reunir_url_partida(soup):
+    """Devuelve al <a> las primeras letras de la URL que quedaron afuera.
+
+    Word parte el hipervínculo cuando el asesor lo retoca: la "h" de
+    "https" queda como texto suelto (a veces subrayada) y el enlace arranca
+    en "ttps://…". Se publicaba una "h" huérfana y un link con el texto
+    roto, que además no se reconocía como URL cruda y no se renombraba a
+    "Acceso al documento"."""
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        texto = a.get_text(strip=True)
+        if not href.startswith("http") or not texto or texto == href:
+            continue
+        if not href.endswith(texto):
+            continue
+        falta = href[:len(href) - len(texto)]
+        if not falta or len(falta) > 12:
+            continue
+        # La parte que falta está justo antes, en uno o varios nodos.
+        previos, juntado = [], ""
+        nodo = a.previous_sibling
+        while nodo is not None and len(juntado) < len(falta):
+            t = nodo.get_text() if hasattr(nodo, "get_text") else str(nodo)
+            if t.strip():
+                juntado = t.strip() + juntado
+                previos.append(nodo)
+            elif previos:
+                break
+            nodo = nodo.previous_sibling
+        if juntado != falta:
+            continue
+        for nodo in previos:
+            nodo.extract()
+        a.clear()
+        a.append(NavigableString(href))
 
 
 def _renombrar_links_crudos(soup):
@@ -1374,6 +1919,24 @@ _PAT_CAPTION_SOLO = re.compile(r"^(figura|tabla|esquema)\s*\d*\s*[.:]?\s*$", re.
 _LARGO_MAX_TITULO_FIGURA = 200
 
 
+# Rótulos con los que el asesor separa su DOCX y que en el aula sobran: el
+# bloque ya se presenta con su ícono y su título.
+_PAT_ETIQUETA_SECCION = re.compile(
+    r"^(consigna|enunciado|texto del foro|texto de la consigna)\s*[:.]?$", re.I)
+
+
+def _quitar_etiqueta_inicial(soup):
+    """Saca el rótulo de sección si abre el contenido."""
+    for el in soup.find_all(recursive=False):
+        texto = el.get_text(" ", strip=True)
+        if not texto:
+            continue
+        if getattr(el, "name", "") in ("p", "h1", "h2", "h3", "h4") \
+                and _PAT_ETIQUETA_SECCION.match(texto):
+            el.decompose()
+        return
+
+
 def _unir_epigrafe_partido(soup):
     """"Figura 1" + "Riesgo, incertidumbre…" → "Figura 1. Riesgo, incertidumbre…"."""
     for p in soup.find_all("p"):
@@ -1381,6 +1944,13 @@ def _unir_epigrafe_partido(soup):
         if not _PAT_CAPTION_SOLO.match(texto):
             continue
         sig = p.find_next_sibling()
+        # El asesor a veces intercala el texto alternativo entre el rótulo y
+        # el título ("Figura 1" / "texto alternativo: …" / "¿Qué es y qué no
+        # es estoicismo?"). Ese renglón no es el título: en 3.2 el epígrafe
+        # salía publicado como "Figura 1. texto alternativo: …".
+        while (sig is not None and getattr(sig, "name", "") == "p"
+               and _PAT_ALT_PARRAFO.match(sig.get_text(" ", strip=True))):
+            sig = sig.find_next_sibling()
         if sig is None or getattr(sig, "name", "") != "p" or sig.find("img"):
             continue
         desc = sig.get_text(" ", strip=True)
@@ -1398,6 +1968,11 @@ def _unir_epigrafe_partido(soup):
             p.append(hijo)
         sig.decompose()
 _NO_H3 = re.compile(r"^(figura|tabla|esquema|nota\s*[\.:]|fuente\s*[\.:])", re.I)
+# "1. El diario estoico de Marco Aurelio en versión empresarial": un
+# subtítulo numerado es una rama del subtítulo de la sección, no otro
+# subtítulo de sección. Va un nivel más abajo (h4), como lo publica el
+# equipo en 3.3.
+_PAT_SUBTITULO_NUMERADO = re.compile(r"^\s*\d{1,2}\s*[.)]\s+\S")
 _PAT_URL = re.compile(r"(https?://[^\s<>\"')\]]+)")
 
 
@@ -1446,6 +2021,7 @@ def limpiar_anclas_vacias(html: str) -> str:
 # Rótulos de sección del "Modelo de actividad": el asesor los escribe como
 # "Objetivo:" al principio de un párrafo y son encabezados, no texto corrido.
 _SECCIONES_ACTIVIDAD = ("objetivo", "objetivos", "consigna", "consignas",
+                        "contextualizacion", "contexto",
                         "pautas de presentacion", "criterios de evaluacion",
                         "criterio de evaluacion", "anexo")
 
@@ -1453,7 +2029,10 @@ _SECCIONES_ACTIVIDAD = ("objetivo", "objetivos", "consigna", "consignas",
 # el nombre del ítem que Canvas ya muestra en el módulo.
 _PAT_PREFIJO_ACTIVIDAD = re.compile(
     r"^\s*actividad\s*(?:final\s*integradora|obligatoria|sugerida|optativa)?"
-    r"\s*(?:m\s*\d+)?\s*[:\-–—]\s*", re.I)
+    # El número va como "M2", como "N° 2" o pelado ("Actividad Obligatoria
+    # 1: Diagnóstico…"): sin la variante pelada el prefijo entero quedaba
+    # publicado y duplicaba el nombre del ítem en Canvas.
+    r"\s*(?:m\s*\d+|n[°º]\s*\d+|\d+)?\s*[:\-–—]\s*", re.I)
 
 # "Actividad obligatoria 1" a secas (sin ":" ni nada después): no queda un
 # título propio al sacarle el prefijo, así que no aporta nada — Canvas ya
@@ -1541,6 +2120,14 @@ def maquetar_actividad(html: str, tema: str = "", color_titulo: str = "") -> str
     # cualquier otro encabezado de Word que no sea "primero" — no hace
     # falta tratarlo como caso especial acá.
     primero = soup.find(["h1", "h2", "h3", "h4"])
+    # Si el DOCX no trae título de caso y arranca derecho en la primera
+    # sección ("Contextualización"), ese rótulo NO es el título: promoverlo
+    # dejaba la actividad encabezada por un H2 centrado que decía
+    # "Contextualización" y sin el rótulo de la sección.
+    if primero is not None and _norm(
+            re.sub(r"[:\s]+$", "", primero.get_text(" ", strip=True))
+            ) in _SECCIONES_ACTIVIDAD:
+        primero = None
     if primero is not None and not primero.get("class"):
         texto = primero.get_text(" ", strip=True)
         if _PAT_TITULO_GENERICO_ACTIVIDAD.match(texto):
@@ -1548,7 +2135,11 @@ def maquetar_actividad(html: str, tema: str = "", color_titulo: str = "") -> str
         else:
             limpio = _PAT_PREFIJO_ACTIVIDAD.sub("", texto).strip()
             if limpio:
-                color = color_titulo or ACENTO_POR_TEMA.get(_norm(tema or ""), ACCENT)
+                # El título de una actividad va SIEMPRE en el azul UCC, no
+                # en el acento del tema: así están las tres actividades del
+                # aula corregida de Neurociencia (posgrado), igual que la
+                # AFI. El acento del tema manda en el contenido, no acá.
+                color = color_titulo or AZUL_UCC
                 primero.replace_with(BeautifulSoup(
                     _H2_TITULO_ACTIVIDAD.format(color=color, titulo=limpio),
                     "html.parser"))
@@ -1561,6 +2152,11 @@ def maquetar_actividad(html: str, tema: str = "", color_titulo: str = "") -> str
     # de p→h3 de más abajo lo tocaría si viniera como <p>) se deja: tiene
     # que terminar en el mismo nivel que sus hermanos armados desde <p>.
     for h3 in list(soup.find_all("h3")):
+        # El título de una caja ya armada (card-title) no es estructura del
+        # documento: bajarlo desalineaba el encabezado del recuadro respecto
+        # del mismo recuadro en el resto del aula.
+        if "card-title" in (h3.get("class") or []):
+            continue
         texto_h3 = h3.get_text(" ", strip=True)
         texto_sin_dp = re.sub(r"[:\s]+$", "", texto_h3)
         if _norm(texto_sin_dp) in _SECCIONES_ACTIVIDAD:
@@ -2253,6 +2849,24 @@ def _nota_suelta_en_negrita(soup):
         p.append(strong)
 
 
+# La fuente de la figura con su URL entre paréntesis al final ("Cuadro creado
+# con ChatGPT (https://chatgpt.com/).").
+_PAT_FUENTE_ENTRE_PARENTESIS = re.compile(
+    r"\s*\(\s*(https?://\S+?)\s*\)\s*\.?\s*$")
+
+
+def _nota_con_la_fuente_abajo(texto: str) -> str:
+    """El enlace de la fuente baja a su propio renglón, sin los paréntesis.
+
+    Entre paréntesis y en la misma línea, la URL parte el pie de la figura al
+    medio y queda ilegible. El equipo la manda abajo con un salto de línea
+    (shift+enter) y le saca los paréntesis y el punto final."""
+    m = _PAT_FUENTE_ENTRE_PARENTESIS.search(texto)
+    if not m:
+        return texto
+    return texto[:m.start()].rstrip() + "<br>" + m.group(1)
+
+
 def _nota_a_figcaption(soup):
     """Imagen + 'Nota. …' → <figure> con <figcaption>.
 
@@ -2289,7 +2903,8 @@ def _nota_a_figcaption(soup):
 
         cap = soup.new_tag("figcaption")
         interior = BeautifulSoup(
-            f'<span style="font-size: 10pt;"><strong>{m.group(1).strip()}</strong>'
+            f'<span style="font-size: 10pt;"><strong>'
+            f'{_nota_con_la_fuente_abajo(m.group(1).strip())}</strong>'
             "</span>", "html.parser")
         cap.append(interior)
 
@@ -2432,6 +3047,12 @@ def estilar_tabla_datos(tabla, tema: str = "") -> None:
         for celda in fila.find_all(["td", "th"]):
             celda["class"] = "align-middle text-center"
             celda["style"] = f"padding: 12px 16px; {_TABLA_BORDE_CELDA}"
+            # Una celda con prosa va alineada a la izquierda: centrada se
+            # lee mal, con los renglones desparejos. Las cortas (un puntaje,
+            # un sí/no) quedan centradas, que es como las publica el equipo.
+            for p in celda.find_all("p"):
+                if len(p.get_text(" ", strip=True)) > 24:
+                    p["style"] = "text-align: left;"
 
     # Contenedor con scroll horizontal: en el celular la tabla no rompe la caja.
     if tabla.find_parent(class_="dp-table-scroll") is None:
@@ -2456,6 +3077,75 @@ def aplicar_acento_del_tema(html: str, tema: str) -> str:
         lambda m: 'style="' + m.group(1).replace(ACCENT, acento) + '"', html)
 
 
+# ---------------------------------------------------------------------- #
+#  Indicaciones del complemento SiedUCC (Google Docs)
+# ---------------------------------------------------------------------- #
+# El asesor inserta los componentes con el complemento. Cada uno deja una
+# tabla con el contenido y, abajo, un bloque gris que arranca con esta
+# línea y sigue con pares "Clave: valor". Ese bloque es la instrucción:
+# dice QUÉ componente armar y la tabla de arriba dice DÓNDE empieza y
+# dónde termina —que es lo que antes había que adivinar leyendo el ancla
+# del comentario—. Nunca se publica.
+_SENTINELA_SIEDUCC = "SIEDUCC"
+_PAT_SENTINELA = re.compile(
+    r"^\s*SIEDUCC\s*[·.\-]\s*INDICACI[ÓO]N\s+INTERNA", re.I)
+_PAT_CLAVE_VALOR = re.compile(r"^\s*([A-Za-zÁÉÍÓÚÑáéíóúñ ]{3,20})\s*:\s*(.+?)\s*$")
+
+_COMPONENTE_PANEL = {"expander": "dp-expander-default",
+                     "acordeon": "dp-accordion-default",
+                     "tabs": "dp-tabs-buttons",
+                     "tabs_vertical": "dp-tabs-buttons-vertical"}
+
+
+def _datos_de_indicacion(tabla) -> dict:
+    """Los pares "Clave: valor" del bloque gris, normalizados."""
+    datos = {}
+    for p in tabla.find_all(["p", "li"]):
+        m = _PAT_CLAVE_VALOR.match(p.get_text(" ", strip=True))
+        if m:
+            datos[_norm(m.group(1))] = m.group(2).strip()
+    return datos
+
+
+def _aplicar_indicaciones_sieducc(soup) -> None:
+    for tabla in list(soup.find_all("table")):
+        if not _PAT_SENTINELA.match(tabla.get_text(" ", strip=True)[:80]):
+            continue
+        datos = _datos_de_indicacion(tabla)
+        componente = _norm(datos.get("componente", ""))
+        fuente = tabla.find_previous_sibling()
+        while fuente is not None and getattr(fuente, "name", "") not in (
+                "table", "p", "ul", "ol", "div", "figure"):
+            fuente = fuente.find_previous_sibling()
+
+        if componente == "no_maquetar":
+            if fuente is not None:
+                fuente.decompose()
+        elif componente in _COMPONENTE_PANEL and getattr(fuente, "name", "") == "table":
+            pares = pares_de_tabla(fuente)
+            if len(pares) >= 2:
+                fuente.replace_with(BeautifulSoup(
+                    construir_panels(pares, _COMPONENTE_PANEL[componente]),
+                    "html.parser"))
+        elif componente == "flip_card" and getattr(fuente, "name", "") == "table":
+            pares = pares_de_tabla(fuente)
+            if len(pares) >= 2:
+                fuente.replace_with(BeautifulSoup(
+                    construir_flipcards(pares), "html.parser"))
+        elif componente == "quick_check" and getattr(fuente, "name", "") == "table":
+            bloques = [p.get_text(" ", strip=True)
+                       for p in fuente.find_all(["p", "li"])]
+            preguntas = preguntas_de_verdadero_o_falso(
+                [b for b in bloques if _PAT_ITEM_NUMERADO_QC.match(b)])
+            if len(preguntas) >= 2:
+                fuente.replace_with(BeautifulSoup(
+                    quick_check(preguntas), "html.parser"))
+        tabla.decompose()
+
+
+_PAT_ITEM_NUMERADO_QC = re.compile(r"^\s*\d+\s*[.)\-]")
+
+
 def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> str:
     """`bajar_h1_h2=False` (actividades): maquetar_actividad necesita el
     nivel NATIVO h1/h2 vs h3 del DOCX para distinguir el título del caso
@@ -2466,6 +3156,10 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
     if not html:
         return html
     soup = BeautifulSoup(html, "html.parser")
+
+    # 0.-1 Indicaciones del complemento SiedUCC. Son instrucciones para
+    #      maquetar, no contenido: se leen y se sacan antes que nada.
+    _aplicar_indicaciones_sieducc(soup)
 
     # 0.0 Imágenes espaciadoras de Word (1x1 transparente): no son contenido
     #     y publicadas quedan como una caja vacía con borde al ancho de una
@@ -2501,6 +3195,12 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
     #     se ve, pero ensucia el HTML y aparece al principio del cuerpo de
     #     cada panel de un expander/tabs.
     for inline in soup.find_all(["strong", "b", "em", "i", "u"]):
+        if inline.get("class"):
+            # Un <i> con clase es un ícono de Font Awesome, no marcado de
+            # Word: vacío por definición (lo dibuja la fuente). Al
+            # desenvolverlo desaparecía el ícono que separa el bloque de
+            # video, y el título quedaba como texto suelto.
+            continue
         if not inline.get_text(strip=True) and not inline.find("img"):
             inline.unwrap()
 
@@ -2631,6 +3331,18 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
             strong.unwrap()
         h.name = "h3"
 
+    # 1.5 Un encabezado que es una oración entera no es un encabezado: el
+    #     asesor le aplicó el estilo de título en Word para destacarlo. En
+    #     2.4 la página abría con un <h3> de 196 caracteres ("Sin duda, el
+    #     éxito de un líder depende de muchos factores…") en vez del párrafo
+    #     de entrada.
+    for h in soup.find_all(["h3", "h4"]):
+        if h.get("class"):
+            continue          # encabezado de un componente (panel, tarjeta)
+        texto = h.get_text(" ", strip=True)
+        if len(texto) > 90 and re.search(r"[^.]\.$", texto):
+            h.name = "p"
+
     # 2. Subtítulos en negrita → <h3> (el dp-wrapper los estiliza). Solo
     # texto SUELTO del flujo principal — no el cuerpo de un componente que
     # otro paso ya armó (recuadro/flip-card): ahí "en negrita y corto" puede
@@ -2646,6 +3358,11 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
         if p.find_parent(class_=("dp-callout", "dp-flip-card-deck",
                                   "dp-front-card", "dp-back-card")):
             continue
+        if "dp-heading-ignore" in (p.get("class") or []):
+            # El propio generador marca así lo que es un rótulo y no un
+            # encabezado (el título de una tarjeta de la galería, el epígrafe
+            # de una figura): promoverlo rompe la jerarquía de la página.
+            continue
         if p.find_parent(["td", "th"]):
             # Una celda de tabla en negrita es un encabezado de columna, no
             # un subtítulo de la página (pasaba con "Tipo de inconveniente",
@@ -2656,6 +3373,18 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
             continue
         texto = p.get_text(" ", strip=True)
         texto_strong = " ".join(s.get_text(" ", strip=True) for s in strongs)
+        # Un renglón en negrita que cierra con punto es una oración que el
+        # asesor quiso destacar, no un subtítulo: "Calificación mínima para
+        # aprobar la actividad: 70/100 (equivalente a 7)." salía de <h4> al
+        # pie de la actividad. Los encabezados no llevan punto final.
+        es_oracion = bool(re.search(r"[^.]\.$", texto)) and len(texto) > 40
+        if (texto and texto == texto_strong and es_oracion
+                and not p.find("img") and len(texto) <= 160):
+            # Queda como párrafo destacado, que es como la publica el
+            # equipo: "Calificación mínima para aprobar la actividad:
+            # 70/100 (equivalente a 7)." al pie de la actividad.
+            p["class"] = (p.get("class") or []) + ["lead"]
+            continue
         if (texto and texto == texto_strong and 10 <= len(texto) <= 90
                 and not texto.endswith(":") and not _NO_H3.match(texto)
                 and not p.find("img")):
@@ -2671,6 +3400,24 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
             h3.string = texto
             p.replace_with(h3)
 
+    # 2.4 Un subtítulo numerado ("1. El diario estoico…") cuelga del
+    #     subtítulo de su sección, no compite con él: va un nivel más
+    #     abajo. Va DESPUÉS del paso 2 para alcanzar también a los que
+    #     llegan en negrita, y solo en páginas de contenido: en una
+    #     actividad, una consigna numerada no es un encabezado y de eso ya
+    #     se encarga maquetar_actividad.
+    for h in soup.find_all("h3") if bajar_h1_h2 else []:
+        if not h.get("class") and _PAT_SUBTITULO_NUMERADO.match(
+                h.get_text(" ", strip=True)):
+            h.name = "h4"
+
+    # 2.5 Subtítulos con ordinal de letra seguidos ("a. Inteligencia
+    #     emocional", "b. Capacidad de persuasión") → tabs. El asesor los
+    #     marca como subtítulo, pero son las ramas de una misma
+    #     enumeración que el párrafo de arriba acaba de anunciar: el equipo
+    #     las arma como solapas (acordado para 2.4).
+    _subtitulos_con_letra_a_tabs(soup)
+
     # 3. Imágenes de contenido → estilo figura CidiLabs
     #    (los iconos SVG de los recuadros NO son figuras)
     #    Primero el texto alternativo que el asesor dejó como párrafo suelto:
@@ -2685,7 +3432,14 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
     # inmediato) es un segundo marcador del mismo video que quedó duplicado
     # por error en el DOCX — se saca, no se arma un segundo hueco vacío.
     for p in list(soup.find_all("p")):
-        if not _PAT_MARCADOR_VIDEO.match(p.get_text(" ", strip=True)):
+        texto = p.get_text(" ", strip=True)
+        if not (_PAT_MARCADOR_VIDEO.match(texto)
+                or _PAT_AQUI_VA_VIDEO.match(texto)):
+            continue
+        # La barra de título de un CTA ya armado ("Video M1") es un rótulo,
+        # no un marcador: reemplazarla metía el bloque de video ADENTRO de la
+        # caja y dejaba el CTA sin título (pasó en 1.4.1).
+        if "card-title" in (p.get("class") or []):
             continue
         ya_hay_bloque = p.find_previous(attrs={"data-title": "Video"}) is not None
         if ya_hay_bloque:
@@ -2745,6 +3499,7 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
 
     # 3.6 Cita/mención + link suelto (no epígrafe, no párrafo-solo-link) →
     #     CTA 'Descubrí leyendo' con 'Acceso al documento' en vez de la URL.
+    _reunir_url_partida(soup)
     _procesar_citas_con_link(soup)
     _renombrar_links_crudos(soup)
     _bajada_de_recuadro(soup)
@@ -2795,23 +3550,86 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
         if not ya_espaciado:
             hx.insert_before(BeautifulSoup("<p>&nbsp;</p>", "html.parser"))
 
+    # Etiqueta de sección del DOCX que quedó arriba de todo ("Consigna"):
+    # es el rótulo con que el asesor separa su documento, no contenido —
+    # el bloque del aula ya se presenta con su ícono y su título. Va al
+    # final, cuando el título del archivo y la tabla de metadatos ya se
+    # fueron y "Consigna" quedó efectivamente primero.
+    _quitar_etiqueta_inicial(soup)
+
+    # Párrafo vacío al final de un recuadro: viene del DOCX (el asesor cierra
+    # la caja con un renglón en blanco) y adentro del recuadro no hace falta
+    # —la caja ya trae su propio padding—, así que solo deja un hueco raro
+    # antes del borde.
+    for cuerpo in soup.find_all(class_="card-body"):
+        while True:
+            hijos = [x for x in cuerpo.find_all(recursive=False)]
+            if not hijos or not _es_espaciador(hijos[-1]):
+                break
+            hijos[-1].decompose()
+
+    # Un <p> vacío de verdad (o con un espacio común) no ocupa alto: el
+    # renglón de aire se come y los bloques quedan pegados. El aire del aula
+    # es SIEMPRE &nbsp;. Va al final, después de la limpieza de recuadros,
+    # para no resucitar los que esa limpieza acaba de sacar.
+    for p in soup.find_all("p"):
+        if p.find(["img", "iframe", "a", "br", "table"]):
+            continue
+        if p.get_text().strip(" \t\r\n"):
+            continue
+        p.clear()
+        p.append(NavigableString("\xa0"))
+
+    # Debajo de un expander/acordeón/tabs no va renglón de aire cuando lo
+    # que sigue es texto o un subtítulo: el componente ya trae su margen y
+    # el hueco queda de más (los lóbulos cerebrales de 1.3.3). Pero si
+    # abajo hay otra caja —un CTA, un recuadro, otro componente— el aire sí
+    # va: una contra la otra quedan pegadas (la serie de figuras de 3.5,
+    # con el "Descubrí leyendo" justo debajo).
+    for comp in soup.find_all(class_="dp-panels-wrapper"):
+        sig = comp.find_next_sibling()
+        if not _es_espaciador(sig):
+            continue
+        despues = sig.find_next_sibling()
+        if getattr(despues, "name", "") in ("div", "figure", "table"):
+            continue
+        sig.decompose()
+
+    # En una actividad, la tabla lleva aire arriba y abajo: pegada al
+    # párrafo que la presenta ("Por ejemplo:") o al rótulo que la sigue
+    # queda apretada. En las páginas de contenido manda la regla de
+    # _espaciar_figuras —solo se airea la tabla que es una figura, con su
+    # "Figura N." encima—, que es como se venía entregando.
+    for cont in soup.find_all(class_="dp-table-scroll") if not bajar_h1_h2 else []:
+        for vecino, metodo in ((cont.find_previous_sibling(), cont.insert_before),
+                               (cont.find_next_sibling(), cont.insert_after)):
+            if vecino is not None and not _es_espaciador(vecino):
+                metodo(BeautifulSoup("<p>&nbsp;</p>", "html.parser"))
+
     return aplicar_acento_del_tema(str(soup), tema)
 
 
 def contenido_declara_video(html: str) -> bool:
     """¿Este HTML ya marca dónde va el video propio del módulo?
 
-    El asesor lo señala de tres formas en el cuerpo: con la marca de
+    El asesor lo señala de cuatro formas en el cuerpo: con la marca de
     maquetación ("Embeber video: GRyI - V_M1"), con el marcador suelto
-    ("VIDEO M2.") o invitando a verlo ("te invito a ver el siguiente
-    video"). De cualquiera de ellas sale el bloque en la página que
-    corresponda. Cuando eso pasa, el hueco que declara la planilla ya está
-    puesto: agregar otro en la Introducción deja el módulo con dos."""
+    ("VIDEO M2."), entre paréntesis ("(AQUÍ VA VIDEO M1)") o invitando a
+    verlo ("te invito a ver el siguiente video"). De cualquiera de ellas
+    sale el bloque en la página que corresponda. Cuando eso pasa, el hueco
+    que declara la planilla ya está puesto: agregar otro en la Introducción
+    deja el módulo con dos."""
     if not html:
         return False
-    for el in BeautifulSoup(html, "html.parser").find_all(["p", "td", "th"]):
+    soup = BeautifulSoup(html, "html.parser")
+    # El pedido del asesor por comentario ya viene resuelto: el marcador no
+    # está más como texto, en su lugar está el bloque armado.
+    if soup.find(attrs={"data-title": "Video"}) is not None:
+        return True
+    for el in soup.find_all(["p", "td", "th"]):
         texto = el.get_text(" ", strip=True)
         if (_PAT_EMBEBER_VIDEO.match(texto) or _PAT_MARCADOR_VIDEO.match(texto)
+                or _PAT_AQUI_VA_VIDEO.match(texto)
                 or (_PAT_VIDEO_INVIT.search(texto)
                     and not _PAT_URL_VIDEO.search(texto))):
             return True
@@ -2833,6 +3651,16 @@ def separar_bloque_de_video(html: str) -> tuple:
     bloque = soup.find("div", attrs={"data-title": "Video"}, recursive=False)
     if bloque is None:
         return html, ""
+    # El bloque se publica DESPUÉS del resto del contenido, así que si el
+    # video estaba en medio de la página hay que llevarse con él todo lo que
+    # venía abajo: si no, el orden se da vuelta. En 1.4.1 el video quedaba al
+    # final, después de la Conclusión, cuando va justo antes. El equipo a mano
+    # hace lo mismo: cierra el bloque de lectura en el video y lo que sigue
+    # cuelga del bloque nuevo.
+    for hermano in list(bloque.next_siblings):
+        if isinstance(hermano, NavigableString) and not hermano.strip():
+            continue
+        bloque.append(hermano.extract())
     # El molde de la página SIEMPRE cierra con un <p>&nbsp;</p> de aire antes
     # del borde del content-block — pero ese trailing spacer va después de
     # {resto}, no del bloque de video. Si el video absorbió el resto de la
