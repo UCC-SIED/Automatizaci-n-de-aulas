@@ -73,10 +73,7 @@ class TestElBannerQueSale:
         assert ImageChops.difference(uno.convert("RGB"),
                                      dos.convert("RGB")).getbbox() is not None
 
-    def test_la_plantilla_no_trae_texto_pegado(self):
-        """El fantasma del texto original del diseño tiene que haberse ido:
-        la plantilla sola y el banner con texto solo pueden diferir dentro
-        de la caja de texto."""
+    def test_el_texto_solo_toca_su_caja(self):
         from PIL import ImageChops
         vacio = banners.render("", tema="posgrado").convert("RGB")
         con = banners.banner_de_pagina("Una prueba").convert("RGB")
@@ -85,6 +82,28 @@ class TestElBannerQueSale:
         x1 = (banners.CAJA_X + banners.CAJA_ANCHO) * banners.ESCALA
         assert caja is not None
         assert caja[0] >= x0 - 2 and caja[2] <= x1 + 2
+
+    @pytest.mark.parametrize("tema", sorted(
+        p.stem.replace("plantilla-", "")
+        for p in banners.PLANTILLAS.glob("plantilla-*.png")) or ["posgrado"])
+    def test_la_plantilla_no_trae_el_texto_viejo_pegado(self, tema):
+        """El fantasma del texto que traia el diseño tiene que haberse ido.
+
+        No alcanza con buscar pixeles claros: en el tema de posgrado el
+        fantasma es oscuro sobre oscuro y asi pasaba desapercibido —me paso
+        con la plantilla de educacion, que di por buena y tenia pegado
+        "Modulo 3 / Cultura institucional…". Lo que si lo delata es el
+        contorno: un fondo limpio es un degradado liso y casi no cambia al
+        desenfocarlo; un fantasma deja bordes que el desenfoque borra."""
+        from PIL import ImageChops, ImageFilter, ImageStat
+        img = banners.render("", tema=tema).convert("L")
+        caja = img.crop((int(banners.CAJA_X * banners.ESCALA),
+                         int(banners.CAJA_Y * banners.ESCALA),
+                         int((banners.CAJA_X + banners.CAJA_ANCHO) * banners.ESCALA),
+                         int((banners.CAJA_Y + banners.CAJA_ALTO) * banners.ESCALA)))
+        d = ImageChops.difference(caja, caja.filter(ImageFilter.GaussianBlur(6)))
+        assert ImageStat.Stat(d).mean[0] < 1.5, (
+            f"la plantilla de {tema} tiene texto pegado")
 
     def test_un_tema_sin_plantilla_avisa(self):
         with pytest.raises(FileNotFoundError):
