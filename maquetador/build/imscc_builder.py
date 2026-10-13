@@ -21,6 +21,7 @@ import logging
 import re
 import shutil
 import uuid
+import io
 import zipfile
 from pathlib import Path
 
@@ -63,6 +64,7 @@ from maquetador.build.snippets import (separar_consignas, procesar_contenido,
                                        bloque_recurso_incrustado,
                                        _FIG_CLASES_EXPANDIBLE, _FIG_ANCHO_MAX)
 from maquetador.build.bibliography import construir_bibliografia, indice_de_obras
+from maquetador.build.banners import render as banner_render
 from maquetador.extract.segmenter import ImagenInline, _MAMMOTH_STYLE_MAP
 from maquetador.ingest.folder_scanner import normalizar
 from maquetador.ingest.docx_comments import extraer_comentarios, aplicar_comentarios
@@ -193,6 +195,25 @@ def _extraer_identifier(html: str) -> str:
     return m.group(1) if m else _gen_id()
 
 
+_PAT_ACT_OBLIGATORIA = re.compile(r"actividad-obligatoria-m(\d+)", re.I)
+_PAT_ACT_SUGERIDA = re.compile(r"actividad-sugerida-m(\d+)", re.I)
+
+
+def _banner_de_actividad(nombre_archivo: str) -> tuple:
+    """(clave, texto) del banner de una actividad, por su nombre de archivo."""
+    m = _PAT_ACT_OBLIGATORIA.search(nombre_archivo)
+    if m:
+        return (f"actividad-obligatoria-m{m.group(1)}",
+                f"Actividad obligatoria del módulo {m.group(1)}")
+    m = _PAT_ACT_SUGERIDA.search(nombre_archivo)
+    if m:
+        return (f"actividad-sugerida-m{m.group(1)}",
+                f"Actividad sugerida del módulo {m.group(1)}")
+    if "final-integradora" in nombre_archivo.lower():
+        return ("actividad-final-integradora", "Actividad final integradora")
+    return ("", "")
+
+
 def _extraer_banner(html: str) -> str:
     m = re.search(r'class="dp-banner-image">\s*<img[^>]*src="([^"]+)"', html)
     return m.group(1) if m else ""
@@ -304,6 +325,8 @@ class GeneradorAula:
         self.banners = {}                  # clave de pagina -> (nombre, bytes)
         self.banners_usados = set()
         self.paginas_sin_banner = []       # [(clave, titulo)]
+        self.banners_generados = {}        # nombre.png -> bytes
+        self._aviso_sin_plantilla = False
 
     def _conciliar_figuras_mal_rotuladas(self):
         """Rescata las figuras de DISEÑO nombradas con el módulo equivocado."""
@@ -487,7 +510,9 @@ class GeneradorAula:
                 objetivos_html=self._rutear_media(objetivos_html),
                 # El plugin nombra el banner del módulo "M1.png": si vino,
                 # va ese; si no, el del aula base.
-                banner_src=self._banner_de(f"M{n}") or _extraer_banner(viejo),
+                banner_src=self._banner_de(
+                    f"M{n}", modulo.titulo or f"Módulo {n}",
+                    rotulo=f"Módulo {n}") or _extraer_banner(viejo),
                 identifier=_extraer_identifier(viejo),
                 tema=self.spec.tema,
                 video_html=self._video_de_planilla(modulo.items, ctx))
@@ -592,7 +617,9 @@ class GeneradorAula:
             nuevo = pagina_bibliografia(
                 titulo=f"Bibliografía M{n}",
                 body_html=self._rutear_media(referencias),
-                banner_src=_extraer_banner(viejo),
+                banner_src=self._banner_de(f"bibliografia-m{n}",
+                                           f"Bibliografía M{n}")
+                           or _extraer_banner(viejo),
                 identifier=_extraer_identifier(viejo),
                 tema=self.spec.tema)
             _escribir(archivo_bib, nuevo)
@@ -613,7 +640,7 @@ class GeneradorAula:
             # título de esa página. Sin banners se cae al del placeholder
             # del aula base, que es el que se venía entregando.
             clave = self._clave_de_titulo(item.titulo)
-            propio = self._banner_de(clave) if clave else ""
+            propio = self._banner_de(clave, item.titulo) if clave else ""
             if self.banners and not propio:
                 self.paginas_sin_banner.append((clave, item.titulo[:40]))
             html = pagina_contenido(
@@ -716,10 +743,15 @@ class GeneradorAula:
         # y, como alt, el propio nombre del archivo. El alt tiene que describir
         # la imagen: va el nombre de la asignatura.
         if self.spec.nombre:
-            html, nb = re.subn(r'alt="Nombre de la asignatura[^"]*"',
-                               f'alt="{xml_escape(self.spec.nombre)}"', html)
-            if nb:
-                cambios.append("alt del banner")
+            propio = self._banner_de("portada", self.spec.nombre)
+            if propio:
+                html = self._poner_banner(html, propio, self.spec.nombre)
+                cambios.append("banner de portada")
+            else:
+                html, nb = re.subn(r'alt="Nombre de la asignatura[^"]*"',
+                                   f'alt="{xml_escape(self.spec.nombre)}"', html)
+                if nb:
+                    cambios.append("alt del banner")
 
         # --- foto del docente ---
         foto_item = next((i for k, i in items.items() if "fotografia" in k), None)
@@ -1372,6 +1404,13 @@ class GeneradorAula:
                    + "\n" + m.group(3))
         html = pat.sub(_reemplazo, html, count=1)
         html = self._titulo_dentro_del_encabezado(html)
+        # El banner de la actividad lo nombra el propio archivo del aula
+        # base ("actividad-obligatoria-m2.html"): de ahí salen el texto y la
+        # clave, así cada actividad tiene el suyo.
+        clave, rotulo_banner = _banner_de_actividad(archivos[0].stem)
+        if clave:
+            html = self._poner_banner(
+                html, self._banner_de(clave, rotulo_banner), rotulo_banner)
         _escribir(archivos[0], html)
         self.assignments_escritos.add(rid)
         return True
@@ -2854,14 +2893,50 @@ class GeneradorAula:
         logger.info(f"  {len(banners)} banners leídos de {origen.name}")
         return banners
 
-    def _banner_de(self, clave: str) -> str:
-        """URL del banner de esa página/módulo, o "" si no hay."""
+    _PAT_BANNER_IMG = re.compile(
+        r'(<div[^>]*class="dp-banner-image"[^>]*>\s*<img\b)([^>]*?)(/?>)',
+        re.I | re.S)
+
+    def _poner_banner(self, html: str, url: str, alt: str) -> str:
+        """Cambia el banner del placeholder del aula base por el nuestro."""
+        if not url:
+            return html
+        def _cambiar(m):
+            atrib = m.group(2)
+            atrib = re.sub(r'\ssrc="[^"]*"', "", atrib)
+            atrib = re.sub(r'\salt="[^"]*"', "", atrib)
+            return (f'{m.group(1)} src="{url}" alt="{xml_escape(alt)}"'
+                    f'{atrib}{m.group(3)}')
+        return self._PAT_BANNER_IMG.sub(_cambiar, html, count=1)
+
+    def _banner_de(self, clave: str, titulo: str = "", rotulo: str = "") -> str:
+        """URL del banner de esa página, generándolo si hace falta.
+
+        Primero manda lo que venga por --banners (el ZIP del plugin de
+        Figma o una carpeta): así se puede pisar cualquiera a mano. Si no
+        vino, se dibuja con la plantilla del tema, que es el render del
+        diseño oficial sin su capa de texto."""
         from urllib.parse import quote
         entrada = self.banners.get(clave)
-        if not entrada:
+        if entrada:
+            self.banners_usados.add(clave)
+            return f"{BANNER_URL}/{quote(entrada[0])}"
+        if not titulo:
             return ""
-        self.banners_usados.add(clave)
-        return f"{BANNER_URL}/{quote(entrada[0])}"
+        nombre = f"{clave}.png"
+        if nombre not in self.banners_generados:
+            try:
+                img = banner_render(titulo, rotulo=rotulo, tema=self.spec.tema)
+            except FileNotFoundError as e:
+                if not self._aviso_sin_plantilla:
+                    self.spec.issues.append(Issue(Severidad.AVISO, str(e),
+                                                  "Banners"))
+                    self._aviso_sin_plantilla = True
+                return ""
+            buf = io.BytesIO()
+            img.save(buf, "PNG", optimize=True)
+            self.banners_generados[nombre] = buf.getvalue()
+        return f"{BANNER_URL}/{quote(nombre)}"
 
     @staticmethod
     def _clave_de_titulo(titulo: str) -> str:
@@ -2870,7 +2945,7 @@ class GeneradorAula:
         return m.group(1).rstrip(".") if m else ""
 
     def _empaquetar_banners(self):
-        if not self.banners:
+        if not self.banners and not self.banners_generados:
             return
         carpeta = self.working / BANNER_SUBDIR
         carpeta.mkdir(parents=True, exist_ok=True)
@@ -2878,6 +2953,10 @@ class GeneradorAula:
         for clave, (nombre, datos) in sorted(self.banners.items()):
             if clave not in self.banners_usados:
                 continue
+            (carpeta / nombre).write_bytes(datos)
+            self.recursos_nuevos.append((_gen_id(), f"{BANNER_SUBDIR}/{nombre}"))
+            puestos += 1
+        for nombre, datos in sorted(self.banners_generados.items()):
             (carpeta / nombre).write_bytes(datos)
             self.recursos_nuevos.append((_gen_id(), f"{BANNER_SUBDIR}/{nombre}"))
             puestos += 1
