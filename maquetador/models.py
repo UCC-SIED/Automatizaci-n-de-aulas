@@ -108,6 +108,10 @@ class CourseSpec:
     # Link del archivo de la herramienta de la AFI, ya subido al aula.
     # Solo hace falta si $IMS-CC-FILEBASE$ no resuelve en el iframe.
     afi_url: str = ""
+    # ZIP (o carpeta) con los banners que genera el plugin de Figma a
+    # partir de esta misma planilla. Los archivos se nombran por la
+    # numeracion de la pagina: "1.3.1.png", "M2.png".
+    banners: str = ""
 
     def todos_los_items(self):
         for it in self.items_inicio:

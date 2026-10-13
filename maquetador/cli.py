@@ -61,6 +61,10 @@ def main():
                         help="Link del archivo de la herramienta de la "
                              "AFI ya subido al aula, para el iframe. Solo "
                              "hace falta si $IMS-CC-FILEBASE$ no resuelve.")
+    parser.add_argument("--banners", default="", metavar="ZIP",
+                        help="ZIP (o carpeta) con los banners del plugin "
+                             "de Figma. Los archivos van nombrados por la "
+                             "numeracion de la pagina: 1.3.1.png, M2.png.")
     parser.add_argument("--generar", action="store_true",
                         help="Generar el paquete .imscc (implica --extraer). "
                              "Requiere --tema y que no haya issues bloqueantes.")
@@ -85,6 +89,7 @@ def main():
             sys.exit(1)
         spec.videos_studio[clave.strip().strip(".")] = media_id
     spec.afi_url = args.afi_url.strip()
+    spec.banners = args.banners.strip()
     print(generar_reporte_texto(spec))
 
     media = {}

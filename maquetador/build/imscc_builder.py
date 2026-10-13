@@ -75,6 +75,32 @@ TEMAS = {
     "educacion": BASE_DIR / "Elementos de las aulas" / "_extracted_educacion",
     "posgrado": BASE_DIR / "Elementos de las aulas" / "_extracted_posgrado",
 }
+# Banners del plugin de Figma. Van a su propia carpeta: es la que el equipo
+# viene usando a mano en el aula ("Contenido multimedia cargado"), separada de
+# "Multimedia cargada", donde van las figuras de contenido.
+BANNER_SUBDIR = "web_resources/Contenido multimedia cargado"
+BANNER_URL = "$IMS-CC-FILEBASE$/Contenido%20multimedia%20cargado"
+_EXT_BANNER = (".png", ".jpg", ".jpeg", ".webp")
+# El nombre del archivo dice a qué página va. Lo que llega del plugin es
+# "1.3.1.png" o "M2.png", pero lo que el equipo venía subiendo a mano traía
+# de todo: "1.1.1..png", "2.3.2.png", "1.3. (2).png" (el sufijo que agrega
+# Canvas cuando el nombre ya existe) y "1.3.3. Estructura y funciones del
+# cerebro.png". Seis formas para lo mismo en una sola materia, así que la
+# clave se saca del número y se ignora el resto.
+_PAT_CLAVE_BANNER = re.compile(r"^\s*(?:(m)\s*(\d+)|(\d+(?:\s*\.\s*\d+)*))",
+                               re.I)
+
+
+def clave_de_banner(nombre: str) -> str:
+    """Nombre de archivo → clave de página ("1.3.1") o de módulo ("M2")."""
+    tallo = Path(nombre).stem
+    m = _PAT_CLAVE_BANNER.match(tallo)
+    if not m:
+        return ""
+    if m.group(1):
+        return "M" + m.group(2)
+    return re.sub(r"\s+", "", m.group(3)).rstrip(".")
+
 MEDIA_SUBDIR = "web_resources/Multimedia cargada/Generadas"
 MEDIA_URL = "$IMS-CC-FILEBASE$/Multimedia%20cargada/Generadas"
 
@@ -275,6 +301,9 @@ class GeneradorAula:
         self._conciliar_figuras_mal_rotuladas()
         self.figuras_usadas = set()        # paths de DISEÑO aprovechados
         self.videos_puestos = set()        # claves de --video ya incrustadas
+        self.banners = {}                  # clave de pagina -> (nombre, bytes)
+        self.banners_usados = set()
+        self.paginas_sin_banner = []       # [(clave, titulo)]
 
     def _conciliar_figuras_mal_rotuladas(self):
         """Rescata las figuras de DISEÑO nombradas con el módulo equivocado."""
@@ -322,6 +351,7 @@ class GeneradorAula:
             refs = getattr(modulo, 'extras', {}).get('referencias', '')
             for titulo, url in indice_de_obras(refs).items():
                 self.obras_citadas.setdefault(titulo, url)
+        self.banners = self._cargar_banners()
         self._titulo_curso()
         self._asegurar_modulos()
         for modulo in spec.modulos:
@@ -335,6 +365,7 @@ class GeneradorAula:
         self._personalizar_inicio()
         self._construir_syllabus()
         self._empaquetar_media()
+        self._empaquetar_banners()
         self._publicar_material_suelto()
         self._unificar_tema_wrapper()
         self._registrar_recursos()
@@ -454,7 +485,9 @@ class GeneradorAula:
                 titulo=f"Introducción M{n}",
                 intro_html=self._rutear_media(intro_html),
                 objetivos_html=self._rutear_media(objetivos_html),
-                banner_src=_extraer_banner(viejo),
+                # El plugin nombra el banner del módulo "M1.png": si vino,
+                # va ese; si no, el del aula base.
+                banner_src=self._banner_de(f"M{n}") or _extraer_banner(viejo),
                 identifier=_extraer_identifier(viejo),
                 tema=self.spec.tema,
                 video_html=self._video_de_planilla(modulo.items, ctx))
@@ -576,10 +609,17 @@ class GeneradorAula:
             page_id = _gen_id()
             slug = slugify(item.titulo)
             href = f"wiki_content/{slug}.html"
+            # Cada página lleva SU banner, el que el plugin armó con el
+            # título de esa página. Sin banners se cae al del placeholder
+            # del aula base, que es el que se venía entregando.
+            clave = self._clave_de_titulo(item.titulo)
+            propio = self._banner_de(clave) if clave else ""
+            if self.banners and not propio:
+                self.paginas_sin_banner.append((clave, item.titulo[:40]))
             html = pagina_contenido(
                 titulo=item.titulo,
                 body_html=self._rutear_media(item.fuente.html),
-                banner_src=banner, identifier=page_id,
+                banner_src=propio or banner, identifier=page_id,
                 tema=self.spec.tema)
             html = enlazar_lecturas_con_bibliografia(html, self.obras_citadas)
             _escribir(self.working / href, html)
@@ -2769,6 +2809,90 @@ class GeneradorAula:
                                 "$IMS-CC-FILEBASE$/Multimedia%20cargada/"
                                 + quote(nombre))
         return html
+
+    def _cargar_banners(self) -> dict:
+        """{clave de página: (nombre a publicar, bytes)} desde el ZIP del
+        plugin de Figma, o desde una carpeta con los PNG sueltos."""
+        origen = getattr(self.spec, "banners", "")
+        if not origen:
+            return {}
+        origen = Path(origen)
+        if not origen.exists():
+            self.spec.issues.append(Issue(Severidad.BLOQUEANTE,
+                f"No existe el archivo de banners: {origen}", "Banners"))
+            return {}
+        crudos = []           # [(nombre, bytes)]
+        if origen.is_dir():
+            for f in sorted(origen.iterdir()):
+                if f.suffix.lower() in _EXT_BANNER:
+                    crudos.append((f.name, f.read_bytes()))
+        else:
+            with zipfile.ZipFile(origen) as z:
+                for info in z.infolist():
+                    nombre = Path(info.filename).name
+                    if info.is_dir() or not nombre \
+                            or Path(nombre).suffix.lower() not in _EXT_BANNER:
+                        continue
+                    crudos.append((nombre, z.read(info)))
+        banners, repetidos = {}, []
+        for nombre, datos in crudos:
+            clave = clave_de_banner(nombre)
+            if not clave:
+                continue
+            if clave in banners:
+                repetidos.append(nombre)
+                continue
+            # Se republica con el nombre normalizado: los que subía el equipo
+            # a mano venían con "(2)" y con el título pegado, y después nadie
+            # sabía cuál correspondía a cuál.
+            banners[clave] = (clave + Path(nombre).suffix.lower(), datos)
+        if repetidos:
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                f"{len(repetidos)} banner(s) con la misma numeración que otro: "
+                + ", ".join(repetidos[:5]) + ". Usé el primero de cada uno.",
+                "Banners"))
+        logger.info(f"  {len(banners)} banners leídos de {origen.name}")
+        return banners
+
+    def _banner_de(self, clave: str) -> str:
+        """URL del banner de esa página/módulo, o "" si no hay."""
+        from urllib.parse import quote
+        entrada = self.banners.get(clave)
+        if not entrada:
+            return ""
+        self.banners_usados.add(clave)
+        return f"{BANNER_URL}/{quote(entrada[0])}"
+
+    @staticmethod
+    def _clave_de_titulo(titulo: str) -> str:
+        """"1.3.1. La arquitectura de una neurona" → "1.3.1"."""
+        m = re.match(r"\s*(\d+(?:\.\d+)*)", titulo or "")
+        return m.group(1).rstrip(".") if m else ""
+
+    def _empaquetar_banners(self):
+        if not self.banners:
+            return
+        carpeta = self.working / BANNER_SUBDIR
+        carpeta.mkdir(parents=True, exist_ok=True)
+        puestos = 0
+        for clave, (nombre, datos) in sorted(self.banners.items()):
+            if clave not in self.banners_usados:
+                continue
+            (carpeta / nombre).write_bytes(datos)
+            self.recursos_nuevos.append((_gen_id(), f"{BANNER_SUBDIR}/{nombre}"))
+            puestos += 1
+        logger.info(f"  {puestos} banners empaquetados en {BANNER_SUBDIR}")
+        sobrantes = sorted(set(self.banners) - self.banners_usados)
+        if sobrantes:
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                f"{len(sobrantes)} banner(s) sin página a la que ir: "
+                + ", ".join(sobrantes[:8]) + ". Revisá que la numeración "
+                "coincida con la de la planilla.", "Banners"))
+        faltan = [t for c, t in self.paginas_sin_banner]
+        if faltan:
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                f"{len(faltan)} página(s) quedaron sin banner: "
+                + ", ".join(faltan[:6]) + ".", "Banners"))
 
     def _empaquetar_media(self):
         destino = self.working / MEDIA_SUBDIR
