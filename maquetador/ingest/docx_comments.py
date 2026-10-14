@@ -50,7 +50,8 @@ _AUTO = {"subtitulo", "subsubtitulo", "recuadro_simple", "lectura", "video",
          "figura_de_diseno",
          "foro_lectura_y_espacio", "figura_expandible", "enlazar_actividad",
          "destacar_tramo", "componente_en_el_texto", "quiz", "galeria",
-         "galeria_fila", "texto_alternativo"}
+         "galeria_fila", "texto_alternativo", "consigna_de_sugerida",
+         "consigna_desde_el_punto"}
 
 # Nivel de encabezado por acción, según la política de jerarquía de la UCC:
 # H2 es el título de la página, H3 el subtítulo y H4 el sub-subtítulo.
@@ -136,6 +137,23 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     # priorizar— quedaban visibles en el aula.
     if re.match(r"^\s*no\s+(?:se\s+)?maqueta", n):
         return "no_maquetar"
+
+    # "Esto queda como consigna de la actividad sugerida": el recuadro no es
+    # contenido de la página —es la consigna del buzón— y lo que queda en la
+    # lectura es el llamado a la acción que el asesor escribe a continuación.
+    # Mismo movimiento que "va en otra página", pero con destino a la
+    # actividad y no al foro. En Metodología II son dos ("¿Cómo vengo hasta
+    # acá?" de los módulos 1 y 3) y quedaban publicadas como contenido, sin
+    # buzón de entrega.
+    if "consigna" in n and re.search(r"actividad\s+(?:sugerida|opcional)", n):
+        return "consigna_de_sugerida"
+    # La misma cosa escrita como un corte: "lo marcado queda como llamado a
+    # la acción y agregar el link. Desde el punto 1 en adelante forma parte
+    # de la consigna". El recuadro se parte: arriba queda la invitación con
+    # el enlace al buzón, y los puntos numerados se van a la consigna.
+    if "llamado a la accion" in n and "consigna" in n \
+            and re.search(r"desde\s+el\s+punto\s*(\d+)?", n):
+        return "consigna_desde_el_punto"
 
     # Señales negativas primero (NO encuadrar)
     # "con sangria"/"sangria sin" salieron de acá: pedían sangrar, y esta
@@ -882,6 +900,69 @@ def _marcar_enlace_de_actividad(soup, el, instruccion: str) -> bool:
     return True
 
 
+_PAT_LLAMADO_A_LA_ACCION = re.compile(
+    r"llamad[oa]\s+a\s+la\s+acci[oó]n\s*[:.]?\s*(.+)$", re.I | re.S)
+
+
+def _cta_de_actividad(instruccion: str, soup):
+    """El llamado a la acción que el asesor dejó escrito en el globo.
+
+    Es lo que queda en la lectura cuando la consigna se va al buzón. El
+    asesor cierra la frase con la palabra "Link" para marcar dónde va el
+    enlace a la actividad: ahí se pone el <a> que el generador completa
+    con el id del recurso de Canvas.
+    """
+    m = _PAT_LLAMADO_A_LA_ACCION.search(instruccion or "")
+    if not m:
+        return None
+    texto = re.sub(r"\s*\blinks?\b\s*\.?\s*$", "", m.group(1).strip(),
+                   flags=re.I).strip()
+    if not texto:
+        return None
+    p = soup.new_tag("p")
+    p.append(texto + " ")
+    a = soup.new_tag("a", **{"class": "dp-course-link",
+                             "data-actividad": "sugerida"})
+    a.string = "Acceder a la actividad"
+    p.append(a)
+    return p
+
+
+_PAT_PUNTO_NUMERADO = re.compile(r"^\s*(\d+)\s*[.)]\s+\S")
+
+
+def _partir_recuadro_en_el_punto(el, instruccion: str, soup) -> str:
+    """Parte el recuadro donde arrancan los puntos numerados.
+
+    Arriba queda la invitación (con el enlace al buzón pegado al final) y
+    desde el punto que nombra el asesor en adelante es la consigna, que se
+    devuelve en HTML para cargarla en la actividad. Los renglones que no
+    abren punto —la referencia bibliográfica del artículo que hay que leer—
+    viajan con el punto al que pertenecen.
+    """
+    celda = el if el.name in ("td", "th") else el.find_parent(["td", "th"])
+    if celda is None:
+        return ""
+    m_desde = re.search(r"desde\s+el\s+punto\s*(\d+)", normalizar(instruccion))
+    desde = int(m_desde.group(1)) if m_desde else 1
+    parrafos = celda.find_all(["p", "ul", "ol"], recursive=False)
+    corte = next((i for i, p in enumerate(parrafos)
+                  if (m := _PAT_PUNTO_NUMERADO.match(p.get_text(" ", strip=True)))
+                  and int(m.group(1)) == desde), None)
+    if corte is None:
+        return ""
+    consigna = "".join(str(p) for p in parrafos[corte:])
+    for p in parrafos[corte:]:
+        p.decompose()
+    enlace = soup.new_tag("p")
+    a = soup.new_tag("a", **{"class": "dp-course-link",
+                             "data-actividad": "sugerida"})
+    a.string = "Acceder a la actividad"
+    enlace.append(a)
+    celda.append(enlace)
+    return consigna
+
+
 def aplicar_comentarios(soup, comentarios: list) -> None:
     """Aplica al soup las acciones automáticas cuyo texto anclado aparezca en
     él, y arma los componentes de pedido del asesor (acordeon/tabs/expander/
@@ -1216,6 +1297,25 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
             else:
                 c["_contenido_extraido"] = inner
                 el.decompose()
+        elif accion == "consigna_de_sugerida":
+            # La consigna se va al buzón de la actividad sugerida y en la
+            # lectura queda el llamado a la acción, enlazado a ese buzón.
+            tabla = el if el.name == "table" else el.find_parent("table")
+            objetivo = tabla if tabla is not None else el
+            c["_contenido_extraido"] = (_cuerpo_de_recuadro(tabla)
+                                        if tabla is not None else inner)
+            c["_destino_extraido"] = "sugerida"
+            cta = _cta_de_actividad(c["instruccion"], soup)
+            if cta is not None:
+                objetivo.insert_before(cta)
+            objetivo.decompose()
+        elif accion == "consigna_desde_el_punto":
+            consigna = _partir_recuadro_en_el_punto(el, c["instruccion"], soup)
+            if not consigna:
+                c["_aplicado"] = False
+                continue
+            c["_contenido_extraido"] = consigna
+            c["_destino_extraido"] = "sugerida"
         elif accion == "figura_expandible":
             # El globo está sobre la imagen (o sobre su epígrafe/nota): se
             # marca la figura vecina para que procesar_contenido le ponga

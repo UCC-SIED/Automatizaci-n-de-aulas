@@ -519,3 +519,105 @@ class TestElProtocoloDeTransparenciaSeAdjunta:
         nombre = GeneradorAula._nombre_publicado_de_adjunto(
             Path("Protocolo de transparencia.xlsx"))
         assert nombre == "Protocolo de transparencia.xlsx"
+
+
+class TestLaActividadSugeridaConBuzon:
+    """"¿Cómo vengo hasta acá?" (módulos 1 y 3). La planilla la anota como
+    tarea con carga de archivo y los comentarios aclaran que es sugerida y
+    que hay que abrir buzón de entrega. La consigna vive dentro de la
+    lectura: se va al buzón y arriba queda el llamado a la acción."""
+
+    INSTRUCCION_M1 = (
+        "Para maquetación: esto queda como consigna de la actividad "
+        "sugerida. A continuación dejo el llamado a la acción: Antes de "
+        "finalizar con el módulo, se propone una actividad que luego será "
+        "retomada en otras instancias, entendiendo que toda investigación "
+        "involucra un proceso, un camino espiralado. Link")
+
+    INSTRUCCION_M3 = (
+        "Para maquetación: Lo marcado en este comentario queda como llamado "
+        "a la acción y agregar el link. Desde el punto 1 en adelante forma "
+        "parte de la consigna")
+
+    def test_se_reconoce_la_consigna_de_la_sugerida(self):
+        assert _clasificar(self.INSTRUCCION_M1) == "consigna_de_sugerida"
+
+    def test_se_reconoce_el_corte_por_punto(self):
+        assert _clasificar(self.INSTRUCCION_M3) == "consigna_desde_el_punto"
+
+    def test_la_consigna_sale_de_la_lectura_y_queda_el_cta(self):
+        html = ('<table><tr><th><p><strong>¿Cómo vengo hasta acá?</strong></p>'
+                '<p>Definí el tema a investigar y los actores involucrados.</p>'
+                '</th></tr></table>'
+                '<p>Conclusión del módulo.</p>')
+        soup = BeautifulSoup(html, "html.parser")
+        comentarios = [{
+            "accion": "consigna_de_sugerida",
+            "instruccion": self.INSTRUCCION_M1,
+            "anclado": "¿Cómo vengo hasta acá?",
+        }]
+        aplicar_comentarios(soup, comentarios)
+        assert "Definí el tema" in comentarios[0]["_contenido_extraido"]
+        assert comentarios[0]["_destino_extraido"] == "sugerida"
+        assert "Definí el tema" not in soup.get_text()
+        # El llamado a la acción que escribió la asesora, con su enlace.
+        assert "camino espiralado" in soup.get_text()
+        a = soup.find("a", class_="dp-course-link")
+        assert a is not None and a["data-actividad"] == "sugerida"
+
+    def test_la_palabra_link_no_se_publica(self):
+        """La asesora cierra la frase con "Link" para marcar dónde va el
+        enlace: es una indicación, no parte del texto."""
+        soup = BeautifulSoup(
+            '<table><tr><th><p><strong>¿Cómo vengo hasta acá?</strong></p>'
+            '<p>Consigna.</p></th></tr></table>', "html.parser")
+        aplicar_comentarios(soup, [{
+            "accion": "consigna_de_sugerida",
+            "instruccion": self.INSTRUCCION_M1,
+            "anclado": "¿Cómo vengo hasta acá?",
+        }])
+        assert soup.get_text().rstrip().endswith("Acceder a la actividad")
+        assert "espiralado. Link" not in soup.get_text()
+
+    def test_el_corte_deja_la_invitacion_y_se_lleva_los_puntos(self):
+        html = ('<table><thead>'
+                '<tr><th><p><strong>¿Cómo vengo hasta acá?</strong></p></th></tr>'
+                '<tr><th>'
+                '<p><strong>¿Cómo leemos los datos estadísticos?</strong></p>'
+                '<p>Te propongo un ejercicio de lectura.</p>'
+                '<p>1. Leé la introducción del artículo sugerido.</p>'
+                '<p>Ospino, W. G. (2024). Elementos de la gestión directiva.</p>'
+                '<p>2. Ahora elegí una tabla de tu escuela.</p>'
+                '</th></tr></thead></table>')
+        soup = BeautifulSoup(html, "html.parser")
+        comentarios = [{
+            "accion": "consigna_desde_el_punto",
+            "instruccion": self.INSTRUCCION_M3,
+            "anclado": "¿Cómo leemos los datos estadísticos?",
+        }]
+        aplicar_comentarios(soup, comentarios)
+        consigna = comentarios[0]["_contenido_extraido"]
+        # Los dos puntos y, con ellos, la referencia del artículo que hay
+        # que leer: viaja con el punto al que pertenece.
+        assert "1. Leé la introducción" in consigna
+        assert "Ospino, W. G." in consigna
+        assert "2. Ahora elegí una tabla" in consigna
+        # Arriba queda la invitación, con el enlace al buzón.
+        texto = soup.get_text(" ", strip=True)
+        assert "Te propongo un ejercicio de lectura" in texto
+        assert "Ahora elegí una tabla" not in texto
+        assert soup.find("a", class_="dp-course-link") is not None
+
+    def test_sin_puntos_numerados_no_corta_nada(self):
+        """Mejor avisar que partir la caja en un lugar inventado."""
+        soup = BeautifulSoup(
+            '<table><tr><th><p>Una invitación sin puntos.</p></th></tr></table>',
+            "html.parser")
+        comentarios = [{
+            "accion": "consigna_desde_el_punto",
+            "instruccion": self.INSTRUCCION_M3,
+            "anclado": "Una invitación sin puntos.",
+        }]
+        aplicar_comentarios(soup, comentarios)
+        assert comentarios[0]["_aplicado"] is False
+        assert "Una invitación sin puntos" in soup.get_text()

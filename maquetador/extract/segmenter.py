@@ -293,13 +293,19 @@ def segmentar_docx(docx_path: Path, marcadores: dict) -> tuple:
             aplicar_comentarios(soup_sec, comentarios)
             secciones[clave] = str(soup_sec)
             for c in comentarios:
-                if c.get("accion") in ("otra_pagina", "foro_lectura_y_espacio") \
+                if c.get("accion") in ("otra_pagina", "foro_lectura_y_espacio",
+                                       "consigna_de_sugerida",
+                                       "consigna_desde_el_punto") \
                         and c.get("_aplicado") \
                         and not any(o["anclado"] == c["anclado"]
                                     for o in origenes_otra_pagina):
                     origenes_otra_pagina.append({
                         "anclado": c["anclado"], "pagina_origen": clave,
-                        "html": c.get("_contenido_extraido", "")})
+                        "html": c.get("_contenido_extraido", ""),
+                        # A dónde va lo que se sacó de la lectura: al foro
+                        # del módulo (lo habitual) o al buzón de la
+                        # actividad sugerida.
+                        "destino": c.get("_destino_extraido", "foro")})
     comentarios_pendientes = [c for c in comentarios if not c.get("_aplicado")]
 
     no_encontrados = [c for c in marcadores if c not in secciones]

@@ -322,6 +322,7 @@ class GeneradorAula:
         self._conciliar_figuras_mal_rotuladas()
         self.figuras_usadas = set()        # paths de DISEÑO aprovechados
         self.adjuntos_usados = set()       # archivos del curso enlazados
+        self.rid_sugerida = {}             # {módulo: rid del buzón sugerido}
         self.videos_puestos = set()        # claves de --video ya incrustadas
         self.banners = {}                  # clave de pagina -> (nombre, bytes)
         self.banners_usados = set()
@@ -1543,6 +1544,44 @@ class GeneradorAula:
                 item.titulo))
             logger.info(f"  [M{n}] Actividad sugerida (nueva) ← {herramienta}")
 
+    def _inyectar_consigna_sugerida(self, modulo, extra: dict, ctx: str):
+        """La consigna que el asesor marcó como "de la actividad sugerida".
+
+        Vive dentro de la lectura (el recuadro "¿Cómo vengo hasta acá?" de
+        Metodología II) y el asesor pide además un buzón de entrega. Se
+        vuelca en la ranura 'Actividad sugerida M{n}' que el aula base ya
+        trae —sin calificar, no cuenta para la nota— y en la lectura queda
+        el llamado a la acción, que _resolver_enlaces_de_actividad enlaza a
+        este mismo buzón.
+        """
+        n = modulo.numero
+        rid = self._rid_de_actividad("sugerida", n) \
+            or self._clonar_actividad_sugerida(n)
+        if not rid:
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                f"El asesor marcó una consigna como actividad sugerida del "
+                f"módulo {n}, pero no encontré ni pude crear ese buzón: "
+                "crearlo a mano en Canvas (Completo/Incompleto, no cuenta "
+                "para la nota final).", ctx))
+            return
+        if rid in self.assignments_escritos:
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                f"El buzón de la actividad sugerida del módulo {n} ya tenía "
+                "contenido: esta consigna quedó sin volcar. Revisar.", ctx))
+            return
+        cuerpo = procesar_contenido(self._rutear_media(extra["html"]),
+                                    self.spec.tema)
+        self.rid_sugerida[n] = rid
+        if self._escribir_assignment(rid, cuerpo, ctx):
+            self.spec.issues.append(Issue(Severidad.INFO,
+                f"Consigna sugerida del módulo {n} cargada en 'Actividad "
+                f"sugerida M{n}' (con buzón de entrega, sin calificar). En la "
+                "lectura quedó el llamado a la acción enlazado al buzón.",
+                ctx))
+            logger.info(f"  [M{n}] Actividad sugerida ← consigna de la lectura")
+            self._reorders_pendientes.append(
+                (rid, extra.get("pagina_titulo", "")))
+
     def _inyectar_consigna_actividad(self, n: int, titulo: str, body: str,
                                      ctx: str):
         """Consigna de actividad embebida en el multimedial → assignment."""
@@ -1622,6 +1661,9 @@ class GeneradorAula:
         for extra in getattr(modulo, "extras_otra_pagina", []):
             html = extra.get("html", "")
             if not html:
+                continue
+            if extra.get("destino") == "sugerida":
+                self._inyectar_consigna_sugerida(modulo, extra, ctx)
                 continue
             rid = self._rid_en_meta("DiscussionTopic",
                                     rf"[^<]*[Ff]oro[^<]*M{n}[^<]*")
@@ -2526,6 +2568,12 @@ class GeneradorAula:
 
     def _rid_de_actividad(self, clase: str, n: int) -> str:
         """rid del assignment 'Actividad <clase> M<n>' del paquete ya armado."""
+        # El buzón sugerido no siempre se llama "Actividad sugerida M{n}":
+        # cuando hay que clonarlo queda como "Actividad M{n}", y buscarlo
+        # por título fallaba —el llamado a la acción de la lectura salía sin
+        # enlazar—. El que se usó de verdad queda anotado.
+        if clase == "sugerida" and self.rid_sugerida.get(n):
+            return self.rid_sugerida[n]
         return self._rid_en_meta(
             "Assignment", rf"[^<]*[Aa]ctividad {clase}[^<]*M{n}\b[^<]*")
 
