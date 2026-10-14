@@ -26,8 +26,8 @@ from maquetador.ingest.folder_scanner import normalizar
 from maquetador.build.snippets import (resaltado_simple, cta_titulo, ICONOS,
                                        quick_check,
                                        preguntas_de_verdadero_o_falso,
-                                       galeria_de_figuras,
-                                       _PAT_PIE_DE_FIGURA,
+                                       galeria_de_figuras, fila_de_figuras,
+                                       _PAT_PIE_DE_FIGURA, _PAT_ALT_PARRAFO,
                                        bloque_recurso_incrustado,
                                        _PAT_GENIALLY_URL, _PAT_SOLO_ARCHIVO,
                                        bloque_video_studio,
@@ -50,7 +50,7 @@ _AUTO = {"subtitulo", "subsubtitulo", "recuadro_simple", "lectura", "video",
          "figura_de_diseno",
          "foro_lectura_y_espacio", "figura_expandible", "enlazar_actividad",
          "destacar_tramo", "componente_en_el_texto", "quiz", "galeria",
-         "texto_alternativo"}
+         "galeria_fila", "texto_alternativo"}
 
 # Nivel de encabezado por acción, según la política de jerarquía de la UCC:
 # H2 es el título de la página, H3 el subtítulo y H4 el sub-subtítulo.
@@ -117,6 +117,12 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     # como link a ese documento, no perderse como charla interna.
     if re.search(r"https?://\S+", instruccion) and "descargable" in n:
         return "enlace_descargable"
+    # El mismo pedido sin la palabra "descargable": el asesor deja el link y
+    # lo marcado es el lugar donde va ("Acceso a la grilla colaborativa:
+    # aquí"). Sin esto el link quedaba en los avisos y ese "aquí" se
+    # publicaba sin enlazar a ningún lado.
+    if re.search(r"https?://\S+", instruccion) and re.search(r"\b(aqui|aca)$", na):
+        return "enlace_descargable"
     # "Para diseño: …" es un encargo para el diseñador (el Genially, por
     # ejemplo), no una instrucción de maquetación.
     if n.startswith(("para diseno", "para diseño")):
@@ -132,8 +138,13 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
         return "no_maquetar"
 
     # Señales negativas primero (NO encuadrar)
+    # "con sangria"/"sangria sin" salieron de acá: pedían sangrar, y esta
+    # acción solo evita el recuadro —no sangra nada—. Así, "mantener cita
+    # con sangría" y "mantener cita en sangría" daban formatos distintos
+    # para el mismo pedido, con dos citas vecinas desalineadas. Ahora las
+    # dos llegan a la regla de cita (más abajo), que sangra de los dos lados.
     if any(k in n for k in ("sin recuadro", "sin cuadro", "no resaltar",
-                            "no encuadrar", "con sangria", "sangria sin")):
+                            "no encuadrar")):
         return "sin_recuadro"
     # Marcador de cierre de un componente ("fin del expander"): señala dónde
     # termina, no pide armar otro. Va ANTES de detectar el tipo de componente.
@@ -181,6 +192,12 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     # en una grilla donde cada una se amplía al clic, no una abajo de la otra.
     if "galeria" in n or "galería" in instruccion.lower():
         return "galeria"
+    # "Carrusel de imágenes": la serie de fotos que arranca en el epígrafe
+    # marcado va en una sola fila, cada una ampliable al clic. No es la
+    # galería de solapas: esa guarda una figura por pestaña porque son
+    # diagramas con texto, y acá son fotos que se comparan de un vistazo.
+    if "carrusel" in n or "carousel" in n:
+        return "galeria_fila"
     if "acordeon" in n:
         return "acordeon"
     # "Tabs"/"solapas"/"pestañas" — componente de DesignPLUS. Palabra completa:
@@ -232,7 +249,12 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
         return "podcast"
     if ("cta" in n or "recursos" in n) and ("podcast" in na or "audio" in na):
         return "podcast"
-    if "recuadro" in n or "resalta" in n:   # resaltar, resaltado, "resaltado simple"
+    # "recuadro" viaja con erratas de tipeo ("recuedro", "recudro"): el
+    # asesor escribe rápido y la palabra se le cruza. Sin tolerarlas, un
+    # "mantener recuedro como se dispone" caía en "revisar" y el recuadro
+    # del docente salía como texto corrido (dos casos en Metodología II).
+    # "recuerdo" NO matchea: después de la vocal doble necesita una a o d.
+    if re.search(r"rec[ue]+[ad]+ro", n) or "resalta" in n:  # resaltar, resaltado
         return "recuadro_simple"
     # "En cursiva u otra forma de destacado": el asesor marca un tramo largo
     # que tiene que leerse aparte del cuerpo (el prompt de IA que el estudiante
@@ -243,6 +265,13 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     # Avisarlo era una falsa alarma en cada corrida; si la figura NO está,
     # lo dice _avisar_figuras_de_diseno_sin_usar.
     if "reemplazar" in n and "figura" in n and ("diseno" in n or "diseño" in n):
+        return "figura_de_diseno"
+    # La forma corta del mismo pedido: "original en carpeta diseño" anclado
+    # sobre el epígrafe de la figura, sin la palabra "reemplazar". Es lo que
+    # el generador ya hace solo; sin esta regla salía como pendiente en cada
+    # corrida (Figuras 4 y 5 del módulo 2 de Metodología II).
+    if ("diseno" in n or "diseño" in n) and ("original" in n or "carpeta" in n) \
+            and ("figura" in n or na.startswith(("figura", "tabla", "esquema"))):
         return "figura_de_diseno"
     if "cursiva" in n or "destacad" in n or "destacar" in n:
         return "destacar_tramo"
@@ -255,6 +284,14 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
                             "sin terminar", "incompleto", "no esta disponible",
                             "esperando")):
         return "faltante"
+    # "Mantener sangría" a secas: el asesor pide que el párrafo quede
+    # sangrado como la cita larga de APA. Va al final para que cualquier
+    # pedido más específico gane primero —"manteniendo sangría izq y
+    # cursiva" es un destacado, no una cita—. Sin esta regla los ocho
+    # casos de Metodología II caían en "revisar" y las citas salían
+    # pegadas al margen, como un párrafo más del cuerpo.
+    if re.search(r"\bsangria\b", n):
+        return "cita"
     if n.startswith(("para maquetacion", "para el maquetado", "para diseno",
                      "para diseño", "maquetacion")):
         # El globo dice solo "Maquetación" y lo marcado es el nombre del
@@ -633,6 +670,71 @@ def _bloques_de_quick_check(caja) -> list:
 
 _PAT_NUMS = re.compile(r"\d+")
 _PAT_EPIGRAFE_SOLO = re.compile(r"^(figura|tabla)\s*(\d+)\s*[.:]?$", re.I)
+# El epígrafe en la forma de APA que pide el catálogo UCC: el número y el
+# título en el mismo renglón ("Figura 1. Miralo con lupa (1)"). Es la forma
+# que usa la serie de fotos del módulo 2 de Metodología II, y no la
+# matcheaba _PAT_EPIGRAFE_SOLO, que pide el renglón con el número pelado.
+_PAT_EPIGRAFE_CON_TITULO = re.compile(
+    r"^(?:figura|tabla)\s*(\d+)\s*[.:]\s*(.+)$", re.I | re.S)
+
+
+def _bloques_de_figura(el):
+    """Las figuras consecutivas que arrancan en `el`.
+
+    Cada una llega como hasta cuatro párrafos seguidos: el epígrafe con su
+    número y título, la imagen, la nota de fuente y el "Texto alternativo:"
+    que el asesor escribió al pie. Devuelve
+    ([(numero, titulo, html_img, nota)], {numero: alt}, [elementos usados]).
+    """
+    figuras, alts, usados = [], {}, []
+    actual = el
+    while actual is not None:
+        m = _PAT_EPIGRAFE_CON_TITULO.match(actual.get_text(" ", strip=True))
+        if not m:
+            break
+        numero, titulo = m.group(1), m.group(2).strip()
+        bloque = [actual]
+        img_html, nota = "", ""
+        x = actual.find_next_sibling()
+        while x is not None and len(bloque) < 5:
+            texto = x.get_text(" ", strip=True)
+            img = x.find("img")
+            m_alt = _PAT_ALT_PARRAFO.match(texto)
+            if img is not None and not img_html:
+                img_html = str(img)
+            elif m_alt:
+                alts[numero] = m_alt.group(1).strip()
+            elif _PAT_PIE_DE_FIGURA.match(texto) and not nota:
+                # "Nota ." con espacio: el pie viene con la palabra en
+                # cursiva y el punto afuera (<em>Nota</em>.), y al pasarlo a
+                # texto plano queda el separador en medio.
+                nota = re.sub(r"\s+([.,;:])", r"\1", texto)
+            else:
+                break
+            bloque.append(x)
+            x = x.find_next_sibling()
+        if not img_html:
+            break
+        figuras.append((numero, titulo, img_html, nota))
+        usados.extend(bloque)
+        actual = x
+    return figuras, alts, usados
+
+
+def _armar_fila_de_figuras(el) -> bool:
+    """Reemplaza la serie de figuras que arranca en `el` por una sola fila.
+
+    El asesor pide "carrusel de imágenes" sobre el epígrafe de la primera:
+    las que siguen son la misma serie y van juntas, lado a lado.
+    """
+    figuras, alts, usados = _bloques_de_figura(el)
+    if len(figuras) < 2:
+        return False
+    usados[0].insert_before(BeautifulSoup(
+        fila_de_figuras(figuras, alts), "html.parser"))
+    for bloque in usados:
+        bloque.decompose()
+    return True
 
 
 def _armar_galeria(soup, el, instruccion: str) -> bool:
@@ -1062,6 +1164,9 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
         elif accion == "galeria":
             if not _armar_galeria(soup, el, c["instruccion"]):
                 c["_aplicado"] = False   # sin figuras que agrupar: se avisa
+        elif accion == "galeria_fila":
+            if not _armar_fila_de_figuras(el):
+                c["_aplicado"] = False   # sin serie que agrupar: se avisa
         elif accion == "quiz":
             # "Quick check": el asesor escribe el repaso de verdadero/falso
             # como una lista adentro de un recuadro y comenta cómo quiere
@@ -1129,6 +1234,14 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
             # el link a ese documento.
             url_m = re.search(r"https?://\S+", c["instruccion"])
             texto_link = (c["anclado"] or "").strip()
+            # Cuando el asesor marca toda la frase pero la cierra con un
+            # "aquí", el enlace va en esa palabra y no en el renglón entero:
+            # "Acceso a la grilla colaborativa: aquí" se lee mejor con el
+            # link solo en "aquí", que es la convención del aula.
+            m_aqui = re.search(r"\b(aqu[ií]|ac[aá])\s*[.:]?\s*$", texto_link,
+                               re.I)
+            if m_aqui:
+                texto_link = m_aqui.group(1)
             nodo = (el.find(string=lambda s: bool(s) and texto_link in s)
                     if url_m and texto_link else None)
             if nodo is not None:

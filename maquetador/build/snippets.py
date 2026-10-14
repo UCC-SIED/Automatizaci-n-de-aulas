@@ -543,6 +543,59 @@ def galeria_de_figuras(figuras: list, titulo: str = "") -> str:
     return construir_panels(pares, "dp-tabs-pills-vertical")
 
 
+# Alto de la miniatura en la grilla, como lo deja el catálogo UCC
+# (docs/referencia-designplus-cidilabs-ucc.md, "Múltiples (grilla)").
+_ALTO_MINIATURA = 200
+
+
+def fila_de_figuras(figuras: list, alt_por_numero: dict = None) -> str:
+    """Las figuras de una serie, lado a lado en una sola fila.
+
+    `figuras` es [(numero, titulo, html_de_la_imagen, nota)]. Sale como la
+    grilla de DesignPLUS (`dp-popup-gallery`, col-lg-4): se ven las tres
+    juntas y cada una se amplía al clic.
+
+    Es la alternativa a galeria_de_figuras, que las pone en solapas. La
+    diferencia es qué son: las solapas sirven para diagramas con texto
+    adentro, que en miniatura no se leen; la fila sirve para FOTOS que se
+    comparan de un vistazo —las tres de "Miralo con lupa" del módulo 2 de
+    Metodología II, que la asesora pidió como carrusel—.
+    """
+    if not figuras:
+        return ""
+    alt_por_numero = alt_por_numero or {}
+    # 12 columnas Bootstrap repartidas: 2 figuras a la mitad, 3 a un tercio,
+    # 4 a un cuarto. De 5 en adelante se mantiene el tercio y la grilla
+    # envuelve sola a un segundo renglón.
+    ancho = 12 // len(figuras) if 2 <= len(figuras) <= 4 else 4
+    columnas = []
+    for numero, titulo, img_html, nota in figuras:
+        # Por BeautifulSoup y no por regex: el alt lo escribe el asesor y
+        # viene con comillas y acentos, que acá hay que escapar bien.
+        img = BeautifulSoup(img_html, "html.parser").find("img")
+        if img is None:
+            continue
+        alt = alt_por_numero.get(numero, "")
+        if alt:
+            img["alt"] = alt
+        img["style"] = (f"height: {_ALTO_MINIATURA}px; width: 100%; "
+                        f"object-fit: cover;")
+        img_html = str(img)
+        epigrafe = f"Figura {numero}. {titulo}" if numero and titulo else (
+            titulo or (f"Figura {numero}" if numero else ""))
+        pie = f"<strong>{epigrafe}</strong>" if epigrafe else ""
+        if nota:
+            pie += f"<br />{_PIE_DE_GALERIA.format(nota=nota)}"
+        pie = f"<figcaption>{pie}</figcaption>" if pie else ""
+        columnas.append(
+            f'<div class="col-lg-{ancho}">\n'
+            f'<figure class="dp-image-padded dp-image-bordered '
+            f'dp-image-rounded-10">{img_html}{pie}</figure>\n</div>')
+    return ('<div class="dp-content-block dp-popup-gallery" '
+            'data-title="Image Grid Gallery 3x3">\n'
+            '<div class="row">\n' + "\n".join(columnas) + "\n</div>\n</div>")
+
+
 
 def resaltado_ejemplo(body_html: str, titulo: str = "Ejemplos que iluminan") -> str:
     return f"""<div class="dp-callout dp-callout-placeholder card dp-callout-position-default dp-callout-color-dp-primary dp-callout-type-info">
@@ -1169,6 +1222,26 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
             if getattr(vecino, "name", "") == "table":
                 return ("table", vecino)
         return (None, None)
+
+    # Figuras que ya están dentro de una grilla (la fila de fotos que arma
+    # el pedido de "carrusel"): el epígrafe vive en el <figcaption> y no en
+    # un <p>, así que el barrido de abajo no las veía y las versiones de
+    # DISEÑO quedaban sin usar —las tres de "Miralo con lupa" del módulo 2—.
+    # Acá solo se cambia el src: el alto y el recorte son los de la grilla.
+    for fig in soup.select(".dp-popup-gallery figure"):
+        pie = fig.find("figcaption")
+        img = fig.find("img")
+        if pie is None or img is None:
+            continue
+        m = _PAT_FIG_CAPTION.match(pie.get_text(" ", strip=True))
+        if not m or not m.group(2):
+            continue
+        tipo = "figura" if m.group(1).lower() == "figura" else "tabla"
+        path = indice.get((modulo, tipo, int(m.group(2))))
+        if not path:
+            continue
+        img["src"] = f"__DISENO__/{nombre_publicado_de_figura(path)}"
+        usadas.add(path)
 
     for p in soup.find_all("p"):
         texto = p.get_text(" ", strip=True)
@@ -2796,7 +2869,13 @@ def _es_figura(img) -> bool:
     src = img.get("src", "")
     if "/Iconos/" in src or src.endswith(".svg"):
         return False
-    if img.find_parent(class_="card-title") or img.find_parent(class_="dp-callout"):
+    # Los iconos del recuadro: el del título y el del costado. Antes se
+    # descartaba TODO lo que estuviera dentro de un dp-callout, y así una
+    # figura de contenido metida en un recuadro quedaba sin alt y con el
+    # rótulo "Texto alternativo: …" publicado al pie (la Figura 3 de 1.2 en
+    # Metodología II, dentro de la caja "¿Qué vemos?").
+    if img.find_parent(class_="card-title") \
+            or img.find_parent(class_="dp-callout-side-emphasis"):
         return False
     return True
 
@@ -2808,6 +2887,13 @@ def _figura_vecina(p):
     Devuelve la imagen, o la tabla cuando la "figura" es una tabla de datos
     (hay epígrafes 'Figura N.' que refieren a una tabla, no a una imagen).
     """
+    # La imagen puede estar en el MISMO párrafo que el texto alternativo:
+    # el docente escribe las dos cosas en un solo renglón de Word. Antes se
+    # buscaba solo entre los hermanos y el rótulo quedaba publicado al lado
+    # de la figura (la Figura 2 de 3.2.4 en Metodología II).
+    propia = p.find("img") if getattr(p, "find", None) else None
+    if propia is not None and _es_figura(propia):
+        return propia
     for buscar in (p.find_previous_siblings, p.find_next_siblings):
         for vecino in list(buscar())[:3]:
             if getattr(vecino, "name", None) == "img":
@@ -2821,6 +2907,14 @@ def _figura_vecina(p):
                          else vecino.find("table"))
                 if tabla is not None:
                     return tabla
+    # Sin figura entre los hermanos: puede haber quedado envuelta en un
+    # bloque (un recuadro, un <figure>) y entonces ya no es hermana del
+    # párrafo. Se busca en el contenedor, que es el alcance de la figura.
+    contenedor = p.parent
+    if contenedor is not None and getattr(contenedor, "find_all", None):
+        for img in contenedor.find_all("img"):
+            if _es_figura(img):
+                return img
     return None
 
 
@@ -2938,7 +3032,14 @@ def _alt_parrafo_a_atributo(soup):
             figura["aria-label"] = alt
         else:
             figura["alt"] = alt
-        p.decompose()
+        if figura in p.descendants:
+            # La figura está DENTRO del párrafo: borrarlo entero se llevaría
+            # la imagen. Se saca solo el rótulo.
+            for texto in list(p.find_all(string=True)):
+                if _PAT_ALT_PARRAFO.match(texto.strip()):
+                    texto.extract()
+        else:
+            p.decompose()
 
 
 def _figura_es_expandible(img) -> bool:

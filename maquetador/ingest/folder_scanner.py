@@ -184,10 +184,34 @@ def _encontrar_raiz(carpeta: Path) -> Path:
     return raiz
 
 
+_PAT_COPIA_DE = re.compile(r"^\s*copia\s+de\s+(.+)$", re.I)
+
+
+def _es_duplicado_de_borrador(path: Path, raiz: Path) -> bool:
+    """¿El "Copia de X" es de verdad un duplicado descartable?
+
+    Solo si X está en la carpeta. Cuando no está, el "Copia de" es un
+    nombre descuidado y el archivo es el entregable: el protocolo de
+    transparencia de Metodología II llegó como "Copia de Protocolo de
+    transparencia.xlsx" y se perdía en el escaneo, con las tres
+    actividades enlazándolo y nadie para enlazar.
+    """
+    m = _PAT_COPIA_DE.match(path.stem)
+    if not m:
+        return True          # el descarte es por otro motivo: vale igual
+    resto = m.group(1)
+    if _DESCARTAR.search(resto):
+        return True          # "Copia de borrador M2": sigue siendo borrador
+    original = normalizar(resto)
+    return any(otro.is_file() and otro != path
+               and normalizar(otro.stem) == original
+               for otro in raiz.rglob("*"))
+
+
 def _descartable(path: Path, raiz: Path) -> bool:
     rel = path.relative_to(raiz)
     if _DESCARTAR.search(path.name):
-        return True
+        return _es_duplicado_de_borrador(path, raiz)
     for parte in rel.parts[:-1]:
         n = normalizar(parte)
         if any(n.startswith(c) or c in n for c in _CARPETAS_DESCARTAR):

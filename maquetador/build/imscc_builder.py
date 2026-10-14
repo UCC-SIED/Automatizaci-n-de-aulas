@@ -321,6 +321,7 @@ class GeneradorAula:
             getattr(spec, "imagenes_diseno", []))
         self._conciliar_figuras_mal_rotuladas()
         self.figuras_usadas = set()        # paths de DISEÑO aprovechados
+        self.adjuntos_usados = set()       # archivos del curso enlazados
         self.videos_puestos = set()        # claves de --video ya incrustadas
         self.banners = {}                  # clave de pagina -> (nombre, bytes)
         self.banners_usados = set()
@@ -591,6 +592,15 @@ class GeneradorAula:
         if conclusion and paginas:
             ultima = paginas[-1]
             if "conclusi" not in normalizar(ultima.titulo):
+                # Las figuras de DISEÑO se reemplazan recorriendo los ítems
+                # de la planilla, y la conclusión no es un ítem: se anexa
+                # después. Sin pasarla por acá, la figura que el docente
+                # puso en el cierre se quedaba con la versión embebida —o
+                # sin ninguna imagen, como la Figura 3 del módulo 3 de
+                # Metodología II, que llegó con el epígrafe solo.
+                if self.indice_diseno:
+                    conclusion = reemplazar_figuras_diseno(
+                        conclusion, n, self.indice_diseno, self.figuras_usadas)
                 ultima.fuente.html += "<h3>Conclusión</h3>" + conclusion
                 logger.info(f"  [M{n}] Conclusión anexada a '{ultima.titulo[:40]}'")
 
@@ -2838,7 +2848,50 @@ class GeneradorAula:
         self._eliminar_recurso(rref)
 
     # ------------------------------------------------------------------ #
+    def _adjuntar_archivos_del_curso(self, html: str) -> str:
+        """Los enlaces a Drive cuyo archivo está en la carpeta del curso
+        pasan a apuntar al archivo del paquete.
+
+        El protocolo de transparencia de Metodología II llegó así: las tres
+        actividades lo enlazaban a la unidad compartida y el asesor aclaró
+        "el archivo debe ser descargable". Enlazando el de Drive la descarga
+        depende de los permisos de la unidad y de que nadie mueva la
+        carpeta; adentro del paquete, no.
+
+        Solo se reemplaza cuando el archivo está de verdad: un documento
+        colaborativo de Google —la grilla del módulo 3, que los estudiantes
+        editan— no tiene archivo local y sigue siendo un link a Drive.
+        """
+        from urllib.parse import quote
+        adjuntos = getattr(self.spec, "adjuntos", [])
+        if not adjuntos or not html or "http" not in html:
+            return html
+        soup = BeautifulSoup(html, "html.parser")
+        cambio = False
+        for a in soup.find_all("a", href=True):
+            if not a["href"].lower().startswith("http"):
+                continue
+            texto = normalizar(a.get_text(" ", strip=True))
+            # Un texto corto ("acá", "aquí", "link") no alcanza para decidir
+            # a qué archivo se refiere.
+            if len(texto) < 8:
+                continue
+            destino = next((p for p in adjuntos
+                            if texto in normalizar(p.stem)), None)
+            if destino is None:
+                continue
+            a["href"] = ("$IMS-CC-FILEBASE$/Multimedia%20cargada/"
+                         + quote(destino.name)
+                         + "?canvas_=1&canvas_qs_wrap=1")
+            a["class"] = "instructure_file_link instructure_scribd_file"
+            a["title"] = destino.name
+            a["target"] = "_blank"
+            self.adjuntos_usados.add(destino)
+            cambio = True
+        return str(soup) if cambio else html
+
     def _rutear_media(self, html: str) -> str:
+        html = self._adjuntar_archivos_del_curso(html)
         html = (html or "").replace("__MEDIA__/", f"{MEDIA_URL}/")
         # Figuras de DISEÑO: van directo a Multimedia cargada/ (como a mano)
         for path in self.figuras_usadas:
@@ -2995,6 +3048,17 @@ class GeneradorAula:
                 self.recursos_nuevos.append(
                     (_gen_id(), f"web_resources/Multimedia cargada/{nombre}"))
             logger.info(f"  {len(self.figuras_usadas)} figuras de DISEÑO empaquetadas")
+        # Archivos del curso que alguna actividad enlaza (el protocolo de
+        # transparencia): se adjuntan para que la descarga no dependa de los
+        # permisos de la unidad compartida de Drive.
+        if self.adjuntos_usados:
+            carpeta = self.working / "web_resources" / "Multimedia cargada"
+            carpeta.mkdir(parents=True, exist_ok=True)
+            for path in sorted(self.adjuntos_usados):
+                shutil.copy2(path, carpeta / path.name)
+                self.recursos_nuevos.append(
+                    (_gen_id(), f"web_resources/Multimedia cargada/{path.name}"))
+            logger.info(f"  {len(self.adjuntos_usados)} archivos del curso adjuntados")
         # Repositorio de casos: las fichas se suben como archivos del curso
         # (la planilla las pide como repositorio, no como página propia), y
         # el equipo las enlaza desde donde corresponda.
