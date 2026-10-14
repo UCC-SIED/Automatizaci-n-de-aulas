@@ -621,3 +621,39 @@ class TestLaActividadSugeridaConBuzon:
         aplicar_comentarios(soup, comentarios)
         assert comentarios[0]["_aplicado"] is False
         assert "Una invitación sin puntos" in soup.get_text()
+
+    def test_el_pedido_de_buzon_se_cumple_con_el_mismo_buzon(self):
+        """La asesora pide el buzón en un globo aparte, anclado al párrafo
+        que aclara que la actividad no es obligatoria. Avisarlo mandaba a
+        revisar a mano algo que el otro comentario ya resolvió."""
+        assert _clasificar(
+            "Para maquetación: agregar buzón de entrega") == "buzon_de_entrega"
+        soup = BeautifulSoup(
+            '<table><tr><th><p><strong>¿Cómo vengo hasta acá?</strong></p>'
+            '<p>Consigna.</p></th></tr></table>'
+            '<p>La actividad no es obligatoria; sin embargo, se habilitará '
+            'un espacio para subirla.</p>', "html.parser")
+        comentarios = [
+            {"accion": "consigna_de_sugerida",
+             "instruccion": self.INSTRUCCION_M1,
+             "anclado": "¿Cómo vengo hasta acá?"},
+            {"accion": "buzon_de_entrega",
+             "instruccion": "Para maquetación: agregar buzón de entrega",
+             "anclado": "La actividad no es obligatoria; sin embargo, se "
+                        "habilitará un espacio para subirla."},
+        ]
+        aplicar_comentarios(soup, comentarios)
+        assert comentarios[1]["_aplicado"] is True
+
+    def test_sin_buzon_abierto_el_pedido_sigue_pendiente(self):
+        soup = BeautifulSoup(
+            '<p>La actividad no es obligatoria; sin embargo, se habilitará '
+            'un espacio para subirla.</p>', "html.parser")
+        comentarios = [{
+            "accion": "buzon_de_entrega",
+            "instruccion": "Para maquetación: agregar buzón de entrega",
+            "anclado": "La actividad no es obligatoria; sin embargo, se "
+                       "habilitará un espacio para subirla.",
+        }]
+        aplicar_comentarios(soup, comentarios)
+        assert not comentarios[0].get("_aplicado")

@@ -154,6 +154,12 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     if "llamado a la accion" in n and "consigna" in n \
             and re.search(r"desde\s+el\s+punto\s*(\d+)?", n):
         return "consigna_desde_el_punto"
+    # "Agregar buzón de entrega": el asesor lo pide en un globo aparte,
+    # anclado al párrafo que aclara que la actividad no es obligatoria. Es
+    # el mismo pedido que la consigna de la actividad sugerida, y se
+    # considera cumplido cuando ese buzón se abrió (ver aplicar_comentarios).
+    if re.search(r"buz[oó]n", n) and re.search(r"agregar|abrir|habilitar", n):
+        return "buzon_de_entrega"
 
     # Señales negativas primero (NO encuadrar)
     # "con sangria"/"sangria sin" salieron de acá: pedían sangrar, y esta
@@ -1379,3 +1385,14 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
             tramo[0].replace_with(BeautifulSoup(nuevo, "html.parser"))
             for extra in tramo[1:]:
                 extra.decompose()
+
+    # "Agregar buzon de entrega" es el mismo pedido que la consigna de la
+    # actividad sugerida, escrito en un globo aparte y anclado al parrafo
+    # que aclara que la actividad no es obligatoria. Si en este modulo ya
+    # se abrio ese buzon, el pedido esta cumplido: avisarlo mandaba a
+    # revisar a mano algo que ya estaba hecho.
+    if any(c.get("_destino_extraido") == "sugerida" and c.get("_aplicado")
+           for c in comentarios):
+        for c in comentarios:
+            if c.get("accion") == "buzon_de_entrega":
+                c["_aplicado"] = True
