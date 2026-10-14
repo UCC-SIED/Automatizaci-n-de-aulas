@@ -460,3 +460,62 @@ class TestLaFiguraDeDisenoLlegaATodasPartes:
                 '</figcaption></figure></div></div>')
         salida = reemplazar_figuras_diseno(html, 2, indice, set())
         assert "height: 200px" in salida and "object-fit: cover" in salida
+
+
+class TestElProtocoloDeTransparenciaSeAdjunta:
+    """Las tres actividades lo enlazan a Drive con la aclaración "el archivo
+    debe ser descargable". El archivo está en la carpeta, así que se adjunta
+    al paquete: la descarga no depende de los permisos de la unidad."""
+
+    URL = ("https://docs.google.com/spreadsheets/d/"
+           "1VoFjbXU2hFNrMWeffjlTqyM2dyYyVomS/edit?usp=drive_link")
+    PARRAFO = (
+        "Se recomienda que el aporte de la IA no exceda el 30 % del trabajo, "
+        "que su uso esté correctamente citado y que no se utilice para "
+        "elaborar reflexiones personales, fundamentaciones y/o conclusiones. "
+        "En el caso de utilizarla para la realización de la actividad, deberá "
+        "completar y entregar completo el protocolo de transparencia.")
+
+    def test_el_ancla_se_encuentra_en_un_parrafo_largo(self):
+        """Son tres palabras al final de un párrafo de 325 caracteres, el
+        único lugar del DOCX donde se lo nombra. El límite de longitud lo
+        descartaba y el pedido fallaba en silencio."""
+        from maquetador.ingest.docx_comments import _buscar_elemento
+        soup = BeautifulSoup(f"<p>{self.PARRAFO}</p>", "html.parser")
+        assert _buscar_elemento(soup, "protocolo de transparencia") is not None
+
+    def test_un_candidato_mejor_le_sigue_ganando(self):
+        """El último recurso no puede pisar a un subtítulo con ese texto."""
+        from maquetador.ingest.docx_comments import _buscar_elemento
+        soup = BeautifulSoup(
+            f"<p>{self.PARRAFO}</p><h3>Protocolo de transparencia</h3>",
+            "html.parser")
+        el = _buscar_elemento(soup, "protocolo de transparencia")
+        assert el.name == "h3"
+
+    def test_solo_la_frase_queda_enlazada(self):
+        from maquetador.ingest.docx_comments import aplicar_comentarios
+        soup = BeautifulSoup(f"<p>{self.PARRAFO}</p>", "html.parser")
+        aplicar_comentarios(soup, [{
+            "accion": "enlace_descargable",
+            "instruccion": f"Para maquetación: {self.URL} archivo debe ser "
+                           "descargable",
+            "anclado": "protocolo de transparencia",
+        }])
+        a = soup.find("a")
+        assert a is not None
+        assert a.get_text(strip=True) == "protocolo de transparencia"
+        assert "Se recomienda que el aporte" in soup.get_text()
+
+    def test_se_publica_sin_el_copia_de_de_drive(self):
+        """El estudiante ve el nombre del archivo en el enlace."""
+        from maquetador.build.imscc_builder import GeneradorAula
+        nombre = GeneradorAula._nombre_publicado_de_adjunto(
+            Path("Copia de Protocolo de transparencia.xlsx"))
+        assert nombre == "Protocolo de transparencia.xlsx"
+
+    def test_un_nombre_sin_copia_de_no_se_toca(self):
+        from maquetador.build.imscc_builder import GeneradorAula
+        nombre = GeneradorAula._nombre_publicado_de_adjunto(
+            Path("Protocolo de transparencia.xlsx"))
+        assert nombre == "Protocolo de transparencia.xlsx"

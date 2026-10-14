@@ -546,6 +546,16 @@ def _buscar_elemento(soup, anclado: str):
             # internas como instrumentos..." en la introducción no debe
             # ganarle al subtítulo real "Auditorías internas" más abajo).
             score = len(clave)
+        elif clave in t:
+            # El ancla está en un párrafo largo y no hay nada mejor: vale
+            # como último recurso, con el puntaje más bajo posible, así
+            # cualquier candidato de los de arriba le gana. Antes se
+            # descartaba y el pedido fallaba en silencio: el link al
+            # protocolo de transparencia de Metodología II está anclado a
+            # tres palabras al final de un párrafo de 325 caracteres —el
+            # único lugar del DOCX donde se lo nombra— y las tres
+            # actividades lo publicaban sin enlazar.
+            score = 1
         else:
             continue
         if score > mejor_score:

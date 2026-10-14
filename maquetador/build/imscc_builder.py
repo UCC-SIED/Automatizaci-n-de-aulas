@@ -2848,6 +2848,16 @@ class GeneradorAula:
         self._eliminar_recurso(rref)
 
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _nombre_publicado_de_adjunto(path) -> str:
+        """El nombre con que se publica el adjunto.
+
+        Sin el "Copia de " que le deja Drive: es ruido del proceso y el
+        estudiante lo ve en el enlace ("Copia de Protocolo de
+        transparencia.xlsx").
+        """
+        return re.sub(r"^\s*copia\s+de\s+", "", path.name, flags=re.I)
+
     def _adjuntar_archivos_del_curso(self, html: str) -> str:
         """Los enlaces a Drive cuyo archivo está en la carpeta del curso
         pasan a apuntar al archivo del paquete.
@@ -2880,11 +2890,12 @@ class GeneradorAula:
                             if texto in normalizar(p.stem)), None)
             if destino is None:
                 continue
+            publicado = self._nombre_publicado_de_adjunto(destino)
             a["href"] = ("$IMS-CC-FILEBASE$/Multimedia%20cargada/"
-                         + quote(destino.name)
+                         + quote(publicado)
                          + "?canvas_=1&canvas_qs_wrap=1")
             a["class"] = "instructure_file_link instructure_scribd_file"
-            a["title"] = destino.name
+            a["title"] = publicado
             a["target"] = "_blank"
             self.adjuntos_usados.add(destino)
             cambio = True
@@ -3055,9 +3066,10 @@ class GeneradorAula:
             carpeta = self.working / "web_resources" / "Multimedia cargada"
             carpeta.mkdir(parents=True, exist_ok=True)
             for path in sorted(self.adjuntos_usados):
-                shutil.copy2(path, carpeta / path.name)
+                publicado = self._nombre_publicado_de_adjunto(path)
+                shutil.copy2(path, carpeta / publicado)
                 self.recursos_nuevos.append(
-                    (_gen_id(), f"web_resources/Multimedia cargada/{path.name}"))
+                    (_gen_id(), f"web_resources/Multimedia cargada/{publicado}"))
             logger.info(f"  {len(self.adjuntos_usados)} archivos del curso adjuntados")
         # Repositorio de casos: las fichas se suben como archivos del curso
         # (la planilla las pide como repositorio, no como página propia), y
