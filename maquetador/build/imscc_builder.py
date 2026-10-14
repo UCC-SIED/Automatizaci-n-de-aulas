@@ -31,7 +31,7 @@ import xml.etree.ElementTree as ET
 import warnings
 
 import mammoth
-from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
+from bs4 import BeautifulSoup, NavigableString, XMLParsedAsHTMLWarning
 
 # Leemos XML de topics/quizzes con el parser HTML de BeautifulSoup a propósito
 # (solo medimos longitud de texto); silenciamos el aviso correspondiente.
@@ -128,6 +128,88 @@ def _genero_texto(texto: str) -> str:
     if fem > masc:
         return "f"
     return None
+
+
+# --------------------------------------------------------------------- #
+#  Ficha del "Equipo docente" de la página de inicio
+# --------------------------------------------------------------------- #
+# Los dos temas traen la MISMA ficha, pero rellenada distinto: el aula base
+# de posgrado deja escrito qué va en cada renglón ("Nombre y Apellido del
+# docente contenidista", "Titulación relevante.") y la de educación los
+# vació dejando un punto o unos puntos suspensivos. Buscar por ese texto
+# —como se hacía— funcionaba solo en posgrado: en educación la ficha salía
+# con la foto genérica, el nombre en blanco y sin la biografía.
+#
+# Por eso ahora se busca por ESTRUCTURA, que es la que comparten: el <h3>
+# de la sección, la foto al costado y los renglones de texto al lado.
+_PLACEHOLDERS_FICHA = ("nombre y apellido del docente", "titulacion relevante")
+
+
+def _es_hueco_de_ficha(p) -> bool:
+    """¿Este <p> es un renglón de la ficha esperando que lo completen?
+
+    Lo es si no tiene texto propio —solo puntos o puntos suspensivos— o si
+    tiene el texto de relleno del aula base de posgrado. NO lo es el <p>
+    que únicamente sostiene el iconito de 26px del renglón, ni el <p>
+    vacío que hace de espaciador.
+    """
+    bruto = "".join(p.strings).replace("\xa0", " ")
+    if not bruto.strip():
+        return False          # el icono solo, o un espaciador
+    if not bruto.strip(" .·…\t\r\n"):
+        return True           # "." / "..." : el renglón vaciado
+    return any(k in normalizar(bruto) for k in _PLACEHOLDERS_FICHA)
+
+
+def _foto_de_ficha(seccion):
+    """La foto de la sección: la única imagen que no es el icono de 26px."""
+    for img in seccion.find_all("img"):
+        if img.get("width") != "26":
+            return img
+    return None
+
+
+def _seccion_de_ficha(soup, titulo: str):
+    """(contenedor, foto, [huecos]) de "Profesor autor" o "Tutores"."""
+    enc = next((h for h in soup.find_all(["h3", "h4"])
+                if normalizar(h.get_text(" ", strip=True)) == normalizar(titulo)),
+               None)
+    if enc is None:
+        return None, None, []
+    seccion = enc.find_next_sibling("div")
+    if seccion is None:
+        return None, None, []
+    huecos = [p for p in seccion.find_all("p") if _es_hueco_de_ficha(p)]
+    return seccion, _foto_de_ficha(seccion), huecos
+
+
+def _escribir_en_hueco(p, texto: str) -> None:
+    """Deja `texto` en el renglón, conservando el iconito que lo acompaña."""
+    iconos = [img.extract() for img in p.find_all("img")]
+    p.clear()
+    for icono in iconos:
+        p.append(icono)
+    marca = BeautifulSoup(f"<strong>{xml_escape(texto)}</strong>", "html.parser")
+    if iconos:
+        p.append(NavigableString(" "))
+    p.append(marca)
+
+
+# La planilla a veces nombra la asignatura con la carrera pegada entre
+# paréntesis ("Metodología de la investigación II (Lic. en Gestión de la
+# Educación Especial)"). Eso es dato de catálogo, no el nombre que va en el
+# banner de portada ni en el enlace al programa: en el aula la asignatura se
+# llama por su nombre a secas. En posgrado no pasaba porque esas planillas
+# ya lo traían limpio.
+_PAT_CARRERA_PEGADA = re.compile(
+    r"\s*\(\s*(?:lic\.?|licenciatura|mgter\.?|mag[ií]ster|maestr[ií]a|"
+    r"esp\.?|especializaci[óo]n|doctorado|dr\.?|tec\.?|tecnicatura|prof\.?|"
+    r"profesorado|ciclo|carrera)\b[^)]*\)\s*$", re.I)
+
+
+def nombre_de_asignatura(nombre: str) -> str:
+    """El nombre de la asignatura como va al aula, sin la carrera pegada."""
+    return _PAT_CARRERA_PEGADA.sub("", (nombre or "").strip()).strip()
 
 
 def _elegir_foto_docente(candidatas: list, nombre: str):
@@ -715,6 +797,62 @@ class GeneradorAula:
         self.meta = pat_meta.sub(lambda _: meta_items, self.meta, count=1)
 
     # ------------------------------------------------------------------ #
+    def _completar_ficha_docente(self, html: str, nombre: str, bio: str,
+                                 url_foto: str) -> tuple:
+        """Completa el popup "Equipo docente" por la estructura de la ficha.
+
+        Sirve para los dos temas: posgrado deja el texto de relleno escrito
+        ("Nombre y Apellido del docente contenidista") y educación lo vació
+        dejando un punto, así que buscar por ese texto solo funcionaba en
+        uno. Acá se ubican las secciones por su <h3>, la foto por ser la
+        única imagen que no es el iconito, y los renglones por estar
+        vacíos. Lo que ya quedó lleno no se toca.
+
+        El tutor de la Sección 1 sale, por defecto, con los datos del
+        docente autor: es la convención del equipo cuando la carpeta no
+        trae tutores (acá el Biodata solo trae al profesor autor).
+        """
+        if not (nombre or bio or url_foto):
+            return html, []
+        soup = BeautifulSoup(html, "html.parser")
+        cambios = []
+        for titulo, estilo_foto, alt_foto in (
+                ("Profesor autor",
+                 "border-radius: 50%; object-fit: cover; "
+                 "width: 150px; height: 150px;",
+                 "Fotografía del docente"),
+                ("Tutores",
+                 "height: auto; width: 100px;",
+                 "Fotografía del tutor")):
+            _seccion, img, huecos = _seccion_de_ficha(soup, titulo)
+            if img is not None and url_foto \
+                    and not img.get("alt", "").startswith("Fotograf"):
+                img["src"] = url_foto
+                img["style"] = estilo_foto
+                img["alt"] = f"{alt_foto} {nombre}".strip() if nombre else alt_foto
+                img.attrs.pop("role", None)
+                if titulo == "Tutores":
+                    # La del tutor va con el borde institucional, no en
+                    # círculo (así la maqueta el equipo a mano).
+                    img["class"] = ["dp-image-rounded-10", "dp-image-bordered"]
+                cambios.append(f"foto ({titulo.lower()})")
+            # Primer renglón el nombre, segundo la titulación/biografía.
+            # El tutor lleva SOLO el nombre, como en el aula base de
+            # posgrado —que para el tutor trae un único renglón—: su
+            # biografía no la tenemos, y repetir ahí la del docente autor
+            # son seiscientos caracteres de investigación duplicados.
+            valores = (nombre,) if titulo == "Tutores" else (nombre, bio)
+            for hueco, texto in zip(huecos, valores):
+                if texto:
+                    _escribir_en_hueco(hueco, texto)
+            # Los renglones que sobran son relleno del aula base ("...") y
+            # no se publican: el equipo los completa al asignar el tutor.
+            for sobrante in huecos[len(valores):]:
+                sobrante.decompose()
+            if huecos and (nombre or bio):
+                cambios.append(f"datos ({titulo.lower()})")
+        return (str(soup), cambios) if cambios else (html, [])
+
     def _personalizar_inicio(self):
         """Página de inicio: foto del docente, nombre y titulación/biografía
         en el popup 'Equipo docente'. El video de bienvenida queda manual
@@ -753,18 +891,20 @@ class GeneradorAula:
         # El aula base trae el placeholder "Nombre de la asignatura - EP.png"
         # y, como alt, el propio nombre del archivo. El alt tiene que describir
         # la imagen: va el nombre de la asignatura.
-        if self.spec.nombre:
-            propio = self._banner_de("portada", self.spec.nombre)
+        asignatura = nombre_de_asignatura(self.spec.nombre)
+        if asignatura:
+            propio = self._banner_de("portada", asignatura)
             if propio:
-                html = self._poner_banner(html, propio, self.spec.nombre)
+                html = self._poner_banner(html, propio, asignatura)
                 cambios.append("banner de portada")
             else:
                 html, nb = re.subn(r'alt="Nombre de la asignatura[^"]*"',
-                                   f'alt="{xml_escape(self.spec.nombre)}"', html)
+                                   f'alt="{xml_escape(asignatura)}"', html)
                 if nb:
                     cambios.append("alt del banner")
 
         # --- foto del docente ---
+        url_foto = ""      # la guarda el bloque de abajo, para la ficha
         foto_item = next((i for k, i in items.items() if "fotografia" in k), None)
         foto = (foto_item.fuente.archivo if foto_item and foto_item.fuente.archivo
                 else _elegir_foto_docente(
@@ -793,7 +933,8 @@ class GeneradorAula:
                             / "Multimedia cargada" / foto.name)
             destino_rel = f"web_resources/Multimedia cargada/{nombre_final}"
             self.recursos_nuevos.append((_gen_id(), destino_rel))
-            url = "$IMS-CC-FILEBASE$/Multimedia%20cargada/" + quote(nombre_final)
+            url = url_foto = "$IMS-CC-FILEBASE$/Multimedia%20cargada/" \
+                + quote(nombre_final)
             html, n = re.subn(
                 r'(<img[^>]*alt="Avatar docente"[^>]*src=")[^"]*(")',
                 lambda m: m.group(1) + url + m.group(2), html)
@@ -890,6 +1031,15 @@ class GeneradorAula:
                 if ng:
                     cambios.append("género docente")
 
+        # --- la ficha, por estructura ---
+        # Lo de arriba completa la ficha buscando el texto de relleno del
+        # aula base de posgrado. El aula base de educación no lo trae —dejó
+        # los renglones con un punto— y la ficha salía con la foto genérica,
+        # sin nombre y sin biografía. Esta pasada la completa por su forma,
+        # que las dos comparten, y no toca lo que ya haya quedado lleno.
+        html, nuevos = self._completar_ficha_docente(html, nombre, bio, url_foto)
+        cambios.extend(nuevos)
+
         # --- video de bienvenida (Canvas Studio) ---
         # El bloque "Te damos la bienvenida" del aula base queda con su
         # párrafo vacío: el embed se pega a mano. Si la planilla trae el
@@ -966,7 +1116,8 @@ class GeneradorAula:
             self.recursos_nuevos.append((_gen_id(), destino_rel))
             url = ("$IMS-CC-FILEBASE$/Multimedia%20cargada/" + quote(prog.name)
                    + "?canvas_=1&amp;canvas_qs_wrap=1")
-            etiqueta = f"Programa {self.spec.nombre}" if self.spec.nombre else "Programa"
+            asignatura = nombre_de_asignatura(self.spec.nombre)
+            etiqueta = f"Programa {asignatura}" if asignatura else "Programa"
             bloque1 = (
                 '<div class="dp-content-block kl_custom_block_1">\n'
                 '<h2 class="dp-has-icon"><i class="fas fa-list-ul" aria-hidden="true">'
