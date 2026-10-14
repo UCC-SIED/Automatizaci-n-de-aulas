@@ -76,6 +76,43 @@ _KW_APERTURA_FORO = ("apertura", "presentacion", "bienvenida",
                      "introductorio", "introduccion")
 
 
+# Prefijo de área/carrera con que el equipo nombra las carpetas de Drive
+# ("Ed. Especial - Metodología…"). No es parte del nombre de la asignatura.
+_PAT_PREFIJO_AREA = re.compile(
+    r"^\s*(?:ed\.?\s*especial|educaci[óo]n\s+especial|posgrado|grado|"
+    r"lic\.?|licenciatura|mgter\.?|maestr[ií]a)\s*[-–—:]\s*", re.I)
+
+
+def _nombre_publicado(nombre_planilla: str, nombre_carpeta: str, spec) -> str:
+    """El nombre de la asignatura que se publica en el aula.
+
+    Manda la planilla, salvo que la CARPETA nombre la asignatura con más
+    palabras: ahí la planilla la está abreviando. En Metodología II la
+    planilla dice "Metodología de la investigación II (Lic. en Gestión de
+    la Educación Especial)" y la carpeta "Ed. Especial - Metodología de la
+    Investigación Educativa II" —que es como se llama el aula—.
+
+    La carpeta NO gana cuando dice lo mismo: viene de Drive y a veces llega
+    sin acentos ("Creacion de Valor en la Economia de la Experiencia"), y
+    ahí la planilla está mejor escrita.
+    """
+    from maquetador.build.imscc_builder import nombre_de_asignatura
+    planilla = nombre_de_asignatura(nombre_planilla)
+    carpeta = nombre_de_asignatura(_PAT_PREFIJO_AREA.sub("", nombre_carpeta or ""))
+    if not carpeta:
+        return planilla
+    if not planilla:
+        return carpeta
+    pal_planilla = set(normalizar(planilla).split())
+    pal_carpeta = set(normalizar(carpeta).split())
+    if pal_planilla < pal_carpeta:      # la carpeta dice todo eso y algo más
+        spec.issues.append(Issue(Severidad.INFO,
+            f"Nombre de la asignatura tomado de la carpeta ('{carpeta}'): la "
+            f"planilla la abrevia ('{planilla}').", "Página de inicio"))
+        return carpeta
+    return planilla
+
+
 _PAT_TITULO_NUMERADO = re.compile(r"^\s*(\d+(?:\.\d+)*)\.?\s*(.*)$", re.S)
 
 
@@ -148,6 +185,7 @@ def reconciliar(spec: CourseSpec, inv: InventarioCurso) -> CourseSpec:
     if not spec.nombre or any(k in _n for k in ("estructura", "para maquetacion",
                                                 "para maquetación", "planilla")):
         spec.nombre = inv.nombre_curso
+    spec.nombre = _nombre_publicado(spec.nombre, inv.nombre_curso, spec)
     spec.issues.extend(inv.issues)
     # Las figuras de DISEÑO las usa el generador para reemplazar las
     # imágenes embebidas de los DOCX (mejor calidad).

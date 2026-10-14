@@ -213,3 +213,45 @@ class TestElGeneroDelRotulo:
         assert _genero_texto(
             "Doctor en Economía; Licenciado en Administración. "
             "Profesor titular e investigador.") == "m"
+
+
+class TestDeDondeSaleElNombreDelAula:
+    """Manda la planilla, salvo que la carpeta de Drive nombre la asignatura
+    con más palabras: ahí la planilla la está abreviando."""
+
+    def _elegir(self, planilla, carpeta):
+        from maquetador.ingest.reconciler import _nombre_publicado
+        from maquetador.models import CourseSpec
+        return _nombre_publicado(planilla, carpeta, CourseSpec(nombre="x"))
+
+    def test_gana_la_carpeta_cuando_dice_mas(self):
+        assert self._elegir(
+            "Metodología de la investigación II "
+            "(Lic. en Gestión de la Educación Especial)",
+            "Ed. Especial - Metodología de la Investigación Educativa II"
+        ) == "Metodología de la Investigación Educativa II"
+
+    def test_gana_la_planilla_cuando_dicen_lo_mismo(self):
+        """La carpeta viene de Drive y a veces llega sin acentos: ahí la
+        planilla está mejor escrita."""
+        assert self._elegir(
+            "Creación de Valor en la Economía de la Experiencia",
+            "Creacion de Valor en la Economia de la Experiencia"
+        ) == "Creación de Valor en la Economía de la Experiencia"
+
+    @pytest.mark.parametrize("nombre", [
+        "Gestión de la Calidad",
+        "Neurociencia aplicada a las organizaciones I",
+        "Gestión del Riesgo y la Incertidumbre",
+    ])
+    def test_las_materias_ya_entregadas_no_cambian(self, nombre):
+        assert self._elegir(nombre, nombre) == nombre
+
+    def test_sin_planilla_queda_la_carpeta(self):
+        assert self._elegir(
+            "", "Ed. Especial - Metodología de la Investigación Educativa II"
+        ) == "Metodología de la Investigación Educativa II"
+
+    def test_el_prefijo_de_area_no_es_parte_del_nombre(self):
+        assert self._elegir(
+            "", "Educación Especial - Didáctica General") == "Didáctica General"
