@@ -170,9 +170,15 @@ def _foto_de_ficha(seccion):
 
 
 def _seccion_de_ficha(soup, titulo: str):
-    """(contenedor, foto, [huecos]) de "Profesor autor" o "Tutores"."""
+    """(contenedor, foto, [huecos]) de "Profesor autor" o "Tutores".
+
+    El rótulo se compara por su arranque porque para entonces ya puede
+    estar en femenino ("Profesora autora"): el ajuste de género corre
+    antes que esto.
+    """
+    clave = normalizar(titulo).split()[0]
     enc = next((h for h in soup.find_all(["h3", "h4"])
-                if normalizar(h.get_text(" ", strip=True)) == normalizar(titulo)),
+                if normalizar(h.get_text(" ", strip=True)).startswith(clave)),
                None)
     if enc is None:
         return None, None, []
@@ -1022,14 +1028,23 @@ class GeneradorAula:
                               html, count=1)
             if n:
                 cambios.append("titulación/biografía")
-            # Género para "Profesor/a autor/a" (el aula base trae el
-            # femenino por defecto): se ajusta a masculino si la bio lo
-            # indica claramente.
-            if _genero_texto(bio + " " + nombre) == "m":
+            # Género del rótulo "Profesor/a autor/a". Los DOS temas traen el
+            # masculino en el aula base —el comentario de antes decía lo
+            # contrario y por eso el ajuste no corría nunca—, así que lo que
+            # hace falta es el camino inverso: pasarlo a femenino cuando la
+            # biografía lo dice. Adriana Di Francesco ("Dra. en Educación…
+            # Licenciada… Profesora… Directora") salía como "Profesor autor".
+            genero = _genero_texto(bio + " " + nombre)
+            if genero == "f":
+                html, ng = re.subn(r">\s*Profesor autor\s*<",
+                                   ">Profesora autora<", html, count=1)
+            elif genero == "m":
                 html, ng = re.subn(r">\s*Profesora autora\s*<",
                                    ">Profesor autor<", html, count=1)
-                if ng:
-                    cambios.append("género docente")
+            else:
+                ng = 0
+            if ng:
+                cambios.append(f"género docente ({genero})")
 
         # --- la ficha, por estructura ---
         # Lo de arriba completa la ficha buscando el texto de relleno del

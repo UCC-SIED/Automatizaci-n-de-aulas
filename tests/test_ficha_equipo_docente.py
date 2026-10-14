@@ -184,3 +184,32 @@ class TestElNombreDeLaAsignatura:
     def test_vacio_no_rompe(self):
         assert nombre_de_asignatura("") == ""
         assert nombre_de_asignatura(None) == ""
+
+
+class TestElGeneroDelRotulo:
+    """Los DOS temas traen "Profesor autor" en el aula base. El ajuste
+    existente solo sabía pasar de femenino a masculino, así que nunca
+    corría: Adriana Di Francesco salía como "Profesor autor"."""
+
+    def test_la_ficha_se_encuentra_igual_en_femenino(self):
+        """El género se ajusta ANTES de completar la ficha, así que para
+        entonces el rótulo puede decir "Profesora autora"."""
+        soup = BeautifulSoup(
+            FICHA_EDUCACION.replace("Profesor autor", "Profesora autora"),
+            "html.parser")
+        _s, foto, huecos = _seccion_de_ficha(soup, "Profesor autor")
+        assert foto is not None
+        assert len(huecos) == 2
+
+    def test_una_biografia_femenina_se_detecta(self):
+        from maquetador.build.imscc_builder import _genero_texto
+        assert _genero_texto(
+            "Dra. en Educación; Licenciada en Ciencias de la Educación. "
+            "Profesora de Historia. Directora de Equipo de investigación."
+        ) == "f"
+
+    def test_una_masculina_tambien(self):
+        from maquetador.build.imscc_builder import _genero_texto
+        assert _genero_texto(
+            "Doctor en Economía; Licenciado en Administración. "
+            "Profesor titular e investigador.") == "m"
