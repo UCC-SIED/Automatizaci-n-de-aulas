@@ -11,6 +11,7 @@ Convenciones observadas en casos reales (todas soportadas):
   C) "a - Etapa 1_ Programa" … "d - Etapa 4_ Maquetación"
 """
 
+import os
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -172,15 +173,54 @@ class InventarioCurso:
         }
 
 
+# Windows no sabe abrir una ruta cuyo último tramo termina en espacio (o en
+# punto): la API recorta esos caracteres al resolverla, así que la carpeta
+# existe, se lista desde afuera, pero `is_dir()` y `open()` dicen que no. Los
+# ZIP de Drive traen esos nombres tal cual el asesor los tipeó: "Medios,
+# tecnologías digitales y lenguajes en educación " llegó así y el escaneo no
+# encontraba ni la planilla ni los módulos —parecía una carpeta vacía—.
+# El prefijo \\?\ desactiva esa normalización y la ruta se vuelve usable.
+_PREFIJO_RUTA_LARGA = "\\\\?\\"
+
+
+def _ruta_accesible(p: Path) -> Path:
+    """La misma ruta en una forma que Windows sí pueda abrir."""
+    if os.name != "nt" or str(p).startswith(_PREFIJO_RUTA_LARGA) or p.exists():
+        return p
+    absoluta = str(p) if p.is_absolute() else str(Path.cwd() / p)
+    largo = Path(_PREFIJO_RUTA_LARGA + absoluta)
+    return largo if largo.exists() else p
+
+
+def _subcarpeta_unica(raiz: Path):
+    """La única subcarpeta de `raiz`, o None.
+
+    Se mira con os.scandir porque trae el tipo desde la propia enumeración:
+    un `Path.is_dir()` sobre un nombre terminado en espacio devuelve False
+    aunque sea una carpeta.
+    """
+    hijos = []
+    try:
+        with os.scandir(raiz) as entradas:
+            for e in entradas:
+                if e.name.startswith("."):
+                    continue
+                hijos.append((e.name, e.is_dir()))
+    except OSError:
+        return None
+    if len(hijos) != 1 or not hijos[0][1]:
+        return None
+    return _ruta_accesible(raiz / hijos[0][0])
+
+
 def _encontrar_raiz(carpeta: Path) -> Path:
     """Los ZIP de Drive suelen envolver todo en 1-2 niveles de carpeta única."""
-    raiz = carpeta
+    raiz = _ruta_accesible(Path(carpeta))
     for _ in range(3):
-        hijos = [h for h in raiz.iterdir() if not h.name.startswith(".")]
-        if len(hijos) == 1 and hijos[0].is_dir():
-            raiz = hijos[0]
-        else:
+        hijo = _subcarpeta_unica(raiz)
+        if hijo is None:
             break
+        raiz = hijo
     return raiz
 
 
@@ -247,7 +287,14 @@ def escanear(carpeta: Path) -> InventarioCurso:
         num = _numero_modulo(path.name)
 
         # --- Planilla de estructura (la lleva la etapa de maquetación) ---
-        if ext == ".xlsx" and "estructura" in nombre and "maquetaci" in nombre:
+        # El nombre canónico es "Estructura general - Para maquetación", pero
+        # no siempre llega entero: en Medios/Tecnologías el asesor la guardó
+        # como "Para maquetación (1210124_…)" y el escaneo la daba por
+        # faltante, que es un bloqueante. Alcanza con "maquetación" si está
+        # en la carpeta de la etapa 4, que es donde vive la planilla.
+        if ext == ".xlsx" and "maquetaci" in nombre \
+                and ("estructura" in nombre or "maquetaci" in carpeta_padre
+                     or "etapa 4" in normalizar(str(path.parent))):
             if inv.estructura_xlsx:
                 inv.issues.append(Issue(Severidad.AVISO,
                     f"Hay más de una planilla de estructura; uso '{inv.estructura_xlsx.name}' "
