@@ -144,3 +144,62 @@ class TestLaSangriaDeLaCita:
         aplicar_cita(p)
         assert "text-align: justify" in p["style"]
         assert "margin-left: 80px" in p["style"]
+
+
+class TestLaRubricaLlegaASuActividad:
+    """Las rúbricas vienen en la carpeta de Diseño nombradas por la
+    actividad ("Actividad obligatoria 1 rubrica_evaluacion.jpg"). No son
+    figuras del módulo —no tienen epígrafe "Figura N"— así que el reemplazo
+    de figuras no las ubicaba: quedaban avisadas como sobrantes y no
+    llegaban nunca al estudiante."""
+
+    def _generador(self, imagenes):
+        from pathlib import Path
+        from maquetador.build.imscc_builder import GeneradorAula
+        from maquetador.models import CourseSpec
+        spec = CourseSpec(nombre="Materia")
+        spec.imagenes_diseno = [Path(n) for n in imagenes]
+        spec.tema = "educacion"
+        g = GeneradorAula(spec, {}, Path("."))
+        return g
+
+    @pytest.mark.parametrize("clave,esperado", [
+        ("actividad-obligatoria-m1", "Actividad obligatoria 1 rubrica_evaluacion.jpg"),
+        ("actividad-obligatoria-m2", "Actividad obligatoria 2 rubrica_evaluacion.jpg"),
+        ("actividad-final-integradora", "AFI rubrica_evaluacion.jpg"),
+    ])
+    def test_cada_rubrica_con_su_actividad(self, clave, esperado):
+        g = self._generador([
+            "Actividad obligatoria 1 rubrica_evaluacion.jpg",
+            "Actividad obligatoria 2 rubrica_evaluacion.jpg",
+            "AFI rubrica_evaluacion.jpg",
+            "M1_fig 1.jpg",
+        ])
+        assert g._rubrica_de(clave).name == esperado
+
+    def test_una_figura_comun_no_es_una_rubrica(self):
+        g = self._generador(["M1_fig 1.jpg", "esquema.jpg"])
+        assert g._rubrica_de("actividad-obligatoria-m1") is None
+
+    def test_sin_clave_no_busca_nada(self):
+        g = self._generador(["AFI rubrica_evaluacion.jpg"])
+        assert g._rubrica_de("") is None
+
+    def test_se_pega_al_pie_de_la_actividad(self):
+        g = self._generador(["AFI rubrica_evaluacion.jpg"])
+        html = ('<div class="dp-content-block content-block" '
+                'data-title="Actividad"><h3>Consigna</h3><p>Hacé esto.</p>'
+                "</div>")
+        salida = g._agregar_rubrica(html, "actividad-final-integradora",
+                                    "Actividad final integradora")
+        assert "Rúbrica de evaluación" in salida
+        assert "AFI%20rubrica_evaluacion.jpg" in salida or \
+               "AFI rubrica_evaluacion.jpg" in salida
+        # Adentro del bloque de la actividad, no suelta al final.
+        assert salida.rstrip().endswith("</div>")
+
+    def test_no_se_repite_si_ya_se_uso(self):
+        from pathlib import Path
+        g = self._generador(["AFI rubrica_evaluacion.jpg"])
+        g.figuras_usadas.add(Path("AFI rubrica_evaluacion.jpg"))
+        assert g._rubrica_de("actividad-final-integradora") is None

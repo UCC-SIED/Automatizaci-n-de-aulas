@@ -1468,6 +1468,57 @@ class GeneradorAula:
                 "borralo en Canvas.", "Actividades"))
         return salida
 
+    def _rubrica_de(self, clave: str):
+        """La imagen de la rúbrica que le corresponde a esta actividad.
+
+        Llegan en la carpeta de Diseño nombradas por la actividad
+        ("Actividad obligatoria 1 rubrica_evaluacion.jpg", "AFI
+        rubrica_evaluacion.jpg"). No son figuras del módulo —no tienen
+        epígrafe "Figura N"— así que el reemplazo de figuras no las ubicaba
+        y quedaban avisadas como sobrantes, sin llegar nunca al estudiante.
+        """
+        if not clave:
+            return None
+        m_num = re.search(r"m(\d+)$", clave)
+        es_afi = "integradora" in clave
+        for path in getattr(self.spec, "imagenes_diseno", []):
+            if path in self.figuras_usadas:
+                continue
+            nombre = normalizar(path.stem)
+            if "rubrica" not in nombre and "rúbrica" not in path.stem.lower():
+                continue
+            if es_afi and ("afi" in nombre.split() or "integradora" in nombre):
+                return path
+            if m_num and "obligatoria" in clave and "obligatoria" in nombre \
+                    and re.search(rf"\b{m_num.group(1)}\b", nombre):
+                return path
+            if m_num and "sugerida" in clave and "sugerida" in nombre \
+                    and re.search(rf"\b{m_num.group(1)}\b", nombre):
+                return path
+        return None
+
+    def _agregar_rubrica(self, html: str, clave: str, rotulo: str) -> str:
+        """Pega la rúbrica al pie de la actividad, dentro de su bloque."""
+        rubrica = self._rubrica_de(clave)
+        if rubrica is None:
+            return html
+        soup = BeautifulSoup(html, "html.parser")
+        bloque = soup.find("div", attrs={"data-title": "Actividad"}) \
+            or soup.find("div", class_="content-block")
+        if bloque is None:
+            return html
+        nombre = nombre_publicado_de_figura(rubrica)
+        self.figuras_usadas.add(rubrica)
+        alt = f"Rúbrica de evaluación — {rotulo}" if rotulo else "Rúbrica de evaluación"
+        bloque.append(BeautifulSoup(
+            '<h3>Rúbrica de evaluación</h3>'
+            '<p style="text-align: center;">'
+            f'<img class="{_FIG_CLASES_EXPANDIBLE}" '
+            f'style="width: {_FIG_ANCHO_MAX}px; height: auto;" '
+            f'src="__DISENO__/{nombre}" alt="{xml_escape(alt)}" '
+            'loading="lazy"></p>', "html.parser"))
+        return self._rutear_media(str(soup))
+
     def _rid_en_meta(self, content_type: str, patron_titulo: str) -> str:
         pat = re.compile(
             rf"<content_type>{content_type}</content_type>\s*"
@@ -1592,6 +1643,7 @@ class GeneradorAula:
         if clave:
             html = self._poner_banner(
                 html, self._banner_de(clave, rotulo_banner), rotulo_banner)
+        html = self._agregar_rubrica(html, clave, rotulo_banner)
         _escribir(archivos[0], html)
         self.assignments_escritos.add(rid)
         return True
