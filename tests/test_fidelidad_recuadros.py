@@ -27,9 +27,15 @@ class TestNoAnida:
         assert out.count('class="dp-callout') == 1
         assert "<blockquote" not in out
 
-    def test_la_cita_sin_recuadro_previo_si_se_encuadra(self):
+    def test_la_cita_sola_queda_sangrada_y_sin_caja(self):
+        """El estilo "Cita" de Word es una CITA, no un recuadro. Encuadrarla
+        armaba el "recuadro simple que no pidio la asesora" que marco la
+        revision de Metodologia II: los componentes salen solo cuando el
+        asesor los pide, con un comentario o una tabla."""
         out = procesar_contenido(f"<blockquote><p>{FRASE}</p></blockquote>")
-        assert out.count('class="dp-callout') == 1
+        assert 'class="dp-callout' not in out
+        assert "margin-left: 80px" in out
+        assert FRASE in out
 
     def test_el_comentario_no_encuadra_lo_que_ya_esta_encuadrado(self):
         soup = BeautifulSoup(

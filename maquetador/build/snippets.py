@@ -1542,7 +1542,20 @@ def _definiciones_citadas_tras_pregunta(soup):
         aplicar_cita(p)
 
 
+# Los componentes se arman SOLO cuando el asesor los pide: con un comentario
+# en el DOCX o metiendo el contenido en una tabla. Deducirlos del texto —que
+# es lo que hacen las frases de _CUES_PARRAFO— daba recuadros que nadie había
+# pedido, y el equipo no puede publicarlos: "está bien interpretado, pero si
+# no me lo pide el asesor no puedo marcarlo, así que la próxima dejalo texto
+# plano" (revisión de Metodología II, 16-10-2026). Ahí salieron un "No pases
+# de largo" sobre un "Es importante señalar…", un "Descubrí leyendo" y dos
+# bloques de video en páginas que no los pedían.
+INFERIR_COMPONENTES_POR_TEXTO = False
+
+
 def _detectar_cue(texto_norm: str) -> str:
+    if not INFERIR_COMPONENTES_POR_TEXTO:
+        return ""
     for tipo, frases in _CUES_PARRAFO:
         if texto_norm.startswith(frases):
             return tipo
@@ -1566,6 +1579,26 @@ def _absorber_siguientes(p) -> list:
     return extras
 
 
+def _hay_marcador_de_video(p) -> bool:
+    """¿El asesor marcó acá que va un video propio?
+
+    Se mira el párrafo y los que el recuadro absorbería: el marcador a
+    veces queda pegado al final de la invitación ("…mirar el siguiente
+    video conceptual. VIDEO M2.") y a veces va en un párrafo propio
+    debajo.
+    """
+    for elemento in [p] + _absorber_siguientes(p):
+        texto = elemento.get_text(" ", strip=True)
+        if not texto:
+            continue
+        if (_PAT_MARCADOR_VIDEO.match(texto)
+                or _PAT_MARCADOR_VIDEO_FINAL.search(texto)
+                or _PAT_AQUI_VA_VIDEO.match(texto)
+                or _PAT_EMBEBER_VIDEO.match(texto)):
+            return True
+    return False
+
+
 def _procesar_cues_parrafo(soup):
     # Bloques de video que YA venían armados de la tabla ("Embeber video: …"):
     # sus párrafos no se vuelven a mirar, si no el bloque salía duplicado y
@@ -1586,7 +1619,21 @@ def _procesar_cues_parrafo(soup):
         if not texto or len(texto) > 700:
             continue
         tipo = _detectar_cue(_norm(texto))
-        if not tipo and _PAT_VIDEO_INVIT.search(texto):
+        # El marcador del asesor SÍ arma el bloque, aunque la inferencia por
+        # texto esté apagada: "VIDEO M2.", "(AQUÍ VA VIDEO M1)" o "Embeber
+        # video: …" son pedidos explícitos, no una deducción de la prosa.
+        if not tipo and _hay_marcador_de_video(p):
+            tipo = "video"
+        # Un enlace real a YouTube/Vimeo tampoco es una deducción de la
+        # prosa: el video externo está ahí, y el equipo siempre lo publica
+        # como CTA "Auriculares on".
+        if not tipo and _PAT_VIDEO_INVIT.search(texto) and (
+                _PAT_URL_VIDEO.search(texto)
+                or any(_PAT_URL_VIDEO.search(s.get_text(" ", strip=True))
+                       for s in _absorber_siguientes(p))):
+            tipo = "video"
+        if not tipo and INFERIR_COMPONENTES_POR_TEXTO \
+                and _PAT_VIDEO_INVIT.search(texto):
             # Invitación a ver un video aunque no arranque con la frase-cue.
             # Si es una referencia a un video ya visto ("luego de ver el
             # video, ¿…?") y no trae enlace, no es un recuadro de video.
@@ -3379,9 +3426,18 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
         if bq.find(class_="dp-callout"):
             bq.unwrap()
             continue
+        # El estilo "Cita" de Word es una CITA, no un recuadro: va sangrada
+        # y sin caja. Encuadrarla armaba el "recuadro simple que no pidió la
+        # asesora" (revisión de Metodología II: el pasaje de Gutiérrez sobre
+        # Bourdieu salía adentro de una caja que nadie había marcado).
         inner = "".join(str(x) for x in bq.children).strip()
-        if inner:
-            bq.replace_with(BeautifulSoup(resaltado_simple(inner), "html.parser"))
+        if not inner:
+            continue
+        nuevo = BeautifulSoup(inner if "<p" in inner else f"<p>{inner}</p>",
+                              "html.parser")
+        for parrafo in nuevo.find_all("p"):
+            aplicar_cita(parrafo)
+        bq.replace_with(nuevo)
 
     # 1.55 Definición citada (APA) justo debajo de un encabezado-pregunta
     #      ("¿Qué es…?"): cita textual con sangría doble, sin caja.

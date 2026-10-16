@@ -573,7 +573,12 @@ def aplicar_cita(el) -> None:
     Doble sangría (izquierda Y derecha), como la cita textual larga en
     formato APA: sangrar solo de un lado no alcanza, se ve como un párrafo
     corrido con un margen cualquiera, no como una cita.
+
+    La izquierda son 80px y no 40: con un solo nivel la cita no se despega
+    del cuerpo. Salió revisando Metodología II, donde el pedido se repitió
+    en las seis citas del curso ("le falta aumentar la sangría una vez
+    más"). El margen derecho queda en 40.
     """
     estilo = el.get("style", "").rstrip("; ")
     el["style"] = ((estilo + "; " if estilo else "")
-                   + "margin-left: 40px; margin-right: 40px;")
+                   + "margin-left: 80px; margin-right: 40px;")

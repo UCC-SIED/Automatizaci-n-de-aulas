@@ -99,7 +99,7 @@ class TestCitaDeDefinicionTrasPregunta:
                 "<p>En otras palabras, un sistema de gestión de calidad "
                 "tiene por propósito organizar.</p>")
         out = procesar_contenido(html)
-        assert "margin-left: 40px; margin-right: 40px;" in out
+        assert "margin-left: 80px; margin-right: 40px;" in out
 
     def test_no_marca_un_parrafo_corto_tras_la_pregunta(self):
         """Sin cita APA de verdad al final (o muy corto), no es una

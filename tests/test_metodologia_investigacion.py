@@ -54,7 +54,7 @@ class TestSangriaEsCita:
                        "relaciones objetivas que condicionan las prácticas.",
         }])
         estilo = soup.find("p").get("style", "")
-        assert "margin-left: 40px" in estilo
+        assert "margin-left: 80px" in estilo
         assert "margin-right: 40px" in estilo
 
 
