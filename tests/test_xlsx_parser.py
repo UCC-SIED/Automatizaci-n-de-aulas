@@ -428,7 +428,10 @@ class TestNumeracionDeLasPaginas:
     @pytest.mark.parametrize("entrada,esperado", [
         ("1.1 Metodología", "1.1. Metodología"),
         ("1.1. - Planificación financiera", "1.1. Planificación financiera"),
-        ("2.1 - Valuación de empresas.", "2.1. Valuación de empresas."),
+        # El punto final del título se cae: va el de la numeración, no
+        # el del cierre (revisión de Metodología II, donde ese punto se
+        # publicaba en el título Y en el banner).
+        ("2.1 - Valuación de empresas.", "2.1. Valuación de empresas"),
         ("1-1. Algo", "1.1. Algo"),
         ("1.1 – Con raya", "1.1. Con raya"),
         ("1.1.Sin espacio", "1.1. Sin espacio"),

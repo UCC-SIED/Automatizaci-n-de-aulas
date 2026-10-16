@@ -104,7 +104,24 @@ def _normalizar_numeracion_titulo(titulo: str) -> str:
         return titulo
     if not resto:
         return titulo
-    return ".".join(niveles) + ". " + resto
+    return ".".join(niveles) + ". " + _sin_punto_final(resto)
+
+
+def _sin_punto_final(texto: str) -> str:
+    """El título de la página no cierra con punto.
+
+    El punto de la numeración va ("1.1."), el del final del título no: el
+    asesor lo arrastra al copiar del índice del DOCX y queda publicado en
+    el título Y en el banner, que se dibuja con ese mismo texto. De la
+    revisión de Metodología II: "ese punto final no iría, además el banner
+    se pasó ese mismo error" (1.1., 1.2.1. y 2.1.).
+
+    Unos puntos suspensivos sí se respetan: son parte de la frase.
+    """
+    limpio = texto.rstrip()
+    if limpio.endswith("...") or limpio.endswith("…"):
+        return limpio
+    return limpio[:-1].rstrip() if limpio.endswith(".") else limpio
 
 
 def _clasificar_item(texto: str, seccion_actual: str) -> TipoItem:

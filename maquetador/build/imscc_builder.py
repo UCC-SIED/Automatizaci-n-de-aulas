@@ -1808,11 +1808,8 @@ class GeneradorAula:
                 # obligatorio MN". Lo que decide es la FILA de la planilla,
                 # no el cuerpo de la consigna: un foro de consultas habla de
                 # la actividad obligatoria sin ser él mismo calificable.
-                if destino != "Foro de apertura" \
-                        and "obligatori" not in normalizar(
-                            item.detalle.get("item_planilla", "") + " "
-                            + item.titulo):
-                    self._renombrar_recurso(rid, None, self._nombre_de_foro(n))
+                if destino != "Foro de apertura":
+                    self._ajustar_nombre_de_foro(rid, n, item)
                 item.issues.append(Issue(Severidad.INFO,
                     f"Consigna del foro (escrita en la planilla) cargada en "
                     f"{destino}.", item.titulo))
@@ -1837,6 +1834,7 @@ class GeneradorAula:
                 continue
             cuerpo = procesar_contenido(self._rutear_media(html), self.spec.tema)
             if self._escribir_topic(rid, cuerpo, ctx):
+                self._ajustar_nombre_de_foro(rid, n)
                 logger.info(f"  [M{n}] Foro del módulo {n} ← contenido "
                            "embebido en la lectura")
                 # El <item> de la página todavía no existe en organizations
@@ -1917,6 +1915,8 @@ class GeneradorAula:
                     continue
                 html = self._docx_a_html(archivo, f"foro_m{n}")
                 if self._escribir_topic(rid, html, ctx):
+                    if destino != "Foro de apertura":
+                        self._ajustar_nombre_de_foro(rid, n, item)
                     item.issues.append(Issue(Severidad.INFO,
                         f"Contenido de '{archivo.name}' cargado en {destino}.",
                         item.titulo))
@@ -2334,6 +2334,64 @@ class GeneradorAula:
         "Foro MN" y en educación "Foro sugerido MN"."""
         return (f"Foro sugerido M{n}" if normalizar(self.spec.tema) == "educacion"
                 else f"Foro M{n}")
+
+    def _ajustar_nombre_de_foro(self, rid: str, n: int, item=None) -> None:
+        """El foro del módulo se llama "sugerido" salvo que sea obligatorio.
+
+        El aula base los trae todos como "Foro obligatorio MN" porque es el
+        único que incluye, pero ese nombre es el del calificable. De la
+        revisión de Metodología II: "el foro lo pusiste en un foro
+        obligatorio, no corresponde, a menos que diga explícitamente que sea
+        obligatorio; si no sería, en educación, foro sugerido M1".
+
+        Lo decide la FILA de la planilla, no el cuerpo de la consigna: un
+        foro de consultas habla de la actividad obligatoria sin ser él mismo
+        calificable.
+        """
+        if not rid:
+            return
+        rotulo = ""
+        if item is not None:
+            rotulo = normalizar(item.detalle.get("item_planilla", "") + " "
+                                + item.titulo + " "
+                                + (item.estado_planilla or ""))
+        nombre = (f"Foro obligatorio M{n}" if "obligatori" in rotulo
+                  else self._nombre_de_foro(n))
+        if "obligatori" not in rotulo:
+            self._renombrar_recurso(rid, None, nombre)
+        self._poner_banner_de_foro(rid, nombre)
+
+    def _poner_banner_de_foro(self, rid: str, nombre: str) -> None:
+        """El foro también lleva su banner dibujado.
+
+        El aula base trae uno genérico para todos, así que los tres foros
+        de un curso salían con el mismo. Lleva el nombre con que queda el
+        foro en Canvas ("Foro sugerido M2"), que es lo que se lee arriba
+        de la página.
+        """
+        clave = normalizar(nombre).replace(" ", "-")
+        url = self._banner_de(clave, nombre)
+        if not url:
+            return
+        mr = re.search(rf'<resource[^>]*identifier="{rid}"[^>]*>.*?'
+                       r'<file href="([^"]+\.xml)"', self.manifest, re.DOTALL)
+        if not mr:
+            return
+        ruta = self.working / mr.group(1)
+        if not ruta.exists():
+            return
+        xml = _leer(ruta)
+        mt = re.search(r'<text texttype="text/html">(.*?)</text>', xml, re.DOTALL)
+        if not mt:
+            return
+        cuerpo = xml_unescape(mt.group(1))
+        nuevo = self._poner_banner(cuerpo, url, nombre)
+        if nuevo == cuerpo:
+            return
+        _escribir(ruta, re.sub(
+            r'(<text texttype="text/html">).*?(</text>)',
+            lambda m: m.group(1) + xml_escape(nuevo) + m.group(2),
+            xml, count=1, flags=re.DOTALL))
 
     def _renombrar_recurso(self, rref: str, ruta_xml, nuevo: str):
         """Cambia el título de un recurso en sus cuatro lugares: el <item> de

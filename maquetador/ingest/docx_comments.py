@@ -137,6 +137,14 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     # priorizar— quedaban visibles en el aula.
     if re.match(r"^\s*no\s+(?:se\s+)?maqueta", n):
         return "no_maquetar"
+    # La misma exclusión escrita en medio de la frase: "todo esto es el
+    # genially. No incorporarlo en la maquetación". El tramo marcado ya se
+    # entregó por otro lado (el diseñador lo armó) y no va al aula; sin
+    # esto, la tabla cruda del Genially se publicaba igual.
+    if re.search(r"\bno\s+(?:lo\s+|la\s+|los\s+|las\s+)?"
+                 r"(?:incorporar|incluir|publicar|poner|agregar)", n) \
+            and ("maquetaci" in n or "aula" in n):
+        return "no_maquetar"
 
     # "Esto queda como consigna de la actividad sugerida": el recuadro no es
     # contenido de la página —es la consigna del buzón— y lo que queda en la

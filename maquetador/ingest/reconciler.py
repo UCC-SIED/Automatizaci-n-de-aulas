@@ -144,7 +144,8 @@ def _elegir_titulo_de_pagina(item, titulo_docx: str) -> None:
     texto_planilla, texto_docx = m_planilla.group(2), m_docx.group(2)
     if not texto_docx.strip() or _sin_adornos(texto_planilla) == _sin_adornos(texto_docx):
         return
-    item.titulo = f"{m_planilla.group(1)}. {texto_docx.strip()}"
+    from maquetador.ingest.xlsx_parser import _sin_punto_final
+    item.titulo = f"{m_planilla.group(1)}. {_sin_punto_final(texto_docx.strip())}"
     item.detalle["titulo_planilla_original"] = texto_planilla
     item.issues.append(Issue(Severidad.INFO,
         f"Título tomado de la lectura: la planilla decía "

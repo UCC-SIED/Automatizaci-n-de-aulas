@@ -42,6 +42,18 @@ def pares_de_tabla(tabla) -> list:
         return []
     ncols = max(len(f) for f in filas)
 
+    # Dos columnas, un par por FILA: el título a la izquierda y su contenido
+    # a la derecha. Es como la cátedra de Medios arma las flip cards —seis
+    # filas "Aprender haciendo | Es la estrategia mediante la cual…"— y esta
+    # geometría no estaba contemplada: la tabla caía en la grilla alternada
+    # de abajo, que la descartaba, y las seis tarjetas salían como aviso.
+    if ncols == 2 and len(filas) >= 2 and all(len(f) == 2 for f in filas):
+        izquierda = [f[0][0] for f in filas]
+        derecha = [f[1][0] for f in filas]
+        if all(_es_titulo_corto(t) for t in izquierda) \
+                and all(len(d) > len(t) for t, d in zip(izquierda, derecha)):
+            return [(f[0][0], f[1][1] or "&nbsp;") for f in filas]
+
     # Grilla multi-columna con filas alternando títulos / descripciones.
     def _largo_medio(fila):
         return sum(len(t) for t, _ in fila) / max(1, len(fila))
