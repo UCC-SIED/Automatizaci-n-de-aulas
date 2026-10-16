@@ -177,11 +177,28 @@ class TestLaboratorioDeIdeas:
         assert "<strong>Laboratorio de ideas</strong>" in out
         assert "Momento de ensayar" in out
 
-    def test_lleva_parrafo_de_espaciado_arriba_y_abajo(self):
+    def test_entre_texto_corrido_lleva_el_espaciado_corto(self):
+        """Encerrado entre parrafos, el parrafo entero de aire se ve
+        exagerado: va el espaciado corto, el mismo que los dp-callout.
+        "Los recuadros como por ejemplo o laboratorio u otros, te olvidaste
+        de colocarles espacio superior e inferior pero pequeños, porque
+        estan encerrados entre letras de parrafos" (revision de Metodologia
+        II)."""
         html = ("<p>Texto previo.</p>"
                 "<table><tr><td>Laboratorio de ideas</td></tr>"
                 "<tr><td>¡Momento de ensayar!</td></tr></table>"
                 "<p>Texto posterior.</p>")
+        out = procesar_contenido(html)
+        assert "<br/>" in out or "<br>" in out
+        assert "<p>\xa0</p>" not in out
+
+    def test_sin_texto_alrededor_lleva_el_parrafo_entero(self):
+        """Cuando no queda encerrado, el aire de parrafo entero se mantiene:
+        es un recuadro con titulo."""
+        html = ("<h3>Un subtitulo</h3>"
+                "<table><tr><td>Laboratorio de ideas</td></tr>"
+                "<tr><td>¡Momento de ensayar!</td></tr></table>"
+                "<h3>Otro subtitulo</h3>")
         out = procesar_contenido(html)
         assert out.count("<p>\xa0</p>") >= 2
 

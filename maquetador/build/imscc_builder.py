@@ -62,7 +62,8 @@ from maquetador.build.snippets import (separar_consignas, procesar_contenido,
                                        token_de_studio,
                                        contenido_declara_video,
                                        bloque_recurso_incrustado,
-                                       _FIG_CLASES_EXPANDIBLE, _FIG_ANCHO_MAX)
+                                       _FIG_CLASES_EXPANDIBLE,
+                                       _FIG_CLASES_ESTATICA, _FIG_ANCHO_MAX)
 from maquetador.build.bibliography import construir_bibliografia, indice_de_obras
 from maquetador.build.banners import render as banner_render
 from maquetador.extract.segmenter import ImagenInline, _MAMMOTH_STYLE_MAP
@@ -1274,11 +1275,14 @@ class GeneradorAula:
             '<h2 class="dp-has-icon"><i class="fas fa-network-wired" '
             'aria-hidden="true"><span class="dp-icon-content" '
             'style="display: none;">&nbsp;</span></i>Visión General</h2>\n'
-            # El esquema de la asignatura es un mapa conceptual lleno de texto
-            # chico: a 600px y sin lupa no se lee. Va al ancho máximo y
-            # expandible, como lo dejó el equipo a mano.
+            # El esquema de la asignatura es un mapa conceptual lleno de
+            # texto chico, asi que va al ancho maximo. Pero NO expandible:
+            # ya ocupa todo el ancho, y la lupa lo abre en un visor mas
+            # chico que la propia pagina — se ve PEOR al hacer clic. Lo
+            # marco la revision de Metodologia II ("cuando se abre se hace
+            # mas chica… le cambie el estilo para que no se expanda").
             '<p style="text-align: center;">'
-            f'<img class="{_FIG_CLASES_EXPANDIBLE}" '
+            f'<img class="{_FIG_CLASES_ESTATICA}" '
             f'style="width: {_FIG_ANCHO_MAX}px; height: auto;" '
             f'src="{url}" width="{_FIG_ANCHO_MAX}" '
             'alt="Esquema de la asignatura" loading="lazy"></p>\n</div>')

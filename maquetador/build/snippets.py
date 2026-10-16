@@ -2816,12 +2816,21 @@ def _espaciar_recuadros(soup):
     # "Laboratorio de ideas" no es un dp-callout (es un dp-content-block, el
     # mismo molde que el "Lecture Hook"), pero siempre lleva título: le
     # corresponde el mismo aire de párrafo entero que a un recuadro con
-    # título, no el espaciado corto del simple.
+    # título. Salvo que quede encerrado entre texto corrido, donde ese aire
+    # se ve exagerado y va el corto — igual que los dp-callout de arriba.
+    # Era el único que no miraba su contexto: "en toda la página 3.1., los
+    # recuadros como por ejemplo o laboratorio u otros, te olvidaste de
+    # colocarles espacio superior e inferior pero pequeños, porque están
+    # encerrados entre letras de párrafos" (revisión de Metodología II).
     for caja in soup.find_all("div", attrs={"data-title": "Lecture Hook"}):
         if caja.parent is None:
             continue
-        _aire_antes(caja, soup)
-        _aire_despues(caja, soup)
+        if _encerrado_entre_texto(caja):
+            _aire_corto_antes(caja)
+            _aire_corto_despues(caja)
+        else:
+            _aire_antes(caja, soup)
+            _aire_despues(caja, soup)
 
 
 def _agrandar_intro_subrayada_de_panel(soup):

@@ -44,15 +44,21 @@ class TestBloqueEsquema:
         assert "fa-network-wired" in html
         assert "Visión General</h2>" in html
 
-    def test_la_imagen_va_centrada_y_expandible(self, tmp_path):
-        """El esquema es un mapa conceptual lleno de texto chico: sin lupa no
-        se lee. Regresión real (Gestión del Riesgo): salía estático y a
-        600px, y hubo que agrandarlo y hacerlo expandible a mano."""
+    def test_la_imagen_va_centrada_y_grande_pero_sin_lupa(self, tmp_path):
+        """El esquema es un mapa conceptual lleno de texto chico, asi que
+        tiene que salir GRANDE. Eso lo pidio Gestion del Riesgo, donde salia
+        estatico y a 600px y hubo que agrandarlo a mano.
+
+        Lo que NO va es la lupa, aunque entonces se agrego junto con el
+        ancho: ya ocupa todo el ancho de la pagina, y el visor del popup es
+        mas chico, asi que al hacer clic se ve peor. Lo marco la revision de
+        Metodologia II ("cuando se abre se hace mas chica… le cambie el
+        estilo para que no se expanda"). El ancho maximo, que es lo que
+        resuelve la legibilidad, queda (test de abajo)."""
         html = _generador(tmp_path, "M_Esquema.jpg")._bloque_esquema()
         assert '<p style="text-align: center;">' in html
         assert "dp-image-rounded-10" in html and "dp-image-bordered" in html
-        assert "dp-popup-image" in html
-        assert "dp-image-shadow" in html
+        assert "dp-popup-image" not in html
 
     def test_la_imagen_va_al_ancho_maximo(self, tmp_path):
         html = _generador(tmp_path, "M_Esquema.jpg")._bloque_esquema()

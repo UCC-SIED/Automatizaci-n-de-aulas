@@ -34,7 +34,7 @@ from maquetador.build.snippets import (resaltado_simple, cta_titulo, ICONOS,
                                        _PAT_AQUI_VA_VIDEO)
 from maquetador.build.componentes_asesor import (
     extraer_pares, construir_panels, construir_flipcards,
-    construir_tooltip, disparador_tooltip, aplicar_cita,
+    construir_tooltip, disparador_tooltip, aplicar_cita, pares_de_texto,
 )
 
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -977,6 +977,32 @@ def _partir_recuadro_en_el_punto(el, instruccion: str, soup) -> str:
     return consigna
 
 
+def _pares_de_comentarios_hermanos(soup, comentarios: list, grupo) -> tuple:
+    """Pares cuando el asesor marca UN panel por comentario.
+
+    Es como marca esta cátedra los expanders del Diseño Universal de
+    Aprendizaje: tres comentarios iguales ("para maquetación: recurso
+    expander"), cada uno sobre su propio párrafo "Título: contenido", y
+    separados entre sí por otro texto. Buscando los pares alrededor de un
+    solo ancla aparece uno, y con uno no se arma componente: los tres
+    salían como pedido pendiente.
+    """
+    pares, consumidos = [], []
+    for c in comentarios:
+        if (c.get("accion"),
+                normalizar(c.get("instruccion") or "")) != grupo:
+            continue
+        el = _buscar_elemento(soup, c.get("anclado") or "")
+        if el is None or any(el is x for x in consumidos):
+            continue
+        sueltos = pares_de_texto([el])
+        if not sueltos:
+            continue
+        pares.append(sueltos[0])
+        consumidos.append(el)
+    return (pares, consumidos) if len(pares) >= 2 else ([], [])
+
+
 def aplicar_comentarios(soup, comentarios: list) -> None:
     """Aplica al soup las acciones automáticas cuyo texto anclado aparezca en
     él, y arma los componentes de pedido del asesor (acordeon/tabs/expander/
@@ -1169,6 +1195,10 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
         if accion in _VARIANTE_PANEL:                 # acordeon / tabs / expander
             pares, consumidos = extraer_pares(
                 el, c["instruccion"], hasta=grupos_fin.get(grupo))
+            if len(pares) < 2:
+                # El asesor pudo haber marcado un panel por comentario.
+                pares, consumidos = _pares_de_comentarios_hermanos(
+                    soup, comentarios, grupo)
             if len(pares) >= 2:
                 html = construir_panels(pares, _VARIANTE_PANEL[accion])
                 consumidos[0].replace_with(BeautifulSoup(html, "html.parser"))
@@ -1179,6 +1209,9 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
             continue
         if accion == "flip_card":
             pares, consumidos = extraer_pares(el, hasta=grupos_fin.get(grupo))
+            if len(pares) < 2:
+                pares, consumidos = _pares_de_comentarios_hermanos(
+                    soup, comentarios, grupo)
             if len(pares) >= 2:
                 html = construir_flipcards(pares)
                 consumidos[0].replace_with(BeautifulSoup(html, "html.parser"))
