@@ -830,10 +830,17 @@ def _texto_tooltip(instruccion: str) -> str:
     """Saca el contenido del popover del comentario: lo que va después de
     'emerja:'/'aparezca:'/'tooltip-->'. Si no hay marcador claro, '' (→ fallback)."""
     for sep in ("emerja lo siguiente:", "emerja:", "aparezca:", "emerge:",
-                "tooltip-->", "tooltip -->", "tooltip:", "globo:"):
+                "tooltip-->", "tooltip -->", "tooltip:", "globo:",
+                # Esta cátedra lo nombra por el componente, con o sin los
+                # dos puntos: "para maquetación: popover: <url>" y "para
+                # maquetación popover <url>". Sin reconocerlo, el popover
+                # se armaba VACÍO —peor que no ponerlo—.
+                "popover:", "popover"):
         if sep in instruccion.lower():
             idx = instruccion.lower().index(sep) + len(sep)
-            return instruccion[idx:].strip(" .–-")
+            contenido = instruccion[idx:].strip(" .–-:")
+            if contenido:
+                return contenido
     return ""
 
 
@@ -1235,8 +1242,11 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
                 palabra = disparador_tooltip(texto_el, contenido)
             else:
                 palabra = ""
+            # Sin contenido no hay popover que armar: uno vacío es peor que
+            # ninguno —el estudiante hace clic y no aparece nada— y además
+            # tapa el pedido, que así queda avisado para resolverlo a mano.
             nodo = (el.find(string=lambda s: bool(s) and palabra in s)
-                    if palabra else None)
+                    if palabra and contenido else None)
             if nodo is not None:
                 html = construir_tooltip(palabra, contenido, contador_popover)
                 contador_popover += 1

@@ -556,7 +556,15 @@ def construir_tooltip(palabra: str, contenido: str, n: int) -> str:
 
     Distinto del popover (que es una ficha grande y se dispara con clic): el
     disparador y el contenido van juntos dentro del mismo contenedor.
+
+    Cuando el asesor da una URL como contenido ("popover:
+    https://…/dnr-resumen-ejecutivo") va como enlace y no como texto
+    pelado: es la fuente del término, y así se puede abrir.
     """
+    if re.fullmatch(r"https?://\S+", (contenido or "").strip()):
+        url = contenido.strip()
+        contenido = (f'<a class="inline_disabled dp-ext-ignore" href="{url}" '
+                     f'target="_blank" rel="noopener">{url}</a>')
     return (f'<span class="dp-tooltip-container">'
             f'<a id="dpPopup{n}" class="dp-tooltip-trigger dp-popup-trigger" '
             f'role="button" href="#dpPopup{n}tooltip" aria-describedby="" '

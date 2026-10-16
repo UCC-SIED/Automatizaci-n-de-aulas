@@ -203,3 +203,59 @@ class TestLaRubricaLlegaASuActividad:
         g = self._generador(["AFI rubrica_evaluacion.jpg"])
         g.figuras_usadas.add(Path("AFI rubrica_evaluacion.jpg"))
         assert g._rubrica_de("actividad-final-integradora") is None
+
+
+class TestElPopoverNoSaleVacio:
+    """Esta cátedra nombra el componente al pedirlo ("para maquetación:
+    popover: <url>"). Ese marcador no estaba en la lista, así que el
+    contenido salía vacío y se publicaba un popover que al hacer clic no
+    mostraba nada: peor que no ponerlo."""
+
+    def _contenido(self, instruccion):
+        from maquetador.ingest.docx_comments import _texto_tooltip
+        return _texto_tooltip(instruccion)
+
+    def test_con_dos_puntos(self):
+        assert self._contenido(
+            "para maquetación: popover: https://ejemplo.org/informe"
+        ) == "https://ejemplo.org/informe"
+
+    def test_sin_dos_puntos(self):
+        assert self._contenido(
+            "para maquetación popover https://es.wikipedia.org/wiki/Orbis"
+        ) == "https://es.wikipedia.org/wiki/Orbis"
+
+    def test_los_marcadores_de_siempre_siguen_andando(self):
+        assert self._contenido(
+            "Maquetación: que emerja: la gestión por objetivos"
+        ) == "la gestión por objetivos"
+
+    def test_sin_contenido_no_devuelve_nada(self):
+        """"popover Diseño Universal de Aprendizaje" nombra el término pero
+        no dice qué mostrar: queda como pedido pendiente."""
+        from maquetador.ingest.docx_comments import aplicar_comentarios
+        soup = BeautifulSoup(
+            "<p>Tanto los MyTIC como los lenguajes interrogan la lógica "
+            "escolar en sus fundamentos.</p>", "html.parser")
+        comentarios = [{
+            "accion": "tooltip",
+            "instruccion": "para maquetación: popover",
+            "anclado": "Tanto los MyTIC como los lenguajes interrogan la "
+                       "lógica escolar en sus fundamentos.",
+        }]
+        aplicar_comentarios(soup, comentarios)
+        assert "dp-tooltip-container" not in str(soup)
+        assert not comentarios[0].get("_aplicado")
+
+    def test_una_url_queda_enlazada_adentro(self):
+        from maquetador.build.componentes_asesor import construir_tooltip
+        html = construir_tooltip("Digital News Report",
+                                 "https://ejemplo.org/informe", 0)
+        assert 'href="https://ejemplo.org/informe"' in html
+        assert 'target="_blank"' in html
+
+    def test_un_texto_normal_no_se_enlaza(self):
+        from maquetador.build.componentes_asesor import construir_tooltip
+        html = construir_tooltip("DUA", "Diseño Universal de Aprendizaje", 0)
+        assert "<a class=\"inline_disabled" not in html
+        assert "Diseño Universal de Aprendizaje" in html
