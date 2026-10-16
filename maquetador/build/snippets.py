@@ -1579,6 +1579,21 @@ def _absorber_siguientes(p) -> list:
     return extras
 
 
+def _es_marcador_de_video(el) -> bool:
+    """¿Este párrafo es SOLO el marcador, sin contenido propio?
+
+    "VIDEO M2.", "(AQUÍ VA VIDEO M1)", "incrustar video aquí." Es una
+    indicación para maquetación: no se publica.
+    """
+    texto = el.get_text(" ", strip=True)
+    if not texto:
+        return False
+    return bool(_PAT_MARCADOR_VIDEO.match(texto)
+                or _PAT_AQUI_VA_VIDEO.match(texto)
+                or (_PAT_EMBEBER_VIDEO.match(texto)
+                    and len(texto.split()) <= 6))
+
+
 def _hay_marcador_de_video(p) -> bool:
     """¿El asesor marcó acá que va un video propio?
 
@@ -1663,7 +1678,16 @@ def _procesar_cues_parrafo(soup):
             # Con enlace a YouTube/Vimeo es un CTA que manda afuera; sin
             # enlace es un video propio de la UCC (Canvas Studio).
             if _PAT_URL_VIDEO.search(body):
-                nuevo = cta_titulo("Auriculares on", body, ICONOS["video"])
+                # El marcador del asesor tampoco se publica acá. Solo lo
+                # sacaba la rama de Canvas Studio, así que un foro que
+                # tuviera las dos cosas —el enlace externo y el "incrustar
+                # video aquí"— salía con el marcador escrito en el aula
+                # (foro de apertura de Medios).
+                nuevo = cta_titulo("Auriculares on",
+                                   "\n".join(_sin_marcador_video(str(x))
+                                             for x in grupo
+                                             if not _es_marcador_de_video(x)),
+                                   ICONOS["video"])
             else:
                 # El marcador que el asesor deja donde va el video ("VIDEO M2.")
                 # no es contenido: no se publica, ni como párrafo suelto ni

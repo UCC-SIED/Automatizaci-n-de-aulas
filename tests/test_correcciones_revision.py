@@ -259,3 +259,36 @@ class TestElPopoverNoSaleVacio:
         html = construir_tooltip("DUA", "Diseño Universal de Aprendizaje", 0)
         assert "<a class=\"inline_disabled" not in html
         assert "Diseño Universal de Aprendizaje" in html
+
+
+class TestElMarcadorDeVideoNuncaSePublica:
+    """"Incrustar video aquí" es una indicación para maquetación. Solo la
+    sacaba la rama del video propio (Canvas Studio): un foro que tuviera
+    además un enlace externo salía con el marcador escrito en el aula,
+    como el foro de apertura de Medios."""
+
+    def test_con_enlace_externo_tampoco_se_publica(self):
+        out = procesar_contenido(
+            "<p>Les propongo observar una campaña institucional de UNICEF "
+            "sobre identidad digital.</p>"
+            "<p>incrustar video aquí.</p>"
+            '<p><a href="https://youtu.be/abc">https://youtu.be/abc</a></p>')
+        assert "incrustar video" not in out.lower()
+        assert "Auriculares on" in out
+        assert "campaña institucional de UNICEF" in out
+
+    def test_el_video_propio_sigue_limpiando_su_marcador(self):
+        out = procesar_contenido(
+            "<p>Te proponemos mirar el siguiente video conceptual.</p>"
+            "<p>VIDEO M1.</p>")
+        assert "VIDEO M1" not in out
+        assert 'data-title="Video"' in out
+
+    def test_un_parrafo_que_habla_de_incrustar_no_es_un_marcador(self):
+        """El marcador es corto y esta solo; una frase sobre el tema no."""
+        from maquetador.build.snippets import _es_marcador_de_video
+        soup = BeautifulSoup(
+            "<p>Incrustar videos en una clase virtual exige pensar el "
+            "formato, la duración y el momento en que se presentan.</p>",
+            "html.parser")
+        assert _es_marcador_de_video(soup.p) is False
