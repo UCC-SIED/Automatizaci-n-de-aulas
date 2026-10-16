@@ -115,14 +115,23 @@ def revisar(imscc: Path, carpeta: Path) -> int:
     fuentes = list(inv.docx_modulos.values()) + [
         p for _n, p in inv.actividades] + [p for _n, p in inv.foros]
     fuentes += inv.programa + inv.biografia
-    texto_fuente = set()
+    texto_fuente, corrido = set(), []
     for p in fuentes:
         if p.suffix.lower() != ".docx":
             continue
         try:
-            texto_fuente.update(_frases(_texto_del_docx(p)))
+            crudo = _texto_del_docx(p)
         except Exception as e:                              # pragma: no cover
             print(f"  (no pude leer {p.name}: {e})")
+            continue
+        texto_fuente.update(_frases(crudo))
+        corrido.append(_normalizar(crudo))
+    # El material entero como un solo texto normalizado. Comparar frase
+    # contra frase da falsos positivos cuando el corte de oraciones no
+    # coincide —una comilla o un ":" de más y la misma frase queda partida
+    # distinto—, y entonces texto que SÍ está en el DOCX se denuncia como
+    # inventado. Buscarla acá adentro no depende del corte.
+    fuente_corrida = " \n ".join(corrido)
     if not texto_fuente:
         print("No encontré material de origen que comparar.")
         return 1
@@ -135,14 +144,14 @@ def revisar(imscc: Path, carpeta: Path) -> int:
             publicado.add(frase)
             if frase in texto_fuente or _es_del_molde(frase):
                 continue
-            # Una frase puede haberse partido distinto: vale si está
-            # contenida en alguna del material.
-            if any(frase in f for f in texto_fuente):
+            if frase in fuente_corrida:
                 continue
             sospechosas.append((nombre, frase))
 
+    publicado_corrido = " \n ".join(
+        _normalizar(t) for t in paginas.values())
     perdidas = [f for f in texto_fuente
-                if f not in publicado and not any(f in p for p in publicado)]
+                if f not in publicado and f not in publicado_corrido]
 
     print(f"\nFrases comparadas: {len(texto_fuente)} del material, "
           f"{len(publicado)} publicadas.")

@@ -476,6 +476,7 @@ class GeneradorAula:
         self._resolver_enlaces_de_actividad()
         self._avisar_recursos_vacios()
         self._avisar_figuras_de_diseno_sin_usar()
+        self._avisar_protocolo_de_transparencia()
         self._personalizar_inicio()
         self._construir_syllabus()
         self._empaquetar_media()
@@ -1467,6 +1468,28 @@ class GeneradorAula:
                 "recuadro 'Actividad Grupal' al pie. Si es individual, "
                 "borralo en Canvas.", "Actividades"))
         return salida
+
+    def _avisar_protocolo_de_transparencia(self) -> None:
+        """¿Las actividades salieron sin el recuadro del uso de IA?
+
+        El equipo lo pone en TODAS las entregas, con el protocolo de
+        transparencia enlazado. Cuando el asesor lo escribió solo en el
+        programa —como en Medios— las actividades salen sin él, y
+        agregarlo por nuestra cuenta seria inventar contenido. Se avisa
+        para que se decida.
+        """
+        carpetas = [self.working / rid for rid in self.assignments_escritos]
+        archivos = [a for carpeta in carpetas if carpeta.is_dir()
+                    for a in carpeta.glob("*.html")]
+        if not archivos:
+            return
+        if any("aporte de la ia" in normalizar(_leer(a)) for a in archivos):
+            return
+        self.spec.issues.append(Issue(Severidad.AVISO,
+            "Ninguna actividad trae el recuadro del uso de IA con el "
+            "protocolo de transparencia: el asesor no lo escribió en los "
+            "DOCX de actividad. Si corresponde, agregarlo a mano en Canvas.",
+            "Actividades"))
 
     def _rubrica_de(self, clave: str):
         """La imagen de la rúbrica que le corresponde a esta actividad.
