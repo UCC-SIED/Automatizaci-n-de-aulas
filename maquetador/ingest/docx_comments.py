@@ -305,6 +305,13 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     if ("diseno" in n or "diseño" in n) and ("original" in n or "carpeta" in n) \
             and ("figura" in n or na.startswith(("figura", "tabla", "esquema"))):
         return "figura_de_diseno"
+    # "Manteniendo sangría izq y cursiva" no pide destacar nada: describe
+    # cómo ya se ve el párrafo y pide conservarlo. Encuadrarlo agregaba un
+    # recuadro que nadie pidió —la frase de apertura del módulo 1 de
+    # Metodología II salía adentro de una caja centrada—, cuando lo que va
+    # es la sangría (la cursiva ya viene del DOCX).
+    if re.search(r"manten(?:er|iendo|emos|ga)", n) and re.search(r"\bsangria\b", n):
+        return "cita"
     if "cursiva" in n or "destacad" in n or "destacar" in n:
         return "destacar_tramo"
     if "lectura" in n:

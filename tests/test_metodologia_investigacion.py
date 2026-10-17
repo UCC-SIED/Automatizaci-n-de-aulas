@@ -35,13 +35,21 @@ class TestSangriaEsCita:
         assert _clasificar("Para maquetación: mantener cita con sangría") == "cita"
         assert _clasificar("Para maquetación: mantener cita en sangría") == "cita"
 
-    def test_sangria_con_cursiva_sigue_siendo_destacado(self):
-        """No toda sangría es cita: acá el asesor marca la frase de apertura
-        del módulo, que va destacada. La regla de cita va al final justamente
-        para que este pedido gane primero."""
+    def test_mantener_sangria_y_cursiva_no_arma_un_destacado(self):
+        """La frase de apertura del módulo 1. Yo la daba por "destacado" y
+        salía adentro de un recuadro centrado; la revisión mostró que no:
+        "manteniendo sangría izq y cursiva" no pide destacar nada, describe
+        cómo ya se ve el párrafo y pide conservarlo. Va la sangría —la
+        cursiva ya viene del DOCX— y ninguna caja."""
         assert _clasificar(
             "Para maquetación: frase de inicio antes de la iintroducción, "
-            "manteniendo sangría izq y cursiva") == "destacar_tramo"
+            "manteniendo sangría izq y cursiva") == "cita"
+
+    def test_un_destacado_de_verdad_sigue_siendolo(self):
+        """Sin "mantener" de por medio, pedir cursiva sí arma el destacado."""
+        assert _clasificar(
+            "Para maquetación: esto va en cursiva u otra forma de destacado"
+        ) == "destacar_tramo"
 
     def test_la_cita_queda_sangrada_de_los_dos_lados(self):
         html = ('<p>El modo de pensamiento objetivista rescata las relaciones '

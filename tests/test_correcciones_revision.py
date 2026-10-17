@@ -292,3 +292,60 @@ class TestElMarcadorDeVideoNuncaSePublica:
             "formato, la duración y el momento en que se presentan.</p>",
             "html.parser")
         assert _es_marcador_de_video(soup.p) is False
+
+
+class TestLoQueVieneAntesDeLaPrimeraSeccion:
+    """El docente abre el módulo con una frase antes del rótulo
+    "Introducción". Como todavía no hay sección abierta, ese tramo se
+    descartaba y la frase no llegaba nunca al aula: "te olvidaste de eso,
+    está clara la indicación" (revisión de Metodología II)."""
+
+    def test_la_frase_de_apertura_se_conserva(self):
+        from maquetador.extract.segmenter import _huerfano
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(
+            "<table><tr><td>Carrera</td></tr></table>"
+            "<p>Investigar y producir conocimientos con otras y otros es un "
+            "gran desafío de la gestión educativa.</p>", "html.parser")
+        acumulado = [e for e in soup.find_all(recursive=False)]
+        # Antes de abrir la primera seccion: lo acumulado se arrastra.
+        huerfano = _huerfano(None, acumulado)
+        assert len(huerfano) == 1
+        assert "Investigar y producir" in huerfano[0].get_text()
+
+    def test_la_tabla_de_metadatos_no_se_arrastra(self):
+        from maquetador.extract.segmenter import _huerfano
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(
+            "<table><tr><td>Nombre de la carrera</td></tr></table>",
+            "html.parser")
+        assert _huerfano(None, [e for e in soup.find_all(recursive=False)]) == []
+
+    def test_dentro_de_una_seccion_no_arrastra_nada(self):
+        """Una vez abierta la primera seccion, lo acumulado es el cuerpo de
+        ESA seccion y lo guarda el flujo normal."""
+        from maquetador.extract.segmenter import _huerfano
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup("<p>Cuerpo de la seccion.</p>", "html.parser")
+        acumulado = [e for e in soup.find_all(recursive=False)]
+        assert _huerfano("1.1", acumulado) == []
+
+
+class TestMantenerSangriaNoEsDestacar:
+    """"Manteniendo sangría izq y cursiva" describe cómo ya se ve el
+    párrafo y pide conservarlo: no pide un recuadro."""
+
+    def test_no_arma_recuadro(self):
+        from maquetador.ingest.docx_comments import aplicar_comentarios
+        frase = ("Investigar y producir conocimientos con otras y otros es "
+                 "un gran desafío de la gestión educativa.")
+        soup = BeautifulSoup(f"<p><em>{frase}</em></p>", "html.parser")
+        aplicar_comentarios(soup, [{
+            "accion": "cita",
+            "instruccion": "Para maquetación: frase de inicio antes de la "
+                           "introducción, manteniendo sangría izq y cursiva",
+            "anclado": frase,
+        }])
+        assert "dp-callout" not in str(soup)
+        assert "margin-left: 80px" in str(soup)
+        assert soup.find("em") is not None       # la cursiva del DOCX queda

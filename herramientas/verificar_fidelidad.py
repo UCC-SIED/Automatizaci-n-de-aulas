@@ -35,6 +35,8 @@ from bs4 import BeautifulSoup
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from maquetador.ingest.folder_scanner import escanear      # noqa: E402
+from maquetador.ingest.docx_comments import extraer_comentarios  # noqa: E402
+from maquetador.ingest.xlsx_parser import parsear_estructura  # noqa: E402
 
 # Frases que el aula base trae puestas y no vienen del DOCX: no son texto
 # inventado, son el molde.
@@ -50,6 +52,10 @@ _DEL_AULA_BASE = (
 )
 
 _MIN_PALABRAS = 8        # menos que esto es un rótulo, no un párrafo
+
+# Páginas que el aula base trae enteras y que ningún curso reemplaza: su
+# texto no sale de ningún DOCX y no tiene sentido compararlo.
+_PAGINAS_DEL_MOLDE = ("calificacion-de-la-asignatura",)
 
 
 def _normalizar(texto: str) -> str:
@@ -115,7 +121,11 @@ def revisar(imscc: Path, carpeta: Path) -> int:
     fuentes = list(inv.docx_modulos.values()) + [
         p for _n, p in inv.actividades] + [p for _n, p in inv.foros]
     fuentes += inv.programa + inv.biografia
-    texto_fuente, corrido = set(), []
+    # El programa cuenta como material (nada de lo suyo es "inventado")
+    # pero NO se espera publicado: va adjunto como PDF. Sin separarlo, sus
+    # objetivos y competencias llenaban la lista de "texto perdido".
+    programas = {p for p in inv.programa}
+    texto_fuente, corrido, solo_de_referencia = set(), [], set()
     for p in fuentes:
         if p.suffix.lower() != ".docx":
             continue
@@ -124,13 +134,49 @@ def revisar(imscc: Path, carpeta: Path) -> int:
         except Exception as e:                              # pragma: no cover
             print(f"  (no pude leer {p.name}: {e})")
             continue
-        texto_fuente.update(_frases(crudo))
+        frases = _frases(crudo)
+        texto_fuente.update(frases)
+        # "Texto alternativo: …" describe una figura y va al atributo alt,
+        # no al cuerpo: no es texto perdido.
+        solo_de_referencia.update(
+            f for f in frases if f.startswith(("texto alternativo", "nota ")))
+        if p in programas:
+            solo_de_referencia.update(frases)
         corrido.append(_normalizar(crudo))
+        # Lo que el asesor escribe en un globo tambien es material suyo: el
+        # llamado a la acción de una actividad sugerida sale del comentario
+        # y no del cuerpo del DOCX. Sin esto figuraba como inventado.
+        # Las indicaciones del asesor son material suyo, pero son para
+        # maquetar: nunca se publican. Cuentan para no denunciar como
+        # inventado lo que sale de ellas, y no cuentan como texto perdido.
+        try:
+            for c in extraer_comentarios(p):
+                instruccion = str(c.get("instruccion") or "")
+                frases_c = _frases(instruccion)
+                texto_fuente.update(frases_c)
+                solo_de_referencia.update(frases_c)
+                corrido.append(_normalizar(instruccion))
+        except Exception:                                   # pragma: no cover
+            pass
     # El material entero como un solo texto normalizado. Comparar frase
     # contra frase da falsos positivos cuando el corte de oraciones no
     # coincide —una comilla o un ":" de más y la misma frase queda partida
     # distinto—, y entonces texto que SÍ está en el DOCX se denuncia como
     # inventado. Buscarla acá adentro no depende del corte.
+    # La planilla también es material del asesor: de ahí salen los títulos
+    # de módulo que el syllabus publica, y sin ella figuraban como texto
+    # aparecido de la nada.
+    if inv.estructura_xlsx:
+        try:
+            spec = parsear_estructura(inv.estructura_xlsx)
+            rotulos = [spec.nombre or ""]
+            for mod in spec.modulos:
+                rotulos.append(mod.titulo or "")
+                rotulos += [i.titulo or "" for i in mod.items]
+            corrido.append(_normalizar(" \n ".join(rotulos)))
+        except Exception as e:                              # pragma: no cover
+            print(f"  (no pude leer la planilla: {e})")
+
     fuente_corrida = " \n ".join(corrido)
     if not texto_fuente:
         print("No encontré material de origen que comparar.")
@@ -140,7 +186,11 @@ def revisar(imscc: Path, carpeta: Path) -> int:
     publicado = set()
     sospechosas = []
     for nombre, texto in sorted(paginas.items()):
+        del_molde = any(k in nombre for k in _PAGINAS_DEL_MOLDE)
         for frase in _frases(texto):
+            if del_molde:
+                publicado.add(frase)
+                continue
             publicado.add(frase)
             if frase in texto_fuente or _es_del_molde(frase):
                 continue
@@ -151,7 +201,8 @@ def revisar(imscc: Path, carpeta: Path) -> int:
     publicado_corrido = " \n ".join(
         _normalizar(t) for t in paginas.values())
     perdidas = [f for f in texto_fuente
-                if f not in publicado and f not in publicado_corrido]
+                if f not in publicado and f not in publicado_corrido
+                and f not in solo_de_referencia]
 
     print(f"\nFrases comparadas: {len(texto_fuente)} del material, "
           f"{len(publicado)} publicadas.")
