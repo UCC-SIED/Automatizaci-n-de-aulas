@@ -15,6 +15,7 @@ from bs4 import BeautifulSoup
 
 from maquetador.build.componentes_asesor import aplicar_cita
 from maquetador.build.snippets import procesar_contenido
+from maquetador.ingest.docx_comments import _clasificar, aplicar_comentarios
 
 
 class TestNoSeInventanComponentes:
