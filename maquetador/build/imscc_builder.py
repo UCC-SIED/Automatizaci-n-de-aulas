@@ -473,6 +473,9 @@ class GeneradorAula:
         self._eliminar_modulos_sobrantes()
         self._limpiar_recursos_no_usados()
         self._inyectar_afi()
+        # Después de la AFI: el foro de consultas se engancha ahí, y
+        # borrando antes se lo llevaba puesto.
+        self._eliminar_foros_sueltos()
         self._resolver_enlaces_de_actividad()
         self._avisar_recursos_vacios()
         self._avisar_figuras_de_diseno_sin_usar()
@@ -2921,7 +2924,17 @@ class GeneradorAula:
         mh = re.search(r'<resource[^>]*\bhref="([^"]+)"', bloque)
         if mh:
             hrefs.add(mh.group(1))
+        dependencias = set(re.findall(r'<dependency identifierref="([^"]+)"',
+                                      bloque))
         self.manifest = pat.sub("", self.manifest, count=1)
+        # Las dependencias del recurso (el "topicMeta" de un foro, por
+        # ejemplo) se van con él, si no las usa nadie más. Sin esto
+        # quedaban en el manifiesto apuntando a un recurso que ya no
+        # existe: cinco por curso, que Canvas importaba igual.
+        for dep in dependencias:
+            if f'identifierref="{dep}"' in self.manifest:
+                continue        # otro recurso todavía la usa
+            self._eliminar_recurso(dep)
         for href in hrefs:
             f = self.working / href
             if f.exists():
@@ -2932,6 +2945,38 @@ class GeneradorAula:
             shutil.rmtree(carpeta)
 
     # ------------------------------------------------------------------ #
+    def _eliminar_foros_sueltos(self):
+        """Foros que no están en ningún módulo: no se publican.
+
+        Las dos aulas base traen los foros DUPLICADOS —"Foro sugerido M1"
+        aparece dos veces, "Foro obligatorio M2" otras dos— y solo una
+        copia de cada uno está puesta en un módulo. Las demás viajan en el
+        manifiesto igual, así que Canvas las importa y quedan sueltas en
+        "Foros de discusión": quince por curso, que el equipo despues borra
+        a mano. Es lo que anotó la revisión como "actualizar aula base con
+        respecto a los foros que traen".
+
+        Se va solo lo que NO está en ningún módulo y no escribimos nosotros.
+        """
+        sueltos = []
+        for m in re.finditer(r'<resource identifier="([^"]+)"[^>]*'
+                             r'type="imsdt_xmlv1p1"', self.manifest):
+            rid = m.group(1)
+            if rid in self.meta or rid in self.topics_escritos:
+                continue
+            sueltos.append(rid)
+        for rid in sueltos:
+            # La dependencia (el "topicMeta") se va con el recurso.
+            m_dep = re.search(rf'<resource[^>]*identifier="{rid}"[^>]*>.*?'
+                              r'<dependency identifierref="([^"]+)"',
+                              self.manifest, re.DOTALL)
+            self._eliminar_recurso(rid)
+            if m_dep:
+                self._eliminar_recurso(m_dep.group(1))
+        if sueltos:
+            logger.info(f"  {len(sueltos)} foros sueltos del aula base "
+                        "eliminados (no estaban en ningún módulo)")
+
     def _limpiar_recursos_no_usados(self):
         """El aula base trae en cada módulo TODOS los recursos posibles (Foro de
         apertura, Foro obligatorio, Autoevaluación, Actividad obligatoria). Se
