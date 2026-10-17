@@ -119,3 +119,66 @@ class TestLaDependenciaCompartidaNoSeBorra:
         g._eliminar_recurso("t1")
         assert 'identifier="comun"' in g.manifest
         assert (tmp_path / "comun.xml").exists()
+
+
+class TestTambienLosCuestionariosSueltos:
+    """El aula base arrastra un "Test - Canva - Encuesta" que quedó del
+    armado y viaja en cada curso. La encuesta de valoración final, que sí
+    está puesta en un módulo, no se toca."""
+
+    MANIFEST = (
+        '<manifest><resources>'
+        '<resource identifier="quizOk" '
+        'type="imsqti_xmlv1p2/imscc_xmlv1p1/assessment">'
+        '<file href="quizOk/assessment_qti.xml"/></resource>'
+        '<resource identifier="quizTest" '
+        'type="imsqti_xmlv1p2/imscc_xmlv1p1/assessment">'
+        '<file href="quizTest/assessment_qti.xml"/></resource>'
+        '</resources></manifest>')
+
+    META = ('<modules><module><items><item identifier="i1">'
+            '<content_type>Quizzes::Quiz</content_type>'
+            '<workflow_state>active</workflow_state>'
+            '<title>Encuesta de valoración final</title>'
+            '<identifierref>quizOk</identifierref>'
+            '</item></items></module></modules>')
+
+    @pytest.fixture
+    def generador(self, tmp_path):
+        g = _generador(tmp_path)
+        g.manifest = self.MANIFEST
+        g.meta = self.META
+        for rid in ("quizOk", "quizTest"):
+            (tmp_path / rid).mkdir()
+            (tmp_path / rid / "assessment_qti.xml").write_text("<x/>",
+                                                               encoding="utf-8")
+        return g
+
+    def test_el_test_que_nadie_puso_se_va(self, generador, tmp_path):
+        generador._eliminar_foros_sueltos()
+        assert 'identifier="quizTest"' not in generador.manifest
+        assert not (tmp_path / "quizTest").exists()
+
+    def test_la_encuesta_real_se_queda(self, generador, tmp_path):
+        generador._eliminar_foros_sueltos()
+        assert 'identifier="quizOk"' in generador.manifest
+        assert (tmp_path / "quizOk" / "assessment_qti.xml").exists()
+
+
+class TestLoQueNoHayQueTocar:
+    """Las herramientas externas y los archivos viven fuera de los módulos
+    a propósito: borrarlos rompería el aula."""
+
+    @pytest.mark.parametrize("tipo", [
+        "imsbasiclti_xmlv1p3",                 # herramientas LTI
+        "webcontent",                          # imágenes, banners, páginas
+    ])
+    def test_no_se_borran_aunque_esten_sueltos(self, tmp_path, tipo):
+        g = _generador(tmp_path)
+        g.meta = ""
+        g.manifest = (f'<manifest><resources><resource identifier="r1" '
+                      f'type="{tipo}"><file href="r1.xml"/>'
+                      f'</resource></resources></manifest>')
+        (tmp_path / "r1.xml").write_text("<x/>", encoding="utf-8")
+        g._eliminar_foros_sueltos()
+        assert 'identifier="r1"' in g.manifest

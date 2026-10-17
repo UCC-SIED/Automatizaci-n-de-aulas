@@ -2945,8 +2945,15 @@ class GeneradorAula:
             shutil.rmtree(carpeta)
 
     # ------------------------------------------------------------------ #
+    # Recursos que Canvas lista como ítems del curso y que, si no están en
+    # ningún módulo, son sobras del aula base. Los LTI y los webcontent NO
+    # entran: las herramientas externas y los archivos (imágenes, banners)
+    # viven fuera de los módulos a propósito.
+    _TIPOS_BORRABLES_SUELTOS = ("imsdt_xmlv1p1",          # foros
+                                "imsqti_xmlv1p2/imscc_xmlv1p1/assessment")
+
     def _eliminar_foros_sueltos(self):
-        """Foros que no están en ningún módulo: no se publican.
+        """Foros y cuestionarios que no están en ningún módulo.
 
         Las dos aulas base traen los foros DUPLICADOS —"Foro sugerido M1"
         aparece dos veces, "Foro obligatorio M2" otras dos— y solo una
@@ -2956,25 +2963,28 @@ class GeneradorAula:
         a mano. Es lo que anotó la revisión como "actualizar aula base con
         respecto a los foros que traen".
 
+        Lo mismo con los cuestionarios: el aula base arrastra un "Test -
+        Canva - Encuesta" que quedó del armado y viaja en cada curso. La
+        encuesta de valoración final, que sí está puesta en un módulo, no
+        se toca.
+
         Se va solo lo que NO está en ningún módulo y no escribimos nosotros.
         """
         sueltos = []
         for m in re.finditer(r'<resource identifier="([^"]+)"[^>]*'
-                             r'type="imsdt_xmlv1p1"', self.manifest):
-            rid = m.group(1)
-            if rid in self.meta or rid in self.topics_escritos:
+                             r'type="([^"]+)"', self.manifest):
+            rid, tipo = m.group(1), m.group(2)
+            if tipo not in self._TIPOS_BORRABLES_SUELTOS:
+                continue
+            if rid in self.meta or rid in self.topics_escritos                     or rid in self.assignments_escritos:
                 continue
             sueltos.append(rid)
         for rid in sueltos:
-            # La dependencia (el "topicMeta") se va con el recurso.
-            m_dep = re.search(rf'<resource[^>]*identifier="{rid}"[^>]*>.*?'
-                              r'<dependency identifierref="([^"]+)"',
-                              self.manifest, re.DOTALL)
+            # Las dependencias (el "topicMeta" de un foro) se van con él:
+            # lo resuelve _eliminar_recurso.
             self._eliminar_recurso(rid)
-            if m_dep:
-                self._eliminar_recurso(m_dep.group(1))
         if sueltos:
-            logger.info(f"  {len(sueltos)} foros sueltos del aula base "
+            logger.info(f"  {len(sueltos)} recursos sueltos del aula base "
                         "eliminados (no estaban en ningún módulo)")
 
     def _limpiar_recursos_no_usados(self):
