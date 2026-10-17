@@ -349,3 +349,43 @@ class TestMantenerSangriaNoEsDestacar:
         assert "dp-callout" not in str(soup)
         assert "margin-left: 80px" in str(soup)
         assert soup.find("em") is not None       # la cursiva del DOCX queda
+
+
+class TestLaNotaAlPie:
+    """"Esto es una nota al pie de los dos párrafos anteriores, que son una
+    extracción de ese texto": la referencia de la que salió el texto de
+    arriba. Va en cuerpo chico, donde está, y no como un párrafo más."""
+
+    FRASE = ('*"Lo importante es contar una historia: aproximaciones al '
+             'estudio de prácticas de alfabetización audiovisual en '
+             'escenarios escolares" (Pineda, 2024).')
+
+    def test_se_reconoce_el_pedido(self):
+        assert _clasificar(
+            "para maquetación, esto es una nota al pie de los dos párrafos "
+            "anteriores, que son una extracción de ese texto") == "nota_al_pie"
+
+    def test_queda_en_cuerpo_chico(self):
+        from maquetador.ingest.docx_comments import aplicar_comentarios
+        soup = BeautifulSoup(f"<p>{self.FRASE}</p>", "html.parser")
+        comentarios = [{
+            "accion": "nota_al_pie",
+            "instruccion": "para maquetación, esto es una nota al pie",
+            "anclado": self.FRASE,
+        }]
+        aplicar_comentarios(soup, comentarios)
+        assert "font-size: 10pt" in str(soup)
+        assert "Lo importante es contar una historia" in soup.get_text()
+        assert comentarios[0]["_aplicado"] is True
+
+    def test_no_se_vuelve_un_encabezado(self):
+        """Lleva dp-heading-ignore: empieza con un asterisco y comillas, y
+        sin eso las heuristicas de encabezado podrian levantarlo."""
+        from maquetador.ingest.docx_comments import aplicar_comentarios
+        soup = BeautifulSoup(f"<p>{self.FRASE}</p>", "html.parser")
+        aplicar_comentarios(soup, [{
+            "accion": "nota_al_pie",
+            "instruccion": "para maquetación, esto es una nota al pie",
+            "anclado": self.FRASE,
+        }])
+        assert "dp-heading-ignore" in str(soup)

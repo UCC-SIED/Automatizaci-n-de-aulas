@@ -51,7 +51,7 @@ _AUTO = {"subtitulo", "subsubtitulo", "recuadro_simple", "lectura", "video",
          "foro_lectura_y_espacio", "figura_expandible", "enlazar_actividad",
          "destacar_tramo", "componente_en_el_texto", "quiz", "galeria",
          "galeria_fila", "texto_alternativo", "consigna_de_sugerida",
-         "consigna_desde_el_punto"}
+         "consigna_desde_el_punto", "nota_al_pie"}
 
 # Nivel de encabezado por acción, según la política de jerarquía de la UCC:
 # H2 es el título de la página, H3 el subtítulo y H4 el sub-subtítulo.
@@ -312,6 +312,11 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     # es la sangría (la cursiva ya viene del DOCX).
     if re.search(r"manten(?:er|iendo|emos|ga)", n) and re.search(r"\bsangria\b", n):
         return "cita"
+    # "Esto es una nota al pie de los dos párrafos anteriores": la
+    # referencia de la que salió el texto de arriba. Va en cuerpo chico,
+    # donde está, y no como un párrafo más del contenido.
+    if re.search(r"\bnota\s+al\s+pie\b", n):
+        return "nota_al_pie"
     if "cursiva" in n or "destacad" in n or "destacar" in n:
         return "destacar_tramo"
     if "lectura" in n:
@@ -1361,6 +1366,16 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
             else:
                 c["_contenido_extraido"] = inner
                 el.decompose()
+        elif accion == "nota_al_pie":
+            # La referencia de la que se extrajo el texto de arriba: va
+            # donde está, en cuerpo chico, para que se lea como pie y no
+            # como un párrafo más de la lectura.
+            interior = "".join(str(x) for x in el.children).strip()
+            el.clear()
+            el.append(BeautifulSoup(
+                f'<span style="font-size: 10pt;">{interior}</span>',
+                "html.parser"))
+            el["class"] = el.get("class", []) + ["dp-heading-ignore"]
         elif accion == "consigna_de_sugerida":
             # La consigna se va al buzón de la actividad sugerida y en la
             # lectura queda el llamado a la acción, enlazado a ese buzón.
