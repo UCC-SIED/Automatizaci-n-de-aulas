@@ -446,8 +446,19 @@ class GeneradorAula:
         if not base or not base.is_dir():
             raise ValueError(f"No existe el aula base para el tema '{spec.tema}'")
 
-        nombre_corto = (spec.codigo or re.sub(r"[^A-Za-z0-9]+", "_",
-                                              spec.nombre)[:40]).strip("_")
+        # El nombre del archivo conserva los acentos y los espacios: con los
+        # acentos convertidos en guiones bajos ("Medios_tecnolog_as_…") el
+        # paquete no se distinguía del ZIP del material que manda el asesor,
+        # y se subió el equivocado a Canvas (19-10-2026, "Unsupported content
+        # package"). Solo se sacan los caracteres que Windows no acepta en un
+        # nombre de archivo.
+        # Y abre con "Aula - ": sin eso queda igual al ZIP del material
+        # salvo por la extensión, que en el explorador de Windows ni se ve.
+        nombre_corto = (spec.codigo
+                        or "Aula - " + re.sub(
+                            r'[<>:"/\\|?*]+', " ",
+                            nombre_de_asignatura(spec.nombre))[:60]
+                        ).strip(" ._") or "Aula"
         self.working = self.output_dir / f"working_{nombre_corto}"
         if self.working.exists():
             _rmtree_longpath(self.working)
