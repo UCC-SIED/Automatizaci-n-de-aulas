@@ -182,3 +182,57 @@ class TestLoQueNoHayQueTocar:
         (tmp_path / "r1.xml").write_text("<x/>", encoding="utf-8")
         g._eliminar_foros_sueltos()
         assert 'identifier="r1"' in g.manifest
+
+
+class TestLosAssignmentsVaciosDelAulaBase:
+    """El aula base de educación trae las ranuras "Actividad sugerida MN"
+    vacías. Las que no se usan no están en ningún módulo pero viajaban
+    igual, con el banner viejo del aula base."""
+
+    MANIFEST = (
+        '<manifest><resources>'
+        '<resource identifier="actUsada" '
+        'type="associatedcontent/imscc_xmlv1p1/learning-application-resource">'
+        '<file href="actUsada/assignment_settings.xml"/>'
+        '<file href="actUsada/actividad-obligatoria-m1.html"/></resource>'
+        '<resource identifier="actVacia" '
+        'type="associatedcontent/imscc_xmlv1p1/learning-application-resource">'
+        '<file href="actVacia/assignment_settings.xml"/>'
+        '<file href="actVacia/actividad-sugerida-m2.html"/></resource>'
+        '</resources></manifest>')
+
+    META = ('<modules><module><items><item identifier="i1">'
+            '<content_type>Assignment</content_type>'
+            '<workflow_state>active</workflow_state>'
+            '<title>Actividad obligatoria M1</title>'
+            '<identifierref>actUsada</identifierref>'
+            '</item></items></module></modules>')
+
+    @pytest.fixture
+    def generador(self, tmp_path):
+        g = _generador(tmp_path)
+        g.manifest = self.MANIFEST
+        g.meta = self.META
+        for rid, html in (("actUsada", "actividad-obligatoria-m1.html"),
+                          ("actVacia", "actividad-sugerida-m2.html")):
+            (tmp_path / rid).mkdir()
+            (tmp_path / rid / "assignment_settings.xml").write_text(
+                "<x/>", encoding="utf-8")
+            (tmp_path / rid / html).write_text("<p/>", encoding="utf-8")
+        return g
+
+    def test_la_ranura_vacia_se_va(self, generador, tmp_path):
+        generador._eliminar_foros_sueltos()
+        assert 'identifier="actVacia"' not in generador.manifest
+        assert not (tmp_path / "actVacia").exists()
+
+    def test_la_actividad_puesta_se_queda(self, generador, tmp_path):
+        generador._eliminar_foros_sueltos()
+        assert 'identifier="actUsada"' in generador.manifest
+        assert (tmp_path / "actUsada").is_dir()
+
+    def test_una_que_acabamos_de_escribir_se_queda(self, generador):
+        """Puede todavía no estar en el meta cuando corre la limpieza."""
+        generador.assignments_escritos.add("actVacia")
+        generador._eliminar_foros_sueltos()
+        assert 'identifier="actVacia"' in generador.manifest

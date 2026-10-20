@@ -289,16 +289,26 @@ _PAT_ACT_OBLIGATORIA = re.compile(r"actividad-obligatoria-m(\d+)", re.I)
 _PAT_ACT_SUGERIDA = re.compile(r"actividad-sugerida-m(\d+)", re.I)
 
 
-def _banner_de_actividad(nombre_archivo: str) -> tuple:
-    """(clave, texto) del banner de una actividad, por su nombre de archivo."""
+def _banner_de_actividad(nombre_archivo: str, tema: str = "") -> tuple:
+    """(clave, texto) del banner de una actividad, por su nombre de archivo.
+
+    El texto es el nombre con que la actividad queda en Canvas, no una
+    descripción: "Actividad obligatoria M1", no "Actividad obligatoria del
+    módulo 1". El banner y el ítem tienen que decir lo mismo.
+
+    El de la NO obligatoria cambia por tema, igual que el de los foros:
+    "Actividad sugerida M1" en educación y "Actividad M1" en posgrado.
+    """
     m = _PAT_ACT_OBLIGATORIA.search(nombre_archivo)
     if m:
         return (f"actividad-obligatoria-m{m.group(1)}",
-                f"Actividad obligatoria del módulo {m.group(1)}")
+                f"Actividad obligatoria M{m.group(1)}")
     m = _PAT_ACT_SUGERIDA.search(nombre_archivo)
     if m:
-        return (f"actividad-sugerida-m{m.group(1)}",
-                f"Actividad sugerida del módulo {m.group(1)}")
+        n = m.group(1)
+        return (f"actividad-sugerida-m{n}",
+                f"Actividad sugerida M{n}" if normalizar(tema) == "educacion"
+                else f"Actividad M{n}")
     if "final-integradora" in nombre_archivo.lower():
         return ("actividad-final-integradora", "Actividad final integradora")
     return ("", "")
@@ -1699,7 +1709,19 @@ class GeneradorAula:
         # El banner de la actividad lo nombra el propio archivo del aula
         # base ("actividad-obligatoria-m2.html"): de ahí salen el texto y la
         # clave, así cada actividad tiene el suyo.
-        clave, rotulo_banner = _banner_de_actividad(archivos[0].stem)
+        # El clon de la actividad sugerida conserva el nombre de archivo de
+        # la que se clonó ("actividad-obligatoria-m1.html"), así que por el
+        # archivo le tocaría el banner de la obligatoria. Lo que manda es
+        # qué ranura es: "el banner que pusiste es Actividad Sugerida M1"
+        # (revisión de Metodología II, donde salieron cruzados).
+        n_sugerida = next((n for n, r in self.rid_sugerida.items() if r == rid),
+                          None)
+        if n_sugerida is not None:
+            clave = f"actividad-sugerida-m{n_sugerida}"
+            rotulo_banner = self._nombre_de_actividad_sugerida(n_sugerida)
+        else:
+            clave, rotulo_banner = _banner_de_actividad(archivos[0].stem,
+                                                        self.spec.tema)
         if clave:
             html = self._poner_banner(
                 html, self._banner_de(clave, rotulo_banner), rotulo_banner)
@@ -2442,6 +2464,17 @@ class GeneradorAula:
             f"La consigna '{titulo[:60]}' se quitó de la página de contenido "
             f"y se cargó en el foro del módulo {n}.", ctx))
 
+    def _nombre_de_actividad_sugerida(self, n: int) -> str:
+        """Cómo se llama la actividad NO obligatoria del módulo en cada aula.
+
+        Igual que con los foros, cambia por tema: en educación es
+        "Actividad sugerida MN" y en posgrado "Actividad MN". La
+        obligatoria se llama igual en los dos ("Actividad obligatoria MN").
+        """
+        return (f"Actividad sugerida M{n}"
+                if normalizar(self.spec.tema) == "educacion"
+                else f"Actividad M{n}")
+
     def _nombre_de_foro(self, n: int) -> str:
         """Cómo se llama el foro de participación del módulo en cada aula.
 
@@ -2671,7 +2704,7 @@ class GeneradorAula:
             xml = _leer(settings)
             xml = xml.replace(f'identifier="{rid_base}"', f'identifier="{nuevo_rid}"', 1)
             xml = re.sub(r"<title>[^<]*</title>",
-                        f"<title>Actividad M{n}</title>", xml, count=1)
+                        f"<title>{self._nombre_de_actividad_sugerida(n)}</title>", xml, count=1)
             xml = re.sub(r"<grading_type>[^<]*</grading_type>",
                         "<grading_type>pass_fail</grading_type>", xml)
             xml = re.sub(r"<points_possible>[^<]*</points_possible>",
@@ -2690,7 +2723,7 @@ class GeneradorAula:
             f"<identifierref>{rid_base}</identifierref>",
             f"<identifierref>{nuevo_rid}</identifierref>")
         nuevo_meta_item = re.sub(r"<title>[^<]*</title>",
-                                 f"<title>Actividad M{n}</title>",
+                                 f"<title>{self._nombre_de_actividad_sugerida(n)}</title>",
                                  nuevo_meta_item, count=1)
         # La entrega no calificable prepara la obligatoria: va ARRIBA de ella,
         # como la ubica el equipo en Canvas.
@@ -2701,10 +2734,14 @@ class GeneradorAula:
             f'identifier="{item_id_base}" identifierref="{rid_base}"',
             f'identifier="{nuevo_item_id}" identifierref="{nuevo_rid}"', 1)
         nuevo_org_item = re.sub(r"<title>[^<]*</title>",
-                                f"<title>Actividad M{n}</title>",
+                                f"<title>{self._nombre_de_actividad_sugerida(n)}</title>",
                                 nuevo_org_item, count=1)
         self.manifest = self.manifest.replace(
             m_org_item.group(0), nuevo_org_item + "\n            " + m_org_item.group(0), 1)
+        # Queda anotado como el buzón sugerido del módulo: el clon conserva
+        # el nombre de archivo de la obligatoria, así que sin esto le tocaba
+        # el banner de ella (ver _escribir_assignment).
+        self.rid_sugerida[n] = nuevo_rid
         return nuevo_rid
 
     def _clonar_modulo(self, template: int, nuevo: int):
@@ -2914,8 +2951,15 @@ class GeneradorAula:
         # enlazar—. El que se usó de verdad queda anotado.
         if clase == "sugerida" and self.rid_sugerida.get(n):
             return self.rid_sugerida[n]
-        return self._rid_en_meta(
+        rid = self._rid_en_meta(
             "Assignment", rf"[^<]*[Aa]ctividad {clase}[^<]*M{n}\b[^<]*")
+        if rid or clase != "sugerida":
+            return rid
+        # En posgrado la no obligatoria se llama "Actividad MN", sin la
+        # palabra "sugerida": el patrón de arriba no la encuentra.
+        return self._rid_en_meta(
+            "Assignment",
+            rf"[^<]*{re.escape(self._nombre_de_actividad_sugerida(n))}[^<]*")
 
     def _purgar_referencias_rotas(self):
         """Elimina <resource> cuyos archivos href ya no existen (p.ej. la
@@ -3006,9 +3050,13 @@ class GeneradorAula:
         """
         sueltos = []
         for m in re.finditer(r'<resource identifier="([^"]+)"[^>]*'
-                             r'type="([^"]+)"', self.manifest):
-            rid, tipo = m.group(1), m.group(2)
-            if tipo not in self._TIPOS_BORRABLES_SUELTOS:
+                             r'type="([^"]+)"[^>]*>(.*?)</resource>',
+                             self.manifest, re.DOTALL):
+            rid, tipo, bloque = m.group(1), m.group(2), m.group(3)
+            # Los assignments comparten tipo con el "topicMeta" de los
+            # foros: se los reconoce por su assignment_settings.xml.
+            es_assignment = "assignment_settings.xml" in bloque
+            if tipo not in self._TIPOS_BORRABLES_SUELTOS and not es_assignment:
                 continue
             if rid in self.meta or rid in self.topics_escritos                     or rid in self.assignments_escritos:
                 continue

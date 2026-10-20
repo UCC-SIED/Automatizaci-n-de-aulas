@@ -111,18 +111,97 @@ class TestElBannerQueSale:
 
 
 class TestBannerDeCadaActividad:
-    """El nombre del archivo del aula base dice qué actividad es."""
+    """El nombre del archivo del aula base dice qué actividad es.
+
+    El texto del banner es el NOMBRE con que la actividad queda en Canvas,
+    no una descripción: "Actividad obligatoria M1", no "…del módulo 1". El
+    banner y el ítem tienen que decir lo mismo."""
 
     @pytest.mark.parametrize("archivo,clave,texto", [
         ("actividad-obligatoria-m2", "actividad-obligatoria-m2",
-         "Actividad obligatoria del módulo 2"),
-        ("actividad-sugerida-m3", "actividad-sugerida-m3",
-         "Actividad sugerida del módulo 3"),
+         "Actividad obligatoria M2"),
         ("actividad-final-integradora", "actividad-final-integradora",
          "Actividad final integradora"),
     ])
     def test_cada_una_con_su_texto(self, archivo, clave, texto):
-        assert _banner_de_actividad(archivo) == (clave, texto)
+        assert _banner_de_actividad(archivo, "educacion") == (clave, texto)
+
+    @pytest.mark.parametrize("tema,texto", [
+        ("educacion", "Actividad sugerida M3"),
+        ("posgrado", "Actividad M3"),
+    ])
+    def test_la_no_obligatoria_se_llama_distinto_en_cada_aula(self, tema, texto):
+        """Igual que los foros: en educación es "sugerida" y en posgrado va
+        a secas."""
+        assert _banner_de_actividad("actividad-sugerida-m3", tema) == (
+            "actividad-sugerida-m3", texto)
+
+    def test_la_obligatoria_se_llama_igual_en_los_dos(self):
+        for tema in ("educacion", "posgrado"):
+            assert _banner_de_actividad("actividad-obligatoria-m1", tema)[1] \
+                == "Actividad obligatoria M1"
 
     def test_otro_archivo_no_lleva_banner_propio(self):
-        assert _banner_de_actividad("pagina-de-inicio") == ("", "")
+        assert _banner_de_actividad("pagina-de-inicio", "educacion") == ("", "")
+
+
+# Esqueleto de un assignment del aula base: el bloque "Actividad" tiene que
+# cerrar contra </body>, que es lo que busca _escribir_assignment.
+_PLANTILLA_ASSIGNMENT = (
+    "<html><body>"
+    '<div class="dp-banner-image"><img src="x.png" alt="viejo"/></div>'
+    '<div class="dp-content-block" data-title="Actividad">'
+    "<p>&nbsp;</p>"
+    "</div></div></body></html>")
+
+
+class TestElBannerDelClonSugerido:
+    """El clon de la actividad sugerida conserva el nombre de archivo de la
+    obligatoria, así que por el archivo le tocaba el banner de ella: los dos
+    salían cruzados ("el banner que pusiste es Actividad Sugerida M1",
+    revisión de Metodología II)."""
+
+    def _generador(self, tmp_path, tema="educacion"):
+        from maquetador.build.imscc_builder import GeneradorAula
+        from maquetador.models import CourseSpec
+        spec = CourseSpec(nombre="Materia")
+        spec.tema = tema
+        g = GeneradorAula(spec, {}, tmp_path)
+        g.working = tmp_path
+        return g
+
+    def test_manda_la_ranura_y_no_el_nombre_del_archivo(self, tmp_path):
+        g = self._generador(tmp_path)
+        g.rid_sugerida[1] = "ridClon"
+        # El clon guarda su HTML con el nombre de la obligatoria.
+        carpeta = tmp_path / "ridClon"
+        carpeta.mkdir()
+        (carpeta / "actividad-obligatoria-m1.html").write_text(
+            _PLANTILLA_ASSIGNMENT, encoding="utf-8")
+        g._escribir_assignment("ridClon", "<p>La consigna.</p>", "ctx")
+        salida = (carpeta / "actividad-obligatoria-m1.html").read_text(
+            encoding="utf-8")
+        assert 'alt="Actividad sugerida M1"' in salida
+
+    def test_en_posgrado_el_clon_va_sin_la_palabra_sugerida(self, tmp_path):
+        g = self._generador(tmp_path, tema="posgrado")
+        g.rid_sugerida[2] = "ridClon"
+        carpeta = tmp_path / "ridClon"
+        carpeta.mkdir()
+        (carpeta / "actividad-obligatoria-m2.html").write_text(
+            _PLANTILLA_ASSIGNMENT, encoding="utf-8")
+        g._escribir_assignment("ridClon", "<p>La consigna.</p>", "ctx")
+        salida = (carpeta / "actividad-obligatoria-m2.html").read_text(
+            encoding="utf-8")
+        assert 'alt="Actividad M2"' in salida
+
+    def test_la_obligatoria_de_verdad_no_se_confunde(self, tmp_path):
+        g = self._generador(tmp_path)
+        carpeta = tmp_path / "ridObl"
+        carpeta.mkdir()
+        (carpeta / "actividad-obligatoria-m1.html").write_text(
+            _PLANTILLA_ASSIGNMENT, encoding="utf-8")
+        g._escribir_assignment("ridObl", "<p>La consigna.</p>", "ctx")
+        salida = (carpeta / "actividad-obligatoria-m1.html").read_text(
+            encoding="utf-8")
+        assert 'alt="Actividad obligatoria M1"' in salida
