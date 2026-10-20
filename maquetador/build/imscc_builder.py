@@ -68,6 +68,7 @@ from maquetador.build.bibliography import construir_bibliografia, indice_de_obra
 from maquetador.build.banners import render as banner_render
 from maquetador.extract.segmenter import ImagenInline, _MAMMOTH_STYLE_MAP
 from maquetador.ingest.folder_scanner import normalizar
+from maquetador.build.imagenes import LADO_FICHA
 from maquetador.ingest.docx_comments import extraer_comentarios, aplicar_comentarios
 from processors.cidilabs_builder import DP_WRAPPER_CLASSES
 
@@ -946,9 +947,9 @@ class GeneradorAula:
                 from maquetador.build.imagenes import recortar_rostro_circular
                 recorte = (self.working / "web_resources" / "Multimedia cargada"
                           / f"{foto.stem}_circular.png")
-                recortar_rostro_circular(foto, recorte)
+                lado_nativo = recortar_rostro_circular(foto, recorte)
                 nombre_final = recorte.name
-                self._avisar_si_la_foto_es_chica(recorte, foto)
+                self._avisar_si_la_foto_es_chica(lado_nativo, foto)
             except Exception as e:
                 logger.warning(f"  No pude recortar la foto del docente "
                                f"centrada en el rostro ({e}): uso la original.")
@@ -1484,33 +1485,25 @@ class GeneradorAula:
                 "borralo en Canvas.", "Actividades"))
         return salida
 
-    # La ficha muestra la foto a 150x150 CSS. Las pantallas de hoy son de
-    # alta densidad, asi que el navegador pide el doble de pixeles reales:
-    # por debajo de eso la agranda y se ve borrosa, que es como salio la
-    # foto que se subio a mano en Medios.
-    _LADO_MINIMO_FOTO = 300
+    def _avisar_si_la_foto_es_chica(self, lado: int, original: Path) -> None:
+        """La foto del docente llegó con pocos píxeles.
 
-    def _avisar_si_la_foto_es_chica(self, recorte: Path, original: Path) -> None:
-        """La foto del docente se ve borrosa si llega con pocos píxeles.
+        Se mide el recorte NATIVO, antes de llevarlo al tamaño de
+        publicación: lo que importa no es el tamaño del archivo original
+        sino cuánto queda de la cara. Una foto de cuerpo entero de 4000 px
+        puede dejar un recorte de 200.
 
-        Se mide DESPUÉS del recorte: lo que importa no es el tamaño del
-        archivo original sino cuánto queda de la cara. Una foto de cuerpo
-        entero de 4000px puede dejar un recorte de 200.
+        El maquetador la agranda y la enfoca igual, así que no queda como
+        la estiraría el navegador, pero detalle que la foto no tiene no se
+        inventa: por eso se avisa para pedir una mejor.
         """
-        try:
-            from PIL import Image
-            with Image.open(recorte) as im:
-                lado = min(im.size)
-        except Exception:                                   # pragma: no cover
-            return
-        if lado >= self._LADO_MINIMO_FOTO:
+        if not lado or lado >= LADO_FICHA:
             return
         self.spec.issues.append(Issue(Severidad.AVISO,
-            f"La foto del docente queda en {lado}x{lado} px después de "
-            f"recortarla al rostro y la ficha la muestra a 150x150: en una "
-            f"pantalla de alta densidad se va a ver borrosa. Pedir una foto "
-            f"más grande (el rostro tiene que ocupar al menos "
-            f"{self._LADO_MINIMO_FOTO} px) — la original es "
+            f"La foto del docente deja un recorte de {lado}x{lado} px y se "
+            f"publica a {LADO_FICHA}x{LADO_FICHA}: la agrandé y la enfoqué, "
+            f"pero va a verse menos nítida que una foto en la que el rostro "
+            f"ocupe {LADO_FICHA} px o más. La original es "
             f"'{original.name}'.", "Página de inicio"))
 
     def _avisar_protocolo_de_transparencia(self) -> None:
