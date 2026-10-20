@@ -948,6 +948,7 @@ class GeneradorAula:
                           / f"{foto.stem}_circular.png")
                 recortar_rostro_circular(foto, recorte)
                 nombre_final = recorte.name
+                self._avisar_si_la_foto_es_chica(recorte, foto)
             except Exception as e:
                 logger.warning(f"  No pude recortar la foto del docente "
                                f"centrada en el rostro ({e}): uso la original.")
@@ -1482,6 +1483,35 @@ class GeneradorAula:
                 "recuadro 'Actividad Grupal' al pie. Si es individual, "
                 "borralo en Canvas.", "Actividades"))
         return salida
+
+    # La ficha muestra la foto a 150x150 CSS. Las pantallas de hoy son de
+    # alta densidad, asi que el navegador pide el doble de pixeles reales:
+    # por debajo de eso la agranda y se ve borrosa, que es como salio la
+    # foto que se subio a mano en Medios.
+    _LADO_MINIMO_FOTO = 300
+
+    def _avisar_si_la_foto_es_chica(self, recorte: Path, original: Path) -> None:
+        """La foto del docente se ve borrosa si llega con pocos píxeles.
+
+        Se mide DESPUÉS del recorte: lo que importa no es el tamaño del
+        archivo original sino cuánto queda de la cara. Una foto de cuerpo
+        entero de 4000px puede dejar un recorte de 200.
+        """
+        try:
+            from PIL import Image
+            with Image.open(recorte) as im:
+                lado = min(im.size)
+        except Exception:                                   # pragma: no cover
+            return
+        if lado >= self._LADO_MINIMO_FOTO:
+            return
+        self.spec.issues.append(Issue(Severidad.AVISO,
+            f"La foto del docente queda en {lado}x{lado} px después de "
+            f"recortarla al rostro y la ficha la muestra a 150x150: en una "
+            f"pantalla de alta densidad se va a ver borrosa. Pedir una foto "
+            f"más grande (el rostro tiene que ocupar al menos "
+            f"{self._LADO_MINIMO_FOTO} px) — la original es "
+            f"'{original.name}'.", "Página de inicio"))
 
     def _avisar_protocolo_de_transparencia(self) -> None:
         """¿Las actividades salieron sin el recuadro del uso de IA?
