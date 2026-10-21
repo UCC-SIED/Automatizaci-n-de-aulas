@@ -22,6 +22,7 @@ mano: el dp-wrapper los estiliza) y estiliza figuras y sus epígrafes.
 
 import re
 import uuid
+from html import escape
 from urllib.parse import quote
 import unicodedata
 
@@ -1592,6 +1593,68 @@ def _es_marcador_de_video(el) -> bool:
                 or _PAT_AQUI_VA_VIDEO.match(texto)
                 or (_PAT_EMBEBER_VIDEO.match(texto)
                     and len(texto.split()) <= 6))
+
+
+# Un renglón de código. Word lo trae como un párrafo por línea —con la
+# sangría adentro del texto, que es lo que lo salva— así que publicado tal
+# cual quedan párrafos sueltos sin sangría ni saltos. Pasó en el módulo 2
+# de IA Aplicada I, con los ejemplos de Python.
+_PAT_CODIGO_FUERTE = re.compile(
+    r"^\s*(?:#|//)"                                   # comentario
+    r"|^\s*\w[\w.\[\]'\"]*\s*=\s*[\{\[\(]"            # asignación que abre
+    r"|^\s*(?:import|from|def|class|return|print|for|if|while|elif|else)\b",
+    re.I)
+_PAT_CODIGO_DEBIL = re.compile(
+    r"^\s{2,}\S"                                      # renglón sangrado
+    r"|^\s*[\}\]\)],?\s*$"                            # cierre de bloque
+    r"|^\s*[\{\[\(]\s*$")
+
+
+def _es_renglon_de_codigo(texto: str) -> bool:
+    return bool(texto) and bool(_PAT_CODIGO_FUERTE.match(texto)
+                                or _PAT_CODIGO_DEBIL.match(texto))
+
+
+def _bloques_de_codigo(soup) -> None:
+    """Junta los párrafos que son código en un solo bloque monoespaciado.
+
+    Se exige al menos un renglón "fuerte" (un comentario, una asignación
+    que abre, una palabra clave) para no confundir una enumeración o una
+    cita sangrada con código.
+    """
+    parrafos = [p for p in soup.find_all("p")]
+    i = 0
+    while i < len(parrafos):
+        p = parrafos[i]
+        if p.parent is None or p.find("img") is not None:
+            i += 1
+            continue
+        corrida, j = [], i
+        while j < len(parrafos):
+            q = parrafos[j]
+            if q.parent is None or q.find("img") is not None:
+                break
+            # El texto crudo, que conserva la sangría; get_text(" ") la come.
+            crudo = "".join(q.strings).replace("\xa0", " ").rstrip()
+            if not _es_renglon_de_codigo(crudo):
+                break
+            corrida.append((q, crudo))
+            j += 1
+        fuertes = sum(1 for _q, t in corrida if _PAT_CODIGO_FUERTE.match(t))
+        if len(corrida) >= 2 and fuertes >= 1:
+            codigo = "\n".join(t for _q, t in corrida)
+            bloque = BeautifulSoup(
+                '<pre class="dp-heading-ignore" style="font-family: '
+                "Consolas, 'Courier New', monospace; font-size: 10pt; "
+                "background-color: #f6f8fa; border: 1px solid #e1e4e8; "
+                'border-radius: 6px; padding: 12px; overflow-x: auto; '
+                f'white-space: pre;">{escape(codigo)}</pre>', "html.parser")
+            corrida[0][0].replace_with(bloque)
+            for q, _t in corrida[1:]:
+                q.decompose()
+            i = j
+            continue
+        i += 1
 
 
 def _hay_marcador_de_video(p) -> bool:
@@ -3478,6 +3541,10 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
 
     # 1.6 Párrafos con frases-señal → recuadros (Lectura / Video / Atención)
     _procesar_cues_parrafo(soup)
+
+    # 1.62 Código: Word lo trae como un párrafo por línea. Se juntan
+    #      en un bloque monoespaciado que conserva sangrías y saltos.
+    _bloques_de_codigo(soup)
 
     # 1.65 El mismo texto encuadrado dos veces. Pasa cuando llega por dos
     #      caminos (una cita del DOCX y un comentario que pide resaltarlo, por

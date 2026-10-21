@@ -139,3 +139,58 @@ class TestElEsquemaVaComoImagen:
             tipo=TipoItem.IMAGEN, orden=1)]
         reconciliar(spec, inv)
         assert spec.items_inicio[0].fuente.archivo.suffix == ".jpg"
+
+
+class TestLosBloquesDeCodigo:
+    """El módulo 2 trae ejemplos de Python. Word los manda como un párrafo
+    por línea —con la sangría adentro del texto, que es lo que los salva—
+    así que publicados tal cual quedaban párrafos sueltos, sin sangría ni
+    saltos, imposibles de leer y de copiar."""
+
+    CODIGO = ("<p># Creación de un diccionario</p>"
+              "<p>estudiante = {</p>"
+              '<p>    "nombre": "Juan",</p>'
+              '<p>    "edad": 21,</p>'
+              "<p>}</p>")
+
+    def _procesar(self, html):
+        from maquetador.build.snippets import procesar_contenido
+        return procesar_contenido(html)
+
+    def test_se_juntan_en_un_solo_bloque(self):
+        out = self._procesar(self.CODIGO)
+        assert out.count("<pre") == 1
+
+    def test_conserva_la_sangria(self):
+        out = self._procesar(self.CODIGO)
+        assert '    "nombre": "Juan",' in out
+
+    def test_conserva_los_saltos_de_linea(self):
+        out = self._procesar(self.CODIGO)
+        assert "estudiante = {\n" in out
+
+    def test_va_en_monoespaciada(self):
+        assert "monospace" in self._procesar(self.CODIGO)
+
+    def test_no_se_lleva_la_prosa_de_alrededor(self):
+        out = self._procesar(
+            "<p>Un diccionario en Python es una colección de elementos.</p>"
+            + self.CODIGO +
+            "<p>Con Pandas se pueden cargar datos desde archivos CSV.</p>")
+        assert "<p>Un diccionario en Python" in out
+        assert "<p>Con Pandas se pueden cargar" in out
+
+    @pytest.mark.parametrize("html", [
+        # Una enumeración sangrada no es código.
+        "<p>   El primer punto del análisis.</p>"
+        "<p>   El segundo punto del análisis.</p>",
+        # Una sola línea tampoco, aunque parezca.
+        "<p># Un comentario suelto en el texto</p>",
+    ])
+    def test_lo_que_no_es_codigo_queda_como_esta(self, html):
+        assert "<pre" not in self._procesar(html)
+
+    def test_escapa_lo_que_mete_adentro(self):
+        out = self._procesar(
+            "<p>if x &lt; 3:</p><p>    print(&quot;hola&quot;)</p>")
+        assert "&lt;" in out and "<pre" in out
