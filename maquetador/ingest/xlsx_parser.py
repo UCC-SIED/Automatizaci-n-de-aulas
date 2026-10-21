@@ -107,6 +107,20 @@ def _normalizar_numeracion_titulo(titulo: str) -> str:
     return ".".join(niveles) + ". " + _sin_punto_final(resto)
 
 
+def _sin_numeracion(titulo: str) -> str:
+    """Saca el número de página que el asesor le puso a una actividad.
+
+    "1.6. Actividad M1- obligatoria (individual)" → "Actividad M1-
+    obligatoria (individual)". Si al sacarlo no queda nada, se devuelve el
+    título tal cual: el número era el título.
+    """
+    m = _PAT_NUM_TITULO.match((titulo or "").strip())
+    if not m:
+        return (titulo or "").strip()
+    resto = (m.group(3) or "").strip(" .-–—:")
+    return resto or (titulo or "").strip()
+
+
 def _sin_punto_final(texto: str) -> str:
     """El título de la página no cierra con punto.
 
@@ -126,6 +140,15 @@ def _sin_punto_final(texto: str) -> str:
 
 def _clasificar_item(texto: str, seccion_actual: str) -> TipoItem:
     n = normalizar(texto)
+    # Una fila NUMERADA que vive en la sección de actividades y se llama
+    # actividad es la actividad del módulo, no una página de contenido. El
+    # modelo viejo de asesoría las numeraba en la misma serie que las
+    # páginas: "1.6. Actividad M1- obligatoria (individual)" venía después
+    # de 1.1 a 1.4 y salía como página, sin buzón de entrega y pidiendo una
+    # sección del DOCX que no existe (bloqueante en IA Aplicada I).
+    if _PAT_NUMERADO.match(texto) and seccion_actual == "actividades" \
+            and re.search(r"\b(actividad|tarea|trabajo\s+pr[áa]ctico)\b", n):
+        return TipoItem.TAREA
     if _PAT_NUMERADO.match(texto):
         return TipoItem.PAGINA
     if "foro" in n:
@@ -283,8 +306,15 @@ def parsear_estructura(path: Path) -> CourseSpec:
         # --- Ítem real ---
         orden += 1
         tipo = _clasificar_item(fila.item, seccion_actual)
+        crudo = fila.titulo_actividad or fila.item
+        # La numeración es de las PÁGINAS. Una actividad que el asesor
+        # numeró en la misma serie ("1.6. Actividad M1- obligatoria") entra
+        # al aula por su nombre, sin el número: en Canvas vive en el buzón,
+        # no en el recorrido de páginas del módulo.
+        titulo = (_sin_numeracion(crudo) if tipo == TipoItem.TAREA
+                  else _normalizar_numeracion_titulo(crudo))
         item = ItemCurso(
-            titulo=_normalizar_numeracion_titulo(fila.titulo_actividad or fila.item),
+            titulo=titulo,
             tipo=tipo, orden=orden,
             estado_planilla=fila.estado,
             comentarios_asesor=fila.comentario_asesor,
