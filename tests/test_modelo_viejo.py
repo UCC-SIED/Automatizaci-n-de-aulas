@@ -194,3 +194,17 @@ class TestLosBloquesDeCodigo:
         out = self._procesar(
             "<p>if x &lt; 3:</p><p>    print(&quot;hola&quot;)</p>")
         assert "&lt;" in out and "<pre" in out
+
+    @pytest.mark.parametrize("tema,acento", [
+        ("educacion", "#003087"),
+        ("posgrado", "#1b1e31"),
+    ])
+    def test_los_colores_salen_del_catalogo(self, tema, acento):
+        """Nada de grises inventados: la superficie es la del "Laboratorio
+        de ideas" (#f4f6f8), el borde el de la "Bitácora de aprendizaje"
+        (#e1e1e1) y el acento el del tema."""
+        from maquetador.build.snippets import procesar_contenido
+        out = procesar_contenido(self.CODIGO, tema)
+        assert "#f4f6f8" in out and "#e1e1e1" in out
+        assert f"border-left: 6px solid {acento}" in out
+        assert "#f6f8fa" not in out and "#e1e4e8" not in out

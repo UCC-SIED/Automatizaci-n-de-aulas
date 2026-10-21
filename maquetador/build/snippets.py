@@ -1615,7 +1615,7 @@ def _es_renglon_de_codigo(texto: str) -> bool:
                                 or _PAT_CODIGO_DEBIL.match(texto))
 
 
-def _bloques_de_codigo(soup) -> None:
+def _bloques_de_codigo(soup, tema: str = "") -> None:
     """Junta los párrafos que son código en un solo bloque monoespaciado.
 
     Se exige al menos un renglón "fuerte" (un comentario, una asignación
@@ -1643,10 +1643,16 @@ def _bloques_de_codigo(soup) -> None:
         fuertes = sum(1 for _q, t in corrida if _PAT_CODIGO_FUERTE.match(t))
         if len(corrida) >= 2 and fuertes >= 1:
             codigo = "\n".join(t for _q, t in corrida)
+            # Los colores salen del catálogo UCC: la superficie del
+            # "Laboratorio de ideas" (#f4f6f8), el borde de la "Bitácora de
+            # aprendizaje" (#e1e1e1) y el acento del tema a la izquierda,
+            # como lo lleva la bitácora. Antes eran dos grises inventados.
+            acento = ACENTO_POR_TEMA.get(_norm(tema or ""), ACCENT)
             bloque = BeautifulSoup(
                 '<pre class="dp-heading-ignore" style="font-family: '
                 "Consolas, 'Courier New', monospace; font-size: 10pt; "
-                "background-color: #f6f8fa; border: 1px solid #e1e4e8; "
+                "background-color: #f4f6f8; border: 1px solid #e1e1e1; "
+                f"border-left: 6px solid {acento}; "
                 'border-radius: 6px; padding: 12px; overflow-x: auto; '
                 f'white-space: pre;">{escape(codigo)}</pre>', "html.parser")
             corrida[0][0].replace_with(bloque)
@@ -3544,7 +3550,7 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
 
     # 1.62 Código: Word lo trae como un párrafo por línea. Se juntan
     #      en un bloque monoespaciado que conserva sangrías y saltos.
-    _bloques_de_codigo(soup)
+    _bloques_de_codigo(soup, tema)
 
     # 1.65 El mismo texto encuadrado dos veces. Pasa cuando llega por dos
     #      caminos (una cita del DOCX y un comentario que pide resaltarlo, por

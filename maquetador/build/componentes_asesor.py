@@ -571,8 +571,14 @@ def construir_tooltip(palabra: str, contenido: str, n: int) -> str:
             f'data-bs-toggle="tooltip">{palabra}</a> '
             f'<span id="dpPopup{n}tooltip" '
             'class="dp-tooltip-content dp-popup-content" '
-            'style="background-color: #545454; color: #ffffff; '
-            'padding: 2px 5px; border-radius: 3px;" role="tooltip">'
+            # La misma superficie que el popover del aula base (#f7f7f7 con
+            # borde #a9a9a9). Antes era un gris oscuro (#545454) que no está
+            # en ningún snippet del catálogo ni en el aula base: el globo se
+            # veía de otro color que el resto del aula. El color del texto
+            # se hereda, para no fijar uno que tampoco esté en la paleta.
+            'style="background-color: #f7f7f7; '
+            'border: 1px solid #a9a9a9; '
+            'padding: 6px 10px; border-radius: 3px;" role="tooltip">'
             f'{contenido}</span></span>')
 
 
