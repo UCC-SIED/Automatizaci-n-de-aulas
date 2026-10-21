@@ -194,6 +194,26 @@ _MARCAS_ESPECIALES = (
 _MARCAS_APERTURA = {"intro", "objetivos", "agenda", "transparencia"}
 
 
+def _huerfano(clave_actual, acumulado: list) -> list:
+    """Lo que venía ANTES de la primera sección del DOCX.
+
+    El docente abre el módulo con una frase de apertura —"Investigar y
+    producir conocimientos con otras y otros es un gran desafío de la
+    gestión educativa"— antes del rótulo "Introducción". Como todavía no
+    hay sección abierta, ese tramo se descartaba al llegar el primer
+    marcador y la frase no llegaba nunca al aula: lo marcó la revisión de
+    Metodología II ("te olvidaste de eso, está clara la indicación").
+
+    Solo arrastra lo huérfano: una vez abierta la primera sección, lo que
+    se acumula es el cuerpo de ESA sección y lo guarda _guardar().
+    """
+    if clave_actual is not None:
+        return []
+    return [el for el in acumulado
+            if getattr(el, "name", "") != "table"
+            and el.get_text(" ", strip=True)]
+
+
 def segmentar_docx(docx_path: Path, marcadores: dict) -> tuple:
     """Corta el DOCX en secciones HTML.
 
@@ -246,9 +266,12 @@ def segmentar_docx(docx_path: Path, marcadores: dict) -> tuple:
             if clave and _es_epigrafe_pelado(acumulado[-1] if acumulado else None):
                 clave = ""
             if clave:
+                huerfano = _huerfano(clave_actual, acumulado)
                 _guardar()
                 clave_actual = clave
-                acumulado = []   # el título no va dentro del cuerpo
+                # el título no va dentro del cuerpo, pero lo que venía
+                # ANTES de la primera sección sí (ver _huerfano)
+                acumulado = huerfano
                 en_seccion_real = True
                 continue
             # ¿Es un marcador especial (intro/objetivos/conclusión/refs)?
@@ -266,9 +289,10 @@ def segmentar_docx(docx_path: Path, marcadores: dict) -> tuple:
             if especial == "referencias" and clave_actual == "referencias":
                 especial = ""
             if especial and len(tn) < 60:
+                huerfano = _huerfano(clave_actual, acumulado)
                 _guardar()
                 clave_actual = especial
-                acumulado = []
+                acumulado = huerfano
                 continue
 
         # La tabla de metadatos con que arrancan algunos DOCX no es contenido.
@@ -293,13 +317,19 @@ def segmentar_docx(docx_path: Path, marcadores: dict) -> tuple:
             aplicar_comentarios(soup_sec, comentarios)
             secciones[clave] = str(soup_sec)
             for c in comentarios:
-                if c.get("accion") in ("otra_pagina", "foro_lectura_y_espacio") \
+                if c.get("accion") in ("otra_pagina", "foro_lectura_y_espacio",
+                                       "consigna_de_sugerida",
+                                       "consigna_desde_el_punto") \
                         and c.get("_aplicado") \
                         and not any(o["anclado"] == c["anclado"]
                                     for o in origenes_otra_pagina):
                     origenes_otra_pagina.append({
                         "anclado": c["anclado"], "pagina_origen": clave,
-                        "html": c.get("_contenido_extraido", "")})
+                        "html": c.get("_contenido_extraido", ""),
+                        # A dónde va lo que se sacó de la lectura: al foro
+                        # del módulo (lo habitual) o al buzón de la
+                        # actividad sugerida.
+                        "destino": c.get("_destino_extraido", "foro")})
     comentarios_pendientes = [c for c in comentarios if not c.get("_aplicado")]
 
     no_encontrados = [c for c in marcadores if c not in secciones]

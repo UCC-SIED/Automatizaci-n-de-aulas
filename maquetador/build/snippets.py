@@ -22,6 +22,7 @@ mano: el dp-wrapper los estiliza) y estiliza figuras y sus epígrafes.
 
 import re
 import uuid
+from html import escape
 from urllib.parse import quote
 import unicodedata
 
@@ -228,6 +229,65 @@ def bloque_video_studio(body_html: str = "", referencia: str = "",
 {intro}<div class="dp-embed-wrapper mx-auto d-block" style="text-align: center;">{adentro}</div>
 <p>&nbsp;</p>
 </div>"""
+
+
+# El podcast de una plataforma externa (Spotify, iVoox, Apple) se enlaza:
+# no es un audio nuestro y no se sube a Studio. Ese sigue siendo el "CTA -
+# Podcast" del catálogo; el "Embebido - Podcast" es para los audios propios.
+_PAT_PODCAST_EXTERNO = re.compile(
+    r"spotify\.com|ivoox|anchor\.fm|podcasts?\.apple|youtu\.?be", re.I)
+
+# El texto tiene que anunciar el audio para que valga la pena incrustar
+# el reproductor: "escuchá", "el siguiente audio", "este podcast".
+_PAT_ANUNCIA_AUDIO = re.compile(
+    r"\bescuch|\baudio|\bpodcast|\bauriculares", re.I)
+
+
+def bloque_podcast_studio(cuerpo_html: str = "", nombre: str = "",
+                          embed: str = "", referencia: str = "") -> str:
+    """"Embebido - Podcast" del catálogo UCC.
+
+    Los audios propios de la UCC no son un CTA que manda afuera: se suben a
+    Canvas Studio y se incrustan, igual que los videos. Como el id del medio
+    recién existe cuando alguien los sube —después de armar el aula— el
+    bloque sale con el hueco listo, y `--audio` lo completa cuando llegan.
+
+    Es el mismo markup en Educación y en Posgrado: el catálogo trae este
+    componente con el degradé institucional en las dos secciones.
+    """
+    cuerpo = cuerpo_html or (
+        '<p style="color: #444; margin-bottom: 20px;">&nbsp;</p>')
+    titulo_audio = (
+        '<p class="dp-text-bold lead" style="color: #444444; '
+        'margin-bottom: 20px; text-align: center;">'
+        f'<strong>{nombre}</strong></p>') if nombre else ""
+    cual = f": {referencia}" if referencia else ""
+    adentro = embed or f"<!-- Pegar aquí el audio de Canvas Studio{cual} -->"
+    return f"""<div class="dp-shadow-b3 cp-bg-dp-primary" style="background-image: linear-gradient(135deg, #003087 0%, #007bff 100%); background-position: initial; background-repeat: initial; background-attachment: initial; padding: 0px; border-radius: 15px; margin-bottom: 25px;">
+<div style="background-color: #f9f9f9; border-radius: 12px; padding: 30px;">
+<h4 class="dp-heading-ignore" style="margin-top: 0; color: #003087; display: flex; align-items: center; gap: 10px;"><i class="dp-icon fas fa-headphones cp-txt-dp-primary dp-border-dir-none dp-shadow-b4" style="border-width: 1px;"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i><em>Auriculares <strong>on</strong></em></h4>
+{cuerpo}
+{titulo_audio}<div class="dp-embed-wrapper mx-auto d-block dp-embed-scale-proportionally text-center dp-border-dir-all dp-shadow-b3" style="border-width: 10px; max-width: 500px; margin: 0px auto; border-radius: 10px;">{adentro}</div>
+</div>
+</div>"""
+
+
+def componente_de_podcast(body_html: str, titulo: str = "Auriculares on") -> str:
+    """El recuadro que le toca a un audio: embebido si es nuestro, CTA si no.
+
+    El catálogo tiene los dos. El audio producido por la UCC se escucha en
+    la página (Studio); el de Spotify o iVoox se abre afuera, y para eso el
+    CTA con el enlace sigue siendo lo correcto.
+    """
+    if _PAT_PODCAST_EXTERNO.search(body_html or ""):
+        return cta_titulo(titulo, body_html, ICONOS["podcast"])
+    if not _PAT_ANUNCIA_AUDIO.search(_norm(body_html or "")):
+        # La caja lleva el ícono de podcast pero el texto no anuncia ningún
+        # audio (pasa cuando el asesor encadena dos recuadros y el segundo
+        # hereda la etiqueta): armar el embebido dejaría un reproductor
+        # vacío en la página. Queda como estaba.
+        return cta_titulo(titulo, body_html, ICONOS["podcast"])
+    return bloque_podcast_studio(body_html)
 
 
 def resaltado_profundizacion(titulo: str, body_html: str) -> str:
@@ -541,6 +601,59 @@ def galeria_de_figuras(figuras: list, titulo: str = "") -> str:
         return ""
     pares = [_panel_de_figura(*f) for f in figuras]
     return construir_panels(pares, "dp-tabs-pills-vertical")
+
+
+# Alto de la miniatura en la grilla, como lo deja el catálogo UCC
+# (docs/referencia-designplus-cidilabs-ucc.md, "Múltiples (grilla)").
+_ALTO_MINIATURA = 200
+
+
+def fila_de_figuras(figuras: list, alt_por_numero: dict = None) -> str:
+    """Las figuras de una serie, lado a lado en una sola fila.
+
+    `figuras` es [(numero, titulo, html_de_la_imagen, nota)]. Sale como la
+    grilla de DesignPLUS (`dp-popup-gallery`, col-lg-4): se ven las tres
+    juntas y cada una se amplía al clic.
+
+    Es la alternativa a galeria_de_figuras, que las pone en solapas. La
+    diferencia es qué son: las solapas sirven para diagramas con texto
+    adentro, que en miniatura no se leen; la fila sirve para FOTOS que se
+    comparan de un vistazo —las tres de "Miralo con lupa" del módulo 2 de
+    Metodología II, que la asesora pidió como carrusel—.
+    """
+    if not figuras:
+        return ""
+    alt_por_numero = alt_por_numero or {}
+    # 12 columnas Bootstrap repartidas: 2 figuras a la mitad, 3 a un tercio,
+    # 4 a un cuarto. De 5 en adelante se mantiene el tercio y la grilla
+    # envuelve sola a un segundo renglón.
+    ancho = 12 // len(figuras) if 2 <= len(figuras) <= 4 else 4
+    columnas = []
+    for numero, titulo, img_html, nota in figuras:
+        # Por BeautifulSoup y no por regex: el alt lo escribe el asesor y
+        # viene con comillas y acentos, que acá hay que escapar bien.
+        img = BeautifulSoup(img_html, "html.parser").find("img")
+        if img is None:
+            continue
+        alt = alt_por_numero.get(numero, "")
+        if alt:
+            img["alt"] = alt
+        img["style"] = (f"height: {_ALTO_MINIATURA}px; width: 100%; "
+                        f"object-fit: cover;")
+        img_html = str(img)
+        epigrafe = f"Figura {numero}. {titulo}" if numero and titulo else (
+            titulo or (f"Figura {numero}" if numero else ""))
+        pie = f"<strong>{epigrafe}</strong>" if epigrafe else ""
+        if nota:
+            pie += f"<br />{_PIE_DE_GALERIA.format(nota=nota)}"
+        pie = f"<figcaption>{pie}</figcaption>" if pie else ""
+        columnas.append(
+            f'<div class="col-lg-{ancho}">\n'
+            f'<figure class="dp-image-padded dp-image-bordered '
+            f'dp-image-rounded-10">{img_html}{pie}</figure>\n</div>')
+    return ('<div class="dp-content-block dp-popup-gallery" '
+            'data-title="Image Grid Gallery 3x3">\n'
+            '<div class="row">\n' + "\n".join(columnas) + "\n</div>\n</div>")
 
 
 
@@ -888,7 +1001,11 @@ def _tabla_a_recuadro(tabla) -> str:
         # link. Con el genérico quedaban dos versiones del mismo recuadro,
         # con distinto ícono, según cómo lo hubiera escrito el asesor.
         return cta_descubri_leyendo(body)
-    if tipo in ("video", "podcast", "imagen", "mural"):
+    if tipo == "podcast":
+        # El audio propio no es un CTA que manda afuera: va el
+        # "Embebido - Podcast" del catálogo y se escucha acá.
+        return componente_de_podcast(body, titulo)
+    if tipo in ("video", "imagen", "mural"):
         return cta_titulo(titulo, body, ICONOS.get(tipo, ""))
     if tipo == "atencion":
         return resaltado_atencion(body, titulo)
@@ -1169,6 +1286,26 @@ def reemplazar_figuras_diseno(html: str, modulo: int, indice: dict,
             if getattr(vecino, "name", "") == "table":
                 return ("table", vecino)
         return (None, None)
+
+    # Figuras que ya están dentro de una grilla (la fila de fotos que arma
+    # el pedido de "carrusel"): el epígrafe vive en el <figcaption> y no en
+    # un <p>, así que el barrido de abajo no las veía y las versiones de
+    # DISEÑO quedaban sin usar —las tres de "Miralo con lupa" del módulo 2—.
+    # Acá solo se cambia el src: el alto y el recorte son los de la grilla.
+    for fig in soup.select(".dp-popup-gallery figure"):
+        pie = fig.find("figcaption")
+        img = fig.find("img")
+        if pie is None or img is None:
+            continue
+        m = _PAT_FIG_CAPTION.match(pie.get_text(" ", strip=True))
+        if not m or not m.group(2):
+            continue
+        tipo = "figura" if m.group(1).lower() == "figura" else "tabla"
+        path = indice.get((modulo, tipo, int(m.group(2))))
+        if not path:
+            continue
+        img["src"] = f"__DISENO__/{nombre_publicado_de_figura(path)}"
+        usadas.add(path)
 
     for p in soup.find_all("p"):
         texto = p.get_text(" ", strip=True)
@@ -1469,7 +1606,20 @@ def _definiciones_citadas_tras_pregunta(soup):
         aplicar_cita(p)
 
 
+# Los componentes se arman SOLO cuando el asesor los pide: con un comentario
+# en el DOCX o metiendo el contenido en una tabla. Deducirlos del texto —que
+# es lo que hacen las frases de _CUES_PARRAFO— daba recuadros que nadie había
+# pedido, y el equipo no puede publicarlos: "está bien interpretado, pero si
+# no me lo pide el asesor no puedo marcarlo, así que la próxima dejalo texto
+# plano" (revisión de Metodología II, 16-10-2026). Ahí salieron un "No pases
+# de largo" sobre un "Es importante señalar…", un "Descubrí leyendo" y dos
+# bloques de video en páginas que no los pedían.
+INFERIR_COMPONENTES_POR_TEXTO = False
+
+
 def _detectar_cue(texto_norm: str) -> str:
+    if not INFERIR_COMPONENTES_POR_TEXTO:
+        return ""
     for tipo, frases in _CUES_PARRAFO:
         if texto_norm.startswith(frases):
             return tipo
@@ -1493,6 +1643,109 @@ def _absorber_siguientes(p) -> list:
     return extras
 
 
+def _es_marcador_de_video(el) -> bool:
+    """¿Este párrafo es SOLO el marcador, sin contenido propio?
+
+    "VIDEO M2.", "(AQUÍ VA VIDEO M1)", "incrustar video aquí." Es una
+    indicación para maquetación: no se publica.
+    """
+    texto = el.get_text(" ", strip=True)
+    if not texto:
+        return False
+    return bool(_PAT_MARCADOR_VIDEO.match(texto)
+                or _PAT_AQUI_VA_VIDEO.match(texto)
+                or (_PAT_EMBEBER_VIDEO.match(texto)
+                    and len(texto.split()) <= 6))
+
+
+# Un renglón de código. Word lo trae como un párrafo por línea —con la
+# sangría adentro del texto, que es lo que lo salva— así que publicado tal
+# cual quedan párrafos sueltos sin sangría ni saltos. Pasó en el módulo 2
+# de IA Aplicada I, con los ejemplos de Python.
+_PAT_CODIGO_FUERTE = re.compile(
+    r"^\s*(?:#|//)"                                   # comentario
+    r"|^\s*\w[\w.\[\]'\"]*\s*=\s*[\{\[\(]"            # asignación que abre
+    r"|^\s*(?:import|from|def|class|return|print|for|if|while|elif|else)\b",
+    re.I)
+_PAT_CODIGO_DEBIL = re.compile(
+    r"^\s{2,}\S"                                      # renglón sangrado
+    r"|^\s*[\}\]\)],?\s*$"                            # cierre de bloque
+    r"|^\s*[\{\[\(]\s*$")
+
+
+def _es_renglon_de_codigo(texto: str) -> bool:
+    return bool(texto) and bool(_PAT_CODIGO_FUERTE.match(texto)
+                                or _PAT_CODIGO_DEBIL.match(texto))
+
+
+def _bloques_de_codigo(soup, tema: str = "") -> None:
+    """Junta los párrafos que son código en un solo bloque monoespaciado.
+
+    Se exige al menos un renglón "fuerte" (un comentario, una asignación
+    que abre, una palabra clave) para no confundir una enumeración o una
+    cita sangrada con código.
+    """
+    parrafos = [p for p in soup.find_all("p")]
+    i = 0
+    while i < len(parrafos):
+        p = parrafos[i]
+        if p.parent is None or p.find("img") is not None:
+            i += 1
+            continue
+        corrida, j = [], i
+        while j < len(parrafos):
+            q = parrafos[j]
+            if q.parent is None or q.find("img") is not None:
+                break
+            # El texto crudo, que conserva la sangría; get_text(" ") la come.
+            crudo = "".join(q.strings).replace("\xa0", " ").rstrip()
+            if not _es_renglon_de_codigo(crudo):
+                break
+            corrida.append((q, crudo))
+            j += 1
+        fuertes = sum(1 for _q, t in corrida if _PAT_CODIGO_FUERTE.match(t))
+        if len(corrida) >= 2 and fuertes >= 1:
+            codigo = "\n".join(t for _q, t in corrida)
+            # Los colores salen del catálogo UCC: la superficie del
+            # "Laboratorio de ideas" (#f4f6f8), el borde de la "Bitácora de
+            # aprendizaje" (#e1e1e1) y el acento del tema a la izquierda,
+            # como lo lleva la bitácora. Antes eran dos grises inventados.
+            acento = ACENTO_POR_TEMA.get(_norm(tema or ""), ACCENT)
+            bloque = BeautifulSoup(
+                '<pre class="dp-heading-ignore" style="font-family: '
+                "Consolas, 'Courier New', monospace; font-size: 10pt; "
+                "background-color: #f4f6f8; border: 1px solid #e1e1e1; "
+                f"border-left: 6px solid {acento}; "
+                'border-radius: 6px; padding: 12px; overflow-x: auto; '
+                f'white-space: pre;">{escape(codigo)}</pre>', "html.parser")
+            corrida[0][0].replace_with(bloque)
+            for q, _t in corrida[1:]:
+                q.decompose()
+            i = j
+            continue
+        i += 1
+
+
+def _hay_marcador_de_video(p) -> bool:
+    """¿El asesor marcó acá que va un video propio?
+
+    Se mira el párrafo y los que el recuadro absorbería: el marcador a
+    veces queda pegado al final de la invitación ("…mirar el siguiente
+    video conceptual. VIDEO M2.") y a veces va en un párrafo propio
+    debajo.
+    """
+    for elemento in [p] + _absorber_siguientes(p):
+        texto = elemento.get_text(" ", strip=True)
+        if not texto:
+            continue
+        if (_PAT_MARCADOR_VIDEO.match(texto)
+                or _PAT_MARCADOR_VIDEO_FINAL.search(texto)
+                or _PAT_AQUI_VA_VIDEO.match(texto)
+                or _PAT_EMBEBER_VIDEO.match(texto)):
+            return True
+    return False
+
+
 def _procesar_cues_parrafo(soup):
     # Bloques de video que YA venían armados de la tabla ("Embeber video: …"):
     # sus párrafos no se vuelven a mirar, si no el bloque salía duplicado y
@@ -1513,7 +1766,21 @@ def _procesar_cues_parrafo(soup):
         if not texto or len(texto) > 700:
             continue
         tipo = _detectar_cue(_norm(texto))
-        if not tipo and _PAT_VIDEO_INVIT.search(texto):
+        # El marcador del asesor SÍ arma el bloque, aunque la inferencia por
+        # texto esté apagada: "VIDEO M2.", "(AQUÍ VA VIDEO M1)" o "Embeber
+        # video: …" son pedidos explícitos, no una deducción de la prosa.
+        if not tipo and _hay_marcador_de_video(p):
+            tipo = "video"
+        # Un enlace real a YouTube/Vimeo tampoco es una deducción de la
+        # prosa: el video externo está ahí, y el equipo siempre lo publica
+        # como CTA "Auriculares on".
+        if not tipo and _PAT_VIDEO_INVIT.search(texto) and (
+                _PAT_URL_VIDEO.search(texto)
+                or any(_PAT_URL_VIDEO.search(s.get_text(" ", strip=True))
+                       for s in _absorber_siguientes(p))):
+            tipo = "video"
+        if not tipo and INFERIR_COMPONENTES_POR_TEXTO \
+                and _PAT_VIDEO_INVIT.search(texto):
             # Invitación a ver un video aunque no arranque con la frase-cue.
             # Si es una referencia a un video ya visto ("luego de ver el
             # video, ¿…?") y no trae enlace, no es un recuadro de video.
@@ -1543,7 +1810,16 @@ def _procesar_cues_parrafo(soup):
             # Con enlace a YouTube/Vimeo es un CTA que manda afuera; sin
             # enlace es un video propio de la UCC (Canvas Studio).
             if _PAT_URL_VIDEO.search(body):
-                nuevo = cta_titulo("Auriculares on", body, ICONOS["video"])
+                # El marcador del asesor tampoco se publica acá. Solo lo
+                # sacaba la rama de Canvas Studio, así que un foro que
+                # tuviera las dos cosas —el enlace externo y el "incrustar
+                # video aquí"— salía con el marcador escrito en el aula
+                # (foro de apertura de Medios).
+                nuevo = cta_titulo("Auriculares on",
+                                   "\n".join(_sin_marcador_video(str(x))
+                                             for x in grupo
+                                             if not _es_marcador_de_video(x)),
+                                   ICONOS["video"])
             else:
                 # El marcador que el asesor deja donde va el video ("VIDEO M2.")
                 # no es contenido: no se publica, ni como párrafo suelto ni
@@ -2696,12 +2972,21 @@ def _espaciar_recuadros(soup):
     # "Laboratorio de ideas" no es un dp-callout (es un dp-content-block, el
     # mismo molde que el "Lecture Hook"), pero siempre lleva título: le
     # corresponde el mismo aire de párrafo entero que a un recuadro con
-    # título, no el espaciado corto del simple.
+    # título. Salvo que quede encerrado entre texto corrido, donde ese aire
+    # se ve exagerado y va el corto — igual que los dp-callout de arriba.
+    # Era el único que no miraba su contexto: "en toda la página 3.1., los
+    # recuadros como por ejemplo o laboratorio u otros, te olvidaste de
+    # colocarles espacio superior e inferior pero pequeños, porque están
+    # encerrados entre letras de párrafos" (revisión de Metodología II).
     for caja in soup.find_all("div", attrs={"data-title": "Lecture Hook"}):
         if caja.parent is None:
             continue
-        _aire_antes(caja, soup)
-        _aire_despues(caja, soup)
+        if _encerrado_entre_texto(caja):
+            _aire_corto_antes(caja)
+            _aire_corto_despues(caja)
+        else:
+            _aire_antes(caja, soup)
+            _aire_despues(caja, soup)
 
 
 def _agrandar_intro_subrayada_de_panel(soup):
@@ -2796,7 +3081,13 @@ def _es_figura(img) -> bool:
     src = img.get("src", "")
     if "/Iconos/" in src or src.endswith(".svg"):
         return False
-    if img.find_parent(class_="card-title") or img.find_parent(class_="dp-callout"):
+    # Los iconos del recuadro: el del título y el del costado. Antes se
+    # descartaba TODO lo que estuviera dentro de un dp-callout, y así una
+    # figura de contenido metida en un recuadro quedaba sin alt y con el
+    # rótulo "Texto alternativo: …" publicado al pie (la Figura 3 de 1.2 en
+    # Metodología II, dentro de la caja "¿Qué vemos?").
+    if img.find_parent(class_="card-title") \
+            or img.find_parent(class_="dp-callout-side-emphasis"):
         return False
     return True
 
@@ -2808,6 +3099,13 @@ def _figura_vecina(p):
     Devuelve la imagen, o la tabla cuando la "figura" es una tabla de datos
     (hay epígrafes 'Figura N.' que refieren a una tabla, no a una imagen).
     """
+    # La imagen puede estar en el MISMO párrafo que el texto alternativo:
+    # el docente escribe las dos cosas en un solo renglón de Word. Antes se
+    # buscaba solo entre los hermanos y el rótulo quedaba publicado al lado
+    # de la figura (la Figura 2 de 3.2.4 en Metodología II).
+    propia = p.find("img") if getattr(p, "find", None) else None
+    if propia is not None and _es_figura(propia):
+        return propia
     for buscar in (p.find_previous_siblings, p.find_next_siblings):
         for vecino in list(buscar())[:3]:
             if getattr(vecino, "name", None) == "img":
@@ -2821,6 +3119,14 @@ def _figura_vecina(p):
                          else vecino.find("table"))
                 if tabla is not None:
                     return tabla
+    # Sin figura entre los hermanos: puede haber quedado envuelta en un
+    # bloque (un recuadro, un <figure>) y entonces ya no es hermana del
+    # párrafo. Se busca en el contenedor, que es el alcance de la figura.
+    contenedor = p.parent
+    if contenedor is not None and getattr(contenedor, "find_all", None):
+        for img in contenedor.find_all("img"):
+            if _es_figura(img):
+                return img
     return None
 
 
@@ -2938,7 +3244,14 @@ def _alt_parrafo_a_atributo(soup):
             figura["aria-label"] = alt
         else:
             figura["alt"] = alt
-        p.decompose()
+        if figura in p.descendants:
+            # La figura está DENTRO del párrafo: borrarlo entero se llevaría
+            # la imagen. Se saca solo el rótulo.
+            for texto in list(p.find_all(string=True)):
+                if _PAT_ALT_PARRAFO.match(texto.strip()):
+                    texto.extract()
+        else:
+            p.decompose()
 
 
 def _figura_es_expandible(img) -> bool:
@@ -3278,9 +3591,18 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
         if bq.find(class_="dp-callout"):
             bq.unwrap()
             continue
+        # El estilo "Cita" de Word es una CITA, no un recuadro: va sangrada
+        # y sin caja. Encuadrarla armaba el "recuadro simple que no pidió la
+        # asesora" (revisión de Metodología II: el pasaje de Gutiérrez sobre
+        # Bourdieu salía adentro de una caja que nadie había marcado).
         inner = "".join(str(x) for x in bq.children).strip()
-        if inner:
-            bq.replace_with(BeautifulSoup(resaltado_simple(inner), "html.parser"))
+        if not inner:
+            continue
+        nuevo = BeautifulSoup(inner if "<p" in inner else f"<p>{inner}</p>",
+                              "html.parser")
+        for parrafo in nuevo.find_all("p"):
+            aplicar_cita(parrafo)
+        bq.replace_with(nuevo)
 
     # 1.55 Definición citada (APA) justo debajo de un encabezado-pregunta
     #      ("¿Qué es…?"): cita textual con sangría doble, sin caja.
@@ -3288,6 +3610,10 @@ def procesar_contenido(html: str, tema: str = "", bajar_h1_h2: bool = True) -> s
 
     # 1.6 Párrafos con frases-señal → recuadros (Lectura / Video / Atención)
     _procesar_cues_parrafo(soup)
+
+    # 1.62 Código: Word lo trae como un párrafo por línea. Se juntan
+    #      en un bloque monoespaciado que conserva sangrías y saltos.
+    _bloques_de_codigo(soup, tema)
 
     # 1.65 El mismo texto encuadrado dos veces. Pasa cuando llega por dos
     #      caminos (una cita del DOCX y un comentario que pide resaltarlo, por

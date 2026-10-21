@@ -55,6 +55,112 @@ def _por_modulo(candidatos: list, num: int) -> list:
     return [(n, p) for n, p in candidatos if n == num]
 
 
+# La columna "referencia" de la planilla no siempre nombra un archivo. A
+# veces dice DÓNDE escribió el docente la consigna dentro de la lectura
+# ("Final del 1.2 pág. 9", "En 2.1, pag 4", "3.2.1, p. 8", "En la
+# lectura") y a veces pega el link de Drive del documento. Buscar un DOCX
+# con ese texto da basura: en Metodología II el foro "Nuevas subjetividades"
+# se quedaba con el DOCX del foro de apertura —y lo publicaba dos veces— y
+# la "Actividad obligatoria 2" no encontraba su archivo, que estaba al
+# lado, porque la referencia era una URL de Google Docs.
+_PAT_REF_URL = re.compile(r"https?://", re.I)
+_PAT_REF_EN_LA_LECTURA = re.compile(
+    r"^\s*en\s+(?:la\s+lectura|el\s+m[oó]dulo)\s*$"
+    r"|\bp(?:[áa]g\.?|\.)\s*\d+"
+    r"|^\s*(?:final\s+del?\s+|en\s+el\s+|en\s+)?\d+\.\d+",
+    re.I)
+
+# Un foro de apertura es del curso, no de un módulo, y su DOCX sí existe
+# aparte: la regla de "la consigna está en la lectura" no lo alcanza.
+_KW_APERTURA_FORO = ("apertura", "presentacion", "bienvenida",
+                     "introductorio", "introduccion")
+
+
+# Prefijo de área/carrera con que el equipo nombra las carpetas de Drive
+# ("Ed. Especial - Metodología…"). No es parte del nombre de la asignatura.
+_PAT_PREFIJO_AREA = re.compile(
+    r"^\s*(?:ed\.?\s*especial|educaci[óo]n\s+especial|posgrado|grado|"
+    r"lic\.?|licenciatura|mgter\.?|maestr[ií]a)\s*[-–—:]\s*", re.I)
+
+
+def _nombre_publicado(nombre_planilla: str, nombre_carpeta: str, spec) -> str:
+    """El nombre de la asignatura que se publica en el aula.
+
+    Manda la planilla, salvo que la CARPETA nombre la asignatura con más
+    palabras: ahí la planilla la está abreviando. En Metodología II la
+    planilla dice "Metodología de la investigación II (Lic. en Gestión de
+    la Educación Especial)" y la carpeta "Ed. Especial - Metodología de la
+    Investigación Educativa II" —que es como se llama el aula—.
+
+    La carpeta NO gana cuando dice lo mismo: viene de Drive y a veces llega
+    sin acentos ("Creacion de Valor en la Economia de la Experiencia"), y
+    ahí la planilla está mejor escrita.
+    """
+    from maquetador.build.imscc_builder import nombre_de_asignatura
+    planilla = nombre_de_asignatura(nombre_planilla)
+    carpeta = nombre_de_asignatura(_PAT_PREFIJO_AREA.sub("", nombre_carpeta or ""))
+    if not carpeta:
+        return planilla
+    if not planilla:
+        return carpeta
+    pal_planilla = set(normalizar(planilla).split())
+    pal_carpeta = set(normalizar(carpeta).split())
+    if pal_planilla < pal_carpeta:      # la carpeta dice todo eso y algo más
+        spec.issues.append(Issue(Severidad.INFO,
+            f"Nombre de la asignatura tomado de la carpeta ('{carpeta}'): la "
+            f"planilla la abrevia ('{planilla}').", "Página de inicio"))
+        return carpeta
+    return planilla
+
+
+_PAT_TITULO_NUMERADO = re.compile(r"^\s*(\d+(?:\.\d+)*)\.?\s*(.*)$", re.S)
+
+
+def _sin_adornos(texto: str) -> str:
+    """El título comparable: sin acentos, sin mayúsculas y sin la puntuación
+    de los bordes."""
+    return normalizar(texto).strip(" .,;:")
+
+
+def _elegir_titulo_de_pagina(item, titulo_docx: str) -> None:
+    """Deja en `item.titulo` el título que va a salir publicado.
+
+    Gana el de la LECTURA cuando la docente reescribió el encabezado de
+    verdad —en Metodología II, la planilla pedía "3.2.2. Observación y
+    observación participativa: condiciones y particularidades" y la lectura
+    traía "3.2.2. La observación como medio de representar la realidad"—.
+    Gana el de la planilla cuando la diferencia es solo de puntuación,
+    mayúsculas o acentos: es lo mismo escrito distinto, y cambiarlo movería
+    el título de páginas ya entregadas sin ninguna ganancia.
+
+    La NUMERACIÓN sale siempre de la planilla, que es la que ordena el aula.
+    """
+    if not titulo_docx or not titulo_docx.strip():
+        return
+    m_planilla = _PAT_TITULO_NUMERADO.match(item.titulo.strip())
+    m_docx = _PAT_TITULO_NUMERADO.match(titulo_docx.strip())
+    if not (m_planilla and m_docx):
+        return
+    texto_planilla, texto_docx = m_planilla.group(2), m_docx.group(2)
+    if not texto_docx.strip() or _sin_adornos(texto_planilla) == _sin_adornos(texto_docx):
+        return
+    from maquetador.ingest.xlsx_parser import _sin_punto_final
+    item.titulo = f"{m_planilla.group(1)}. {_sin_punto_final(texto_docx.strip())}"
+    item.detalle["titulo_planilla_original"] = texto_planilla
+    item.issues.append(Issue(Severidad.INFO,
+        f"Título tomado de la lectura: la planilla decía "
+        f"'{texto_planilla[:60]}'.", item.titulo[:60]))
+
+
+def _referencia_nombra_archivo(ref: str) -> bool:
+    """¿La referencia de la planilla sirve para buscar un archivo?"""
+    if not ref or not ref.strip():
+        return False
+    if _PAT_REF_URL.search(ref):
+        return False
+    return not _PAT_REF_EN_LA_LECTURA.search(ref)
+
+
 def _fila_plantilla_vacia(item) -> bool:
     """En el formato nuevo la planilla trae filas de plantilla (Tarea/Foro/
     Evaluación) que el asesor dejó sin completar. Si no hay título de
@@ -80,10 +186,15 @@ def reconciliar(spec: CourseSpec, inv: InventarioCurso) -> CourseSpec:
     if not spec.nombre or any(k in _n for k in ("estructura", "para maquetacion",
                                                 "para maquetación", "planilla")):
         spec.nombre = inv.nombre_curso
+    spec.nombre = _nombre_publicado(spec.nombre, inv.nombre_curso, spec)
     spec.issues.extend(inv.issues)
     # Las figuras de DISEÑO las usa el generador para reemplazar las
     # imágenes embebidas de los DOCX (mejor calidad).
     spec.imagenes_diseno = list(inv.imagenes_diseno)
+    # Archivos sueltos de la carpeta que el asesor puede estar enlazando
+    # desde una actividad (el protocolo de transparencia, una plantilla):
+    # el builder los adjunta al paquete si alguien los enlaza de verdad.
+    spec.adjuntos = list(inv.otros)
     spec.fotos_docente = list(inv.fotos_docente)
     # Repositorio de casos: las fichas se suben como archivos del curso (la
     # planilla las pide como repositorio, no como página de contenido). Se
@@ -122,6 +233,13 @@ def reconciliar(spec: CourseSpec, inv: InventarioCurso) -> CourseSpec:
                 archivo=(inv.hoja_de_ruta or [None])[0],
                 confianza=0.9 if inv.hoja_de_ruta else 0.0)
         elif "esquema" in n:
+            # El esquema se publica como IMAGEN: si la carpeta trae también
+            # el DOCX con el que lo armaron ("Esquema conceptual-
+            # Virgolini.docx"), la imagen va primero. Si no, el generador
+            # avisaba que no la encontraba aunque estuviera al lado.
+            inv.esquema.sort(
+                key=lambda p: p.suffix.lower() not in (".jpg", ".jpeg", ".png",
+                                                       ".webp", ".gif"))
             item.fuente = FuenteContenido(
                 archivo=(inv.esquema or [None])[0],
                 confianza=0.85 if inv.esquema else 0.0)
@@ -204,6 +322,7 @@ def reconciliar(spec: CourseSpec, inv: InventarioCurso) -> CourseSpec:
                         fuente.confianza = min(
                             0.95, 0.7 + 0.25 * _similitud(titulo_planilla, cand[0].titulo))
                         item.detalle["titulo_docx"] = cand[0].texto_completo
+                        _elegir_titulo_de_pagina(item, cand[0].texto_completo)
                     elif normalizar(titulo_planilla).startswith("conclusi") \
                             and perfil.tiene_conclusion:
                         # La planilla pide la conclusión como página propia y el
@@ -229,6 +348,8 @@ def reconciliar(spec: CourseSpec, inv: InventarioCurso) -> CourseSpec:
                             fuente.confianza = round(score * 0.9, 2)
                             item.detalle["titulo_docx"] = (
                                 mejor.texto_completo if es_numerada else mejor.titulo)
+                            _elegir_titulo_de_pagina(
+                                item, item.detalle["titulo_docx"])
                             if score < 0.85:
                                 item.issues.append(Issue(Severidad.AVISO,
                                     f"Asigné por similitud de título ({score:.0%}): "
@@ -260,18 +381,31 @@ def reconciliar(spec: CourseSpec, inv: InventarioCurso) -> CourseSpec:
                 if _fila_plantilla_vacia(item):
                     continue
                 cand = _por_modulo(inv.foros, modulo.numero) or inv.foros
-                ref = item.detalle.get("referencia") or item.detalle.get("item_planilla", item.titulo)
+                ref_planilla = item.detalle.get("referencia") or ""
+                es_apertura = any(
+                    k in normalizar(item.titulo + " "
+                                    + item.detalle.get("item_planilla", ""))
+                    for k in _KW_APERTURA_FORO)
+                # La consigna la escribió el docente dentro de la lectura y
+                # la planilla solo dice en qué punto: no hay archivo que
+                # buscar, y buscarlo igual termina en el DOCX de otro foro.
+                if ref_planilla and not es_apertura \
+                        and not _referencia_nombra_archivo(ref_planilla):
+                    item.issues.append(Issue(Severidad.INFO,
+                        f"La consigna de este foro está en la lectura "
+                        f"({ref_planilla}): se toma del DOCX del módulo y no "
+                        "de un archivo aparte.", ctx_item))
+                    continue
+                ref = (ref_planilla if _referencia_nombra_archivo(ref_planilla)
+                       else item.detalle.get("item_planilla", item.titulo))
                 archivo, score = _match_archivo(ref, cand)
                 # Un foro de apertura/presentación matchea con un DOCX de foro
                 # cuyo nombre lo indica, aunque la 'referencia' de la planilla
                 # sea una URL de Google Docs (inútil para matchear por nombre) y
                 # el nombre del archivo traiga el sufijo del docente que baja el
                 # parecido textual por debajo del umbral del generador.
-                titulo_foro = normalizar(
-                    item.titulo + " " + item.detalle.get("item_planilla", ""))
-                _KW_APERTURA = ("apertura", "presentacion", "bienvenida",
-                               "introductorio", "introduccion")
-                if any(k in titulo_foro for k in _KW_APERTURA):
+                _KW_APERTURA = _KW_APERTURA_FORO
+                if es_apertura:
                     # El foro de apertura/introductorio es de curso (sin número
                     # de módulo), así que se busca en TODOS los foros, no solo
                     # en los del módulo actual.
@@ -313,8 +447,39 @@ def reconciliar(spec: CourseSpec, inv: InventarioCurso) -> CourseSpec:
                 if _fila_plantilla_vacia(item):
                     continue
                 cand = _por_modulo(inv.actividades, modulo.numero) or inv.actividades
-                ref = item.detalle.get("referencia") or item.titulo
+                # Con una URL de Drive en la referencia hay que buscar por el
+                # título del ítem: la "Actividad obligatoria 2" de Metodología
+                # II quedaba sin fuente teniendo su DOCX en la carpeta.
+                ref_planilla = item.detalle.get("referencia") or ""
+                ref = (ref_planilla if _referencia_nombra_archivo(ref_planilla)
+                       else item.titulo)
                 archivo, score = _match_archivo(ref, cand)
+                # Si el título del ítem está textual dentro del nombre del
+                # archivo, es ese y no hay duda: el parecido global lo diluye
+                # el sufijo que esta cátedra le pone a todos los archivos
+                # ("… (Metodología de la Investigación II- Adriana Di
+                # Francesco)"). "Actividad obligatoria 2" matcheaba su propio
+                # DOCX al 44% y el builder lo saltaba por baja confianza,
+                # dejando el buzón del módulo 3 con el placeholder del aula
+                # base. Es el mismo refuerzo que ya usan los foros.
+                titulo_item = normalizar(item.titulo)
+                if archivo is not None and len(titulo_item) >= 12 \
+                        and titulo_item in normalizar(archivo.stem):
+                    score = max(score, 0.9)
+                # Lo mismo cuando el orden de las palabras no coincide:
+                # "Actividad M1- obligatoria (individual)" contra "…
+                # Actividad Obligatoria M1 VIRGOLINI.docx". Si los dos dicen
+                # de qué clase es y de qué módulo, es ese archivo — en IA
+                # Aplicada I matcheaba al 57% y el buzón del módulo 1 salía
+                # con el placeholder del aula base.
+                elif archivo is not None:
+                    nombre_arch = normalizar(archivo.stem)
+                    clase = next((c for c in ("obligatoria", "sugerida",
+                                              "integradora")
+                                  if c in titulo_item and c in nombre_arch), "")
+                    if clase and re.search(rf"\bm?{modulo.numero}\b", nombre_arch) \
+                            and re.search(rf"\bm?{modulo.numero}\b", titulo_item):
+                        score = max(score, 0.9)
                 en_modulo = _por_modulo(inv.actividades, modulo.numero)
                 if archivo and score >= 0.3:
                     item.fuente = FuenteContenido(archivo=archivo,
@@ -331,6 +496,16 @@ def reconciliar(spec: CourseSpec, inv: InventarioCurso) -> CourseSpec:
                         "Hay varios DOCX de actividad para este módulo y no pude "
                         "decidir cuál corresponde: "
                         + ", ".join(p.name for _, p in en_modulo), ctx_item))
+                elif ref_planilla and not _referencia_nombra_archivo(ref_planilla) \
+                        and not _PAT_REF_URL.search(ref_planilla):
+                    # Igual que con los foros: la consigna la escribió el
+                    # docente dentro de la lectura y la planilla solo dice
+                    # en qué punto ("en 1.3, p. 14"). No falta ningún
+                    # archivo, así que no es un aviso.
+                    item.issues.append(Issue(Severidad.INFO,
+                        f"La consigna de esta actividad está en la lectura "
+                        f"({ref_planilla}): se toma del DOCX del módulo y no "
+                        "de un archivo aparte.", ctx_item))
                 else:
                     item.issues.append(Issue(Severidad.AVISO,
                         "No pude asociar esta actividad con un DOCX de la carpeta.",

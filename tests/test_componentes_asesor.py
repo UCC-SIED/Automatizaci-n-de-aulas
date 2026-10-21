@@ -150,9 +150,12 @@ class TestConstruirPopover:
 
 class TestAplicarCita:
     def test_agrega_sangria_doble(self):
+        """Izquierda 80 y derecha 40. Con 40 de los dos lados la cita no se
+        despegaba del cuerpo: el pedido se repitio en las seis citas de
+        Metodologia II ("le falta aumentar la sangria una vez mas")."""
         el = BeautifulSoup("<p>Una cita textual.</p>", "html.parser").find("p")
         aplicar_cita(el)
-        assert "margin-left: 40px" in el.get("style", "")
+        assert "margin-left: 80px" in el.get("style", "")
         assert "margin-right: 40px" in el.get("style", "")
 
 
@@ -215,7 +218,7 @@ class TestCableado:
             "accion": "cita", "autor": "",
         }]
         aplicar_comentarios(soup, comentarios)
-        assert "margin-left: 40px" in str(soup)
+        assert "margin-left: 80px" in str(soup)
         assert comentarios[0].get("_aplicado") is True
 
     def test_tooltip_preserva_parrafo(self):

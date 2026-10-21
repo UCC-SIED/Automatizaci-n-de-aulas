@@ -46,11 +46,15 @@ def _detectar_rostro(ruta: Path):
     return max(rostros, key=lambda r: r[2] * r[3])
 
 
-def recortar_rostro_circular(ruta: Path, destino: Path) -> Path:
+def recortar_rostro_circular(ruta: Path, destino: Path) -> int:
     """Recorta `ruta` a un cuadrado centrado en el rostro detectado y lo
     guarda en `destino` como PNG. Sin rostro detectado, recorta centrado en
     la imagen completa (mismo resultado que el object-fit:cover de siempre,
-    no hay regresión). Devuelve `destino`.
+    no hay regresión).
+
+    Devuelve el lado NATIVO del recorte, en píxeles, antes de llevarlo al
+    tamaño de publicación: es lo que dice si la foto venía con suficiente
+    resolución o hubo que agrandarla.
     """
     with Image.open(ruta) as im:
         img = im.convert("RGB")
@@ -68,6 +72,37 @@ def recortar_rostro_circular(ruta: Path, destino: Path) -> Path:
     arriba = min(max(cy - lado / 2, 0), alto - lado)
     recorte = img.crop((int(izq), int(arriba),
                         int(izq + lado), int(arriba + lado)))
+    lado_nativo = min(recorte.size)
+    recorte = _normalizar_tamano(recorte)
     destino.parent.mkdir(parents=True, exist_ok=True)
     recorte.save(destino, "PNG")
-    return destino
+    return lado_nativo
+
+
+# La ficha muestra la foto a 150x150 CSS. Se guarda al triple para que se
+# vea nítida en pantallas de alta densidad; más que eso no aporta nada
+# visible y sí pesa: el recorte de 2428x2428 de una foto de 6000x4000
+# ocupaba 4,2 MB del paquete para mostrarse en un círculo de 150 px.
+LADO_FICHA = 450
+
+
+def _normalizar_tamano(recorte: Image.Image) -> Image.Image:
+    """Lleva el recorte al tamaño con que se publica.
+
+    Si viene grande, se reduce (Lanczos, sin pérdida visible). Si viene
+    chico —la foto que mandan a veces tiene el rostro en 150 px— se agranda
+    y se le pasa una máscara de enfoque: no recupera detalle que la foto no
+    tiene, pero queda bastante mejor que dejar que el navegador la estire,
+    que es lo que pasaba antes.
+    """
+    lado = min(recorte.size)
+    if lado == LADO_FICHA:
+        return recorte
+    nuevo = recorte.resize((LADO_FICHA, LADO_FICHA), Image.LANCZOS)
+    if lado < LADO_FICHA:
+        from PIL import ImageFilter
+        # Radio y fuerza suaves: con más, el grano y los bordes de la
+        # compresión JPEG de la foto original se vuelven evidentes.
+        nuevo = nuevo.filter(ImageFilter.UnsharpMask(
+            radius=1.2, percent=110, threshold=3))
+    return nuevo

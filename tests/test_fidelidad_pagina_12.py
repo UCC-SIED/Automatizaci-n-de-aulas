@@ -212,9 +212,14 @@ class TestEspaciadoDeRecuadros:
         assert "<br/>" in out or "<br>" in out
 
     def test_el_recuadro_simple_lleva_espaciado_corto(self):
-        """'los recuadros simples llevan un espaciado menor… shift enter'."""
+        """'los recuadros simples llevan un espaciado menor… shift enter'.
+
+        El recuadro llega de una tabla del asesor, que es como se pide: un
+        <blockquote> suelto ya no se encuadra (es una cita)."""
         html = ("<p>Texto previo que introduce.</p>"
-                "<blockquote><p>Una frase corta destacada.</p></blockquote>"
+                '<div class="dp-callout dp-callout-color-lg-tip card">'
+                '<div class="card-body">'
+                "<p>Una frase corta destacada.</p></div></div>"
                 "<p>Sigue el texto.</p>")
         out = procesar_contenido(html)
         assert "<br/>" in out or "<br>" in out

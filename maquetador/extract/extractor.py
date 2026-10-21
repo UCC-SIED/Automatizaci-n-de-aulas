@@ -66,6 +66,7 @@ def extraer_contenido(spec: CourseSpec) -> dict:
                             "__MEDIA__/", f"__MEDIA__/m{modulo.numero}_"),
                         "pagina_titulo": pagina.detalle.get("titulo_docx", "")
                                          if pagina else "",
+                        "destino": o.get("destino", "foro"),
                     })
                 modulo.extras_otra_pagina = lista
 

@@ -42,6 +42,18 @@ def pares_de_tabla(tabla) -> list:
         return []
     ncols = max(len(f) for f in filas)
 
+    # Dos columnas, un par por FILA: el título a la izquierda y su contenido
+    # a la derecha. Es como la cátedra de Medios arma las flip cards —seis
+    # filas "Aprender haciendo | Es la estrategia mediante la cual…"— y esta
+    # geometría no estaba contemplada: la tabla caía en la grilla alternada
+    # de abajo, que la descartaba, y las seis tarjetas salían como aviso.
+    if ncols == 2 and len(filas) >= 2 and all(len(f) == 2 for f in filas):
+        izquierda = [f[0][0] for f in filas]
+        derecha = [f[1][0] for f in filas]
+        if all(_es_titulo_corto(t) for t in izquierda) \
+                and all(len(d) > len(t) for t, d in zip(izquierda, derecha)):
+            return [(f[0][0], f[1][1] or "&nbsp;") for f in filas]
+
     # Grilla multi-columna con filas alternando títulos / descripciones.
     def _largo_medio(fila):
         return sum(len(t) for t, _ in fila) / max(1, len(fila))
@@ -544,15 +556,29 @@ def construir_tooltip(palabra: str, contenido: str, n: int) -> str:
 
     Distinto del popover (que es una ficha grande y se dispara con clic): el
     disparador y el contenido van juntos dentro del mismo contenedor.
+
+    Cuando el asesor da una URL como contenido ("popover:
+    https://…/dnr-resumen-ejecutivo") va como enlace y no como texto
+    pelado: es la fuente del término, y así se puede abrir.
     """
+    if re.fullmatch(r"https?://\S+", (contenido or "").strip()):
+        url = contenido.strip()
+        contenido = (f'<a class="inline_disabled dp-ext-ignore" href="{url}" '
+                     f'target="_blank" rel="noopener">{url}</a>')
     return (f'<span class="dp-tooltip-container">'
             f'<a id="dpPopup{n}" class="dp-tooltip-trigger dp-popup-trigger" '
             f'role="button" href="#dpPopup{n}tooltip" aria-describedby="" '
             f'data-bs-toggle="tooltip">{palabra}</a> '
             f'<span id="dpPopup{n}tooltip" '
             'class="dp-tooltip-content dp-popup-content" '
-            'style="background-color: #545454; color: #ffffff; '
-            'padding: 2px 5px; border-radius: 3px;" role="tooltip">'
+            # La misma superficie que el popover del aula base (#f7f7f7 con
+            # borde #a9a9a9). Antes era un gris oscuro (#545454) que no está
+            # en ningún snippet del catálogo ni en el aula base: el globo se
+            # veía de otro color que el resto del aula. El color del texto
+            # se hereda, para no fijar uno que tampoco esté en la paleta.
+            'style="background-color: #f7f7f7; '
+            'border: 1px solid #a9a9a9; '
+            'padding: 6px 10px; border-radius: 3px;" role="tooltip">'
             f'{contenido}</span></span>')
 
 
@@ -573,7 +599,12 @@ def aplicar_cita(el) -> None:
     Doble sangría (izquierda Y derecha), como la cita textual larga en
     formato APA: sangrar solo de un lado no alcanza, se ve como un párrafo
     corrido con un margen cualquiera, no como una cita.
+
+    La izquierda son 80px y no 40: con un solo nivel la cita no se despega
+    del cuerpo. Salió revisando Metodología II, donde el pedido se repitió
+    en las seis citas del curso ("le falta aumentar la sangría una vez
+    más"). El margen derecho queda en 40.
     """
     estilo = el.get("style", "").rstrip("; ")
     el["style"] = ((estilo + "; " if estilo else "")
-                   + "margin-left: 40px; margin-right: 40px;")
+                   + "margin-left: 80px; margin-right: 40px;")

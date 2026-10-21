@@ -26,15 +26,16 @@ from maquetador.ingest.folder_scanner import normalizar
 from maquetador.build.snippets import (resaltado_simple, cta_titulo, ICONOS,
                                        quick_check,
                                        preguntas_de_verdadero_o_falso,
-                                       galeria_de_figuras,
-                                       _PAT_PIE_DE_FIGURA,
+                                       galeria_de_figuras, fila_de_figuras,
+                                       _PAT_PIE_DE_FIGURA, _PAT_ALT_PARRAFO,
                                        bloque_recurso_incrustado,
                                        _PAT_GENIALLY_URL, _PAT_SOLO_ARCHIVO,
                                        bloque_video_studio,
+                                       componente_de_podcast,
                                        _PAT_AQUI_VA_VIDEO)
 from maquetador.build.componentes_asesor import (
     extraer_pares, construir_panels, construir_flipcards,
-    construir_tooltip, disparador_tooltip, aplicar_cita,
+    construir_tooltip, disparador_tooltip, aplicar_cita, pares_de_texto,
 )
 
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -50,7 +51,8 @@ _AUTO = {"subtitulo", "subsubtitulo", "recuadro_simple", "lectura", "video",
          "figura_de_diseno",
          "foro_lectura_y_espacio", "figura_expandible", "enlazar_actividad",
          "destacar_tramo", "componente_en_el_texto", "quiz", "galeria",
-         "texto_alternativo"}
+         "galeria_fila", "texto_alternativo", "consigna_de_sugerida",
+         "consigna_desde_el_punto", "nota_al_pie"}
 
 # Nivel de encabezado por acción, según la política de jerarquía de la UCC:
 # H2 es el título de la página, H3 el subtítulo y H4 el sub-subtítulo.
@@ -117,6 +119,12 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     # como link a ese documento, no perderse como charla interna.
     if re.search(r"https?://\S+", instruccion) and "descargable" in n:
         return "enlace_descargable"
+    # El mismo pedido sin la palabra "descargable": el asesor deja el link y
+    # lo marcado es el lugar donde va ("Acceso a la grilla colaborativa:
+    # aquí"). Sin esto el link quedaba en los avisos y ese "aquí" se
+    # publicaba sin enlazar a ningún lado.
+    if re.search(r"https?://\S+", instruccion) and re.search(r"\b(aqui|aca)$", na):
+        return "enlace_descargable"
     # "Para diseño: …" es un encargo para el diseñador (el Genially, por
     # ejemplo), no una instrucción de maquetación.
     if n.startswith(("para diseno", "para diseño")):
@@ -130,10 +138,46 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     # priorizar— quedaban visibles en el aula.
     if re.match(r"^\s*no\s+(?:se\s+)?maqueta", n):
         return "no_maquetar"
+    # La misma exclusión escrita en medio de la frase: "todo esto es el
+    # genially. No incorporarlo en la maquetación". El tramo marcado ya se
+    # entregó por otro lado (el diseñador lo armó) y no va al aula; sin
+    # esto, la tabla cruda del Genially se publicaba igual.
+    if re.search(r"\bno\s+(?:lo\s+|la\s+|los\s+|las\s+)?"
+                 r"(?:incorporar|incluir|publicar|poner|agregar)", n) \
+            and ("maquetaci" in n or "aula" in n):
+        return "no_maquetar"
+
+    # "Esto queda como consigna de la actividad sugerida": el recuadro no es
+    # contenido de la página —es la consigna del buzón— y lo que queda en la
+    # lectura es el llamado a la acción que el asesor escribe a continuación.
+    # Mismo movimiento que "va en otra página", pero con destino a la
+    # actividad y no al foro. En Metodología II son dos ("¿Cómo vengo hasta
+    # acá?" de los módulos 1 y 3) y quedaban publicadas como contenido, sin
+    # buzón de entrega.
+    if "consigna" in n and re.search(r"actividad\s+(?:sugerida|opcional)", n):
+        return "consigna_de_sugerida"
+    # La misma cosa escrita como un corte: "lo marcado queda como llamado a
+    # la acción y agregar el link. Desde el punto 1 en adelante forma parte
+    # de la consigna". El recuadro se parte: arriba queda la invitación con
+    # el enlace al buzón, y los puntos numerados se van a la consigna.
+    if "llamado a la accion" in n and "consigna" in n \
+            and re.search(r"desde\s+el\s+punto\s*(\d+)?", n):
+        return "consigna_desde_el_punto"
+    # "Agregar buzón de entrega": el asesor lo pide en un globo aparte,
+    # anclado al párrafo que aclara que la actividad no es obligatoria. Es
+    # el mismo pedido que la consigna de la actividad sugerida, y se
+    # considera cumplido cuando ese buzón se abrió (ver aplicar_comentarios).
+    if re.search(r"buz[oó]n", n) and re.search(r"agregar|abrir|habilitar", n):
+        return "buzon_de_entrega"
 
     # Señales negativas primero (NO encuadrar)
+    # "con sangria"/"sangria sin" salieron de acá: pedían sangrar, y esta
+    # acción solo evita el recuadro —no sangra nada—. Así, "mantener cita
+    # con sangría" y "mantener cita en sangría" daban formatos distintos
+    # para el mismo pedido, con dos citas vecinas desalineadas. Ahora las
+    # dos llegan a la regla de cita (más abajo), que sangra de los dos lados.
     if any(k in n for k in ("sin recuadro", "sin cuadro", "no resaltar",
-                            "no encuadrar", "con sangria", "sangria sin")):
+                            "no encuadrar")):
         return "sin_recuadro"
     # Marcador de cierre de un componente ("fin del expander"): señala dónde
     # termina, no pide armar otro. Va ANTES de detectar el tipo de componente.
@@ -181,6 +225,12 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     # en una grilla donde cada una se amplía al clic, no una abajo de la otra.
     if "galeria" in n or "galería" in instruccion.lower():
         return "galeria"
+    # "Carrusel de imágenes": la serie de fotos que arranca en el epígrafe
+    # marcado va en una sola fila, cada una ampliable al clic. No es la
+    # galería de solapas: esa guarda una figura por pestaña porque son
+    # diagramas con texto, y acá son fotos que se comparan de un vistazo.
+    if "carrusel" in n or "carousel" in n:
+        return "galeria_fila"
     if "acordeon" in n:
         return "acordeon"
     # "Tabs"/"solapas"/"pestañas" — componente de DesignPLUS. Palabra completa:
@@ -232,7 +282,12 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
         return "podcast"
     if ("cta" in n or "recursos" in n) and ("podcast" in na or "audio" in na):
         return "podcast"
-    if "recuadro" in n or "resalta" in n:   # resaltar, resaltado, "resaltado simple"
+    # "recuadro" viaja con erratas de tipeo ("recuedro", "recudro"): el
+    # asesor escribe rápido y la palabra se le cruza. Sin tolerarlas, un
+    # "mantener recuedro como se dispone" caía en "revisar" y el recuadro
+    # del docente salía como texto corrido (dos casos en Metodología II).
+    # "recuerdo" NO matchea: después de la vocal doble necesita una a o d.
+    if re.search(r"rec[ue]+[ad]+ro", n) or "resalta" in n:  # resaltar, resaltado
         return "recuadro_simple"
     # "En cursiva u otra forma de destacado": el asesor marca un tramo largo
     # que tiene que leerse aparte del cuerpo (el prompt de IA que el estudiante
@@ -244,6 +299,25 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     # lo dice _avisar_figuras_de_diseno_sin_usar.
     if "reemplazar" in n and "figura" in n and ("diseno" in n or "diseño" in n):
         return "figura_de_diseno"
+    # La forma corta del mismo pedido: "original en carpeta diseño" anclado
+    # sobre el epígrafe de la figura, sin la palabra "reemplazar". Es lo que
+    # el generador ya hace solo; sin esta regla salía como pendiente en cada
+    # corrida (Figuras 4 y 5 del módulo 2 de Metodología II).
+    if ("diseno" in n or "diseño" in n) and ("original" in n or "carpeta" in n) \
+            and ("figura" in n or na.startswith(("figura", "tabla", "esquema"))):
+        return "figura_de_diseno"
+    # "Manteniendo sangría izq y cursiva" no pide destacar nada: describe
+    # cómo ya se ve el párrafo y pide conservarlo. Encuadrarlo agregaba un
+    # recuadro que nadie pidió —la frase de apertura del módulo 1 de
+    # Metodología II salía adentro de una caja centrada—, cuando lo que va
+    # es la sangría (la cursiva ya viene del DOCX).
+    if re.search(r"manten(?:er|iendo|emos|ga)", n) and re.search(r"\bsangria\b", n):
+        return "cita"
+    # "Esto es una nota al pie de los dos párrafos anteriores": la
+    # referencia de la que salió el texto de arriba. Va en cuerpo chico,
+    # donde está, y no como un párrafo más del contenido.
+    if re.search(r"\bnota\s+al\s+pie\b", n):
+        return "nota_al_pie"
     if "cursiva" in n or "destacad" in n or "destacar" in n:
         return "destacar_tramo"
     if "lectura" in n:
@@ -255,6 +329,14 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
                             "sin terminar", "incompleto", "no esta disponible",
                             "esperando")):
         return "faltante"
+    # "Mantener sangría" a secas: el asesor pide que el párrafo quede
+    # sangrado como la cita larga de APA. Va al final para que cualquier
+    # pedido más específico gane primero —"manteniendo sangría izq y
+    # cursiva" es un destacado, no una cita—. Sin esta regla los ocho
+    # casos de Metodología II caían en "revisar" y las citas salían
+    # pegadas al margen, como un párrafo más del cuerpo.
+    if re.search(r"\bsangria\b", n):
+        return "cita"
     if n.startswith(("para maquetacion", "para el maquetado", "para diseno",
                      "para diseño", "maquetacion")):
         # El globo dice solo "Maquetación" y lo marcado es el nombre del
@@ -509,6 +591,16 @@ def _buscar_elemento(soup, anclado: str):
             # internas como instrumentos..." en la introducción no debe
             # ganarle al subtítulo real "Auditorías internas" más abajo).
             score = len(clave)
+        elif clave in t:
+            # El ancla está en un párrafo largo y no hay nada mejor: vale
+            # como último recurso, con el puntaje más bajo posible, así
+            # cualquier candidato de los de arriba le gana. Antes se
+            # descartaba y el pedido fallaba en silencio: el link al
+            # protocolo de transparencia de Metodología II está anclado a
+            # tres palabras al final de un párrafo de 325 caracteres —el
+            # único lugar del DOCX donde se lo nombra— y las tres
+            # actividades lo publicaban sin enlazar.
+            score = 1
         else:
             continue
         if score > mejor_score:
@@ -633,6 +725,71 @@ def _bloques_de_quick_check(caja) -> list:
 
 _PAT_NUMS = re.compile(r"\d+")
 _PAT_EPIGRAFE_SOLO = re.compile(r"^(figura|tabla)\s*(\d+)\s*[.:]?$", re.I)
+# El epígrafe en la forma de APA que pide el catálogo UCC: el número y el
+# título en el mismo renglón ("Figura 1. Miralo con lupa (1)"). Es la forma
+# que usa la serie de fotos del módulo 2 de Metodología II, y no la
+# matcheaba _PAT_EPIGRAFE_SOLO, que pide el renglón con el número pelado.
+_PAT_EPIGRAFE_CON_TITULO = re.compile(
+    r"^(?:figura|tabla)\s*(\d+)\s*[.:]\s*(.+)$", re.I | re.S)
+
+
+def _bloques_de_figura(el):
+    """Las figuras consecutivas que arrancan en `el`.
+
+    Cada una llega como hasta cuatro párrafos seguidos: el epígrafe con su
+    número y título, la imagen, la nota de fuente y el "Texto alternativo:"
+    que el asesor escribió al pie. Devuelve
+    ([(numero, titulo, html_img, nota)], {numero: alt}, [elementos usados]).
+    """
+    figuras, alts, usados = [], {}, []
+    actual = el
+    while actual is not None:
+        m = _PAT_EPIGRAFE_CON_TITULO.match(actual.get_text(" ", strip=True))
+        if not m:
+            break
+        numero, titulo = m.group(1), m.group(2).strip()
+        bloque = [actual]
+        img_html, nota = "", ""
+        x = actual.find_next_sibling()
+        while x is not None and len(bloque) < 5:
+            texto = x.get_text(" ", strip=True)
+            img = x.find("img")
+            m_alt = _PAT_ALT_PARRAFO.match(texto)
+            if img is not None and not img_html:
+                img_html = str(img)
+            elif m_alt:
+                alts[numero] = m_alt.group(1).strip()
+            elif _PAT_PIE_DE_FIGURA.match(texto) and not nota:
+                # "Nota ." con espacio: el pie viene con la palabra en
+                # cursiva y el punto afuera (<em>Nota</em>.), y al pasarlo a
+                # texto plano queda el separador en medio.
+                nota = re.sub(r"\s+([.,;:])", r"\1", texto)
+            else:
+                break
+            bloque.append(x)
+            x = x.find_next_sibling()
+        if not img_html:
+            break
+        figuras.append((numero, titulo, img_html, nota))
+        usados.extend(bloque)
+        actual = x
+    return figuras, alts, usados
+
+
+def _armar_fila_de_figuras(el) -> bool:
+    """Reemplaza la serie de figuras que arranca en `el` por una sola fila.
+
+    El asesor pide "carrusel de imágenes" sobre el epígrafe de la primera:
+    las que siguen son la misma serie y van juntas, lado a lado.
+    """
+    figuras, alts, usados = _bloques_de_figura(el)
+    if len(figuras) < 2:
+        return False
+    usados[0].insert_before(BeautifulSoup(
+        fila_de_figuras(figuras, alts), "html.parser"))
+    for bloque in usados:
+        bloque.decompose()
+    return True
 
 
 def _armar_galeria(soup, el, instruccion: str) -> bool:
@@ -686,10 +843,17 @@ def _texto_tooltip(instruccion: str) -> str:
     """Saca el contenido del popover del comentario: lo que va después de
     'emerja:'/'aparezca:'/'tooltip-->'. Si no hay marcador claro, '' (→ fallback)."""
     for sep in ("emerja lo siguiente:", "emerja:", "aparezca:", "emerge:",
-                "tooltip-->", "tooltip -->", "tooltip:", "globo:"):
+                "tooltip-->", "tooltip -->", "tooltip:", "globo:",
+                # Esta cátedra lo nombra por el componente, con o sin los
+                # dos puntos: "para maquetación: popover: <url>" y "para
+                # maquetación popover <url>". Sin reconocerlo, el popover
+                # se armaba VACÍO —peor que no ponerlo—.
+                "popover:", "popover"):
         if sep in instruccion.lower():
             idx = instruccion.lower().index(sep) + len(sep)
-            return instruccion[idx:].strip(" .–-")
+            contenido = instruccion[idx:].strip(" .–-:")
+            if contenido:
+                return contenido
     return ""
 
 
@@ -768,6 +932,95 @@ def _marcar_enlace_de_actividad(soup, el, instruccion: str) -> bool:
     el.clear()
     el.append(enlace)
     return True
+
+
+_PAT_LLAMADO_A_LA_ACCION = re.compile(
+    r"llamad[oa]\s+a\s+la\s+acci[oó]n\s*[:.]?\s*(.+)$", re.I | re.S)
+
+
+def _cta_de_actividad(instruccion: str, soup):
+    """El llamado a la acción que el asesor dejó escrito en el globo.
+
+    Es lo que queda en la lectura cuando la consigna se va al buzón. El
+    asesor cierra la frase con la palabra "Link" para marcar dónde va el
+    enlace a la actividad: ahí se pone el <a> que el generador completa
+    con el id del recurso de Canvas.
+    """
+    m = _PAT_LLAMADO_A_LA_ACCION.search(instruccion or "")
+    if not m:
+        return None
+    texto = re.sub(r"\s*\blinks?\b\s*\.?\s*$", "", m.group(1).strip(),
+                   flags=re.I).strip()
+    if not texto:
+        return None
+    p = soup.new_tag("p")
+    p.append(texto + " ")
+    a = soup.new_tag("a", **{"class": "dp-course-link",
+                             "data-actividad": "sugerida"})
+    a.string = "Acceder a la actividad"
+    p.append(a)
+    return p
+
+
+_PAT_PUNTO_NUMERADO = re.compile(r"^\s*(\d+)\s*[.)]\s+\S")
+
+
+def _partir_recuadro_en_el_punto(el, instruccion: str, soup) -> str:
+    """Parte el recuadro donde arrancan los puntos numerados.
+
+    Arriba queda la invitación (con el enlace al buzón pegado al final) y
+    desde el punto que nombra el asesor en adelante es la consigna, que se
+    devuelve en HTML para cargarla en la actividad. Los renglones que no
+    abren punto —la referencia bibliográfica del artículo que hay que leer—
+    viajan con el punto al que pertenecen.
+    """
+    celda = el if el.name in ("td", "th") else el.find_parent(["td", "th"])
+    if celda is None:
+        return ""
+    m_desde = re.search(r"desde\s+el\s+punto\s*(\d+)", normalizar(instruccion))
+    desde = int(m_desde.group(1)) if m_desde else 1
+    parrafos = celda.find_all(["p", "ul", "ol"], recursive=False)
+    corte = next((i for i, p in enumerate(parrafos)
+                  if (m := _PAT_PUNTO_NUMERADO.match(p.get_text(" ", strip=True)))
+                  and int(m.group(1)) == desde), None)
+    if corte is None:
+        return ""
+    consigna = "".join(str(p) for p in parrafos[corte:])
+    for p in parrafos[corte:]:
+        p.decompose()
+    enlace = soup.new_tag("p")
+    a = soup.new_tag("a", **{"class": "dp-course-link",
+                             "data-actividad": "sugerida"})
+    a.string = "Acceder a la actividad"
+    enlace.append(a)
+    celda.append(enlace)
+    return consigna
+
+
+def _pares_de_comentarios_hermanos(soup, comentarios: list, grupo) -> tuple:
+    """Pares cuando el asesor marca UN panel por comentario.
+
+    Es como marca esta cátedra los expanders del Diseño Universal de
+    Aprendizaje: tres comentarios iguales ("para maquetación: recurso
+    expander"), cada uno sobre su propio párrafo "Título: contenido", y
+    separados entre sí por otro texto. Buscando los pares alrededor de un
+    solo ancla aparece uno, y con uno no se arma componente: los tres
+    salían como pedido pendiente.
+    """
+    pares, consumidos = [], []
+    for c in comentarios:
+        if (c.get("accion"),
+                normalizar(c.get("instruccion") or "")) != grupo:
+            continue
+        el = _buscar_elemento(soup, c.get("anclado") or "")
+        if el is None or any(el is x for x in consumidos):
+            continue
+        sueltos = pares_de_texto([el])
+        if not sueltos:
+            continue
+        pares.append(sueltos[0])
+        consumidos.append(el)
+    return (pares, consumidos) if len(pares) >= 2 else ([], [])
 
 
 def aplicar_comentarios(soup, comentarios: list) -> None:
@@ -962,6 +1215,10 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
         if accion in _VARIANTE_PANEL:                 # acordeon / tabs / expander
             pares, consumidos = extraer_pares(
                 el, c["instruccion"], hasta=grupos_fin.get(grupo))
+            if len(pares) < 2:
+                # El asesor pudo haber marcado un panel por comentario.
+                pares, consumidos = _pares_de_comentarios_hermanos(
+                    soup, comentarios, grupo)
             if len(pares) >= 2:
                 html = construir_panels(pares, _VARIANTE_PANEL[accion])
                 consumidos[0].replace_with(BeautifulSoup(html, "html.parser"))
@@ -972,6 +1229,9 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
             continue
         if accion == "flip_card":
             pares, consumidos = extraer_pares(el, hasta=grupos_fin.get(grupo))
+            if len(pares) < 2:
+                pares, consumidos = _pares_de_comentarios_hermanos(
+                    soup, comentarios, grupo)
             if len(pares) >= 2:
                 html = construir_flipcards(pares)
                 consumidos[0].replace_with(BeautifulSoup(html, "html.parser"))
@@ -995,8 +1255,11 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
                 palabra = disparador_tooltip(texto_el, contenido)
             else:
                 palabra = ""
+            # Sin contenido no hay popover que armar: uno vacío es peor que
+            # ninguno —el estudiante hace clic y no aparece nada— y además
+            # tapa el pedido, que así queda avisado para resolverlo a mano.
             nodo = (el.find(string=lambda s: bool(s) and palabra in s)
-                    if palabra else None)
+                    if palabra and contenido else None)
             if nodo is not None:
                 html = construir_tooltip(palabra, contenido, contador_popover)
                 contador_popover += 1
@@ -1052,8 +1315,11 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
                     cta_titulo("Video", f"<p>{inner}</p>", ICONOS["video"]),
                     "html.parser"))
         elif accion == "podcast":
+            # Audio propio de la UCC: el "Embebido - Podcast" del
+            # catálogo, que se escucha en la página. Solo el podcast
+            # de una plataforma externa sigue saliendo como CTA.
             el.replace_with(BeautifulSoup(
-                cta_titulo("Podcast", f"<p>{inner}</p>", ICONOS["podcast"]),
+                componente_de_podcast(f"<p>{inner}</p>"),
                 "html.parser"))
         elif accion == "sin_recuadro":
             # El asesor pide NO encuadrar: se marca para que procesar_contenido
@@ -1062,6 +1328,9 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
         elif accion == "galeria":
             if not _armar_galeria(soup, el, c["instruccion"]):
                 c["_aplicado"] = False   # sin figuras que agrupar: se avisa
+        elif accion == "galeria_fila":
+            if not _armar_fila_de_figuras(el):
+                c["_aplicado"] = False   # sin serie que agrupar: se avisa
         elif accion == "quiz":
             # "Quick check": el asesor escribe el repaso de verdadero/falso
             # como una lista adentro de un recuadro y comenta cómo quiere
@@ -1101,6 +1370,35 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
             else:
                 c["_contenido_extraido"] = inner
                 el.decompose()
+        elif accion == "nota_al_pie":
+            # La referencia de la que se extrajo el texto de arriba: va
+            # donde está, en cuerpo chico, para que se lea como pie y no
+            # como un párrafo más de la lectura.
+            interior = "".join(str(x) for x in el.children).strip()
+            el.clear()
+            el.append(BeautifulSoup(
+                f'<span style="font-size: 10pt;">{interior}</span>',
+                "html.parser"))
+            el["class"] = el.get("class", []) + ["dp-heading-ignore"]
+        elif accion == "consigna_de_sugerida":
+            # La consigna se va al buzón de la actividad sugerida y en la
+            # lectura queda el llamado a la acción, enlazado a ese buzón.
+            tabla = el if el.name == "table" else el.find_parent("table")
+            objetivo = tabla if tabla is not None else el
+            c["_contenido_extraido"] = (_cuerpo_de_recuadro(tabla)
+                                        if tabla is not None else inner)
+            c["_destino_extraido"] = "sugerida"
+            cta = _cta_de_actividad(c["instruccion"], soup)
+            if cta is not None:
+                objetivo.insert_before(cta)
+            objetivo.decompose()
+        elif accion == "consigna_desde_el_punto":
+            consigna = _partir_recuadro_en_el_punto(el, c["instruccion"], soup)
+            if not consigna:
+                c["_aplicado"] = False
+                continue
+            c["_contenido_extraido"] = consigna
+            c["_destino_extraido"] = "sugerida"
         elif accion == "figura_expandible":
             # El globo está sobre la imagen (o sobre su epígrafe/nota): se
             # marca la figura vecina para que procesar_contenido le ponga
@@ -1129,6 +1427,14 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
             # el link a ese documento.
             url_m = re.search(r"https?://\S+", c["instruccion"])
             texto_link = (c["anclado"] or "").strip()
+            # Cuando el asesor marca toda la frase pero la cierra con un
+            # "aquí", el enlace va en esa palabra y no en el renglón entero:
+            # "Acceso a la grilla colaborativa: aquí" se lee mejor con el
+            # link solo en "aquí", que es la convención del aula.
+            m_aqui = re.search(r"\b(aqu[ií]|ac[aá])\s*[.:]?\s*$", texto_link,
+                               re.I)
+            if m_aqui:
+                texto_link = m_aqui.group(1)
             nodo = (el.find(string=lambda s: bool(s) and texto_link in s)
                     if url_m and texto_link else None)
             if nodo is not None:
@@ -1156,3 +1462,14 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
             tramo[0].replace_with(BeautifulSoup(nuevo, "html.parser"))
             for extra in tramo[1:]:
                 extra.decompose()
+
+    # "Agregar buzon de entrega" es el mismo pedido que la consigna de la
+    # actividad sugerida, escrito en un globo aparte y anclado al parrafo
+    # que aclara que la actividad no es obligatoria. Si en este modulo ya
+    # se abrio ese buzon, el pedido esta cumplido: avisarlo mandaba a
+    # revisar a mano algo que ya estaba hecho.
+    if any(c.get("_destino_extraido") == "sugerida" and c.get("_aplicado")
+           for c in comentarios):
+        for c in comentarios:
+            if c.get("accion") == "buzon_de_entrega":
+                c["_aplicado"] = True

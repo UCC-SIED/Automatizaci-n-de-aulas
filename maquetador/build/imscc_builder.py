@@ -21,6 +21,7 @@ import logging
 import re
 import shutil
 import uuid
+import io
 import zipfile
 from pathlib import Path
 
@@ -30,7 +31,7 @@ import xml.etree.ElementTree as ET
 import warnings
 
 import mammoth
-from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
+from bs4 import BeautifulSoup, NavigableString, XMLParsedAsHTMLWarning
 
 # Leemos XML de topics/quizzes con el parser HTML de BeautifulSoup a propósito
 # (solo medimos longitud de texto); silenciamos el aviso correspondiente.
@@ -50,6 +51,8 @@ from maquetador.build.snippets import (separar_consignas, procesar_contenido,
                                        maquetar_actividad,
                                        nombre_publicado_de_figura,
                                        bloque_video_studio,
+                                       cta_titulo, ICONOS,
+                                       _PAT_URL_VIDEO,
                                        embed_de_studio,
                                        media_id_de_studio,
                                        recuadro_actividad_grupal,
@@ -61,10 +64,13 @@ from maquetador.build.snippets import (separar_consignas, procesar_contenido,
                                        token_de_studio,
                                        contenido_declara_video,
                                        bloque_recurso_incrustado,
-                                       _FIG_CLASES_EXPANDIBLE, _FIG_ANCHO_MAX)
+                                       _FIG_CLASES_EXPANDIBLE,
+                                       _FIG_CLASES_ESTATICA, _FIG_ANCHO_MAX)
 from maquetador.build.bibliography import construir_bibliografia, indice_de_obras
+from maquetador.build.banners import render as banner_render
 from maquetador.extract.segmenter import ImagenInline, _MAMMOTH_STYLE_MAP
 from maquetador.ingest.folder_scanner import normalizar
+from maquetador.build.imagenes import LADO_FICHA
 from maquetador.ingest.docx_comments import extraer_comentarios, aplicar_comentarios
 from processors.cidilabs_builder import DP_WRAPPER_CLASSES
 
@@ -75,6 +81,32 @@ TEMAS = {
     "educacion": BASE_DIR / "Elementos de las aulas" / "_extracted_educacion",
     "posgrado": BASE_DIR / "Elementos de las aulas" / "_extracted_posgrado",
 }
+# Banners del plugin de Figma. Van a su propia carpeta: es la que el equipo
+# viene usando a mano en el aula ("Contenido multimedia cargado"), separada de
+# "Multimedia cargada", donde van las figuras de contenido.
+BANNER_SUBDIR = "web_resources/Contenido multimedia cargado"
+BANNER_URL = "$IMS-CC-FILEBASE$/Contenido%20multimedia%20cargado"
+_EXT_BANNER = (".png", ".jpg", ".jpeg", ".webp")
+# El nombre del archivo dice a qué página va. Lo que llega del plugin es
+# "1.3.1.png" o "M2.png", pero lo que el equipo venía subiendo a mano traía
+# de todo: "1.1.1..png", "2.3.2.png", "1.3. (2).png" (el sufijo que agrega
+# Canvas cuando el nombre ya existe) y "1.3.3. Estructura y funciones del
+# cerebro.png". Seis formas para lo mismo en una sola materia, así que la
+# clave se saca del número y se ignora el resto.
+_PAT_CLAVE_BANNER = re.compile(r"^\s*(?:(m)\s*(\d+)|(\d+(?:\s*\.\s*\d+)*))",
+                               re.I)
+
+
+def clave_de_banner(nombre: str) -> str:
+    """Nombre de archivo → clave de página ("1.3.1") o de módulo ("M2")."""
+    tallo = Path(nombre).stem
+    m = _PAT_CLAVE_BANNER.match(tallo)
+    if not m:
+        return ""
+    if m.group(1):
+        return "M" + m.group(2)
+    return re.sub(r"\s+", "", m.group(3)).rstrip(".")
+
 MEDIA_SUBDIR = "web_resources/Multimedia cargada/Generadas"
 MEDIA_URL = "$IMS-CC-FILEBASE$/Multimedia%20cargada/Generadas"
 
@@ -100,6 +132,94 @@ def _genero_texto(texto: str) -> str:
     if fem > masc:
         return "f"
     return None
+
+
+# --------------------------------------------------------------------- #
+#  Ficha del "Equipo docente" de la página de inicio
+# --------------------------------------------------------------------- #
+# Los dos temas traen la MISMA ficha, pero rellenada distinto: el aula base
+# de posgrado deja escrito qué va en cada renglón ("Nombre y Apellido del
+# docente contenidista", "Titulación relevante.") y la de educación los
+# vació dejando un punto o unos puntos suspensivos. Buscar por ese texto
+# —como se hacía— funcionaba solo en posgrado: en educación la ficha salía
+# con la foto genérica, el nombre en blanco y sin la biografía.
+#
+# Por eso ahora se busca por ESTRUCTURA, que es la que comparten: el <h3>
+# de la sección, la foto al costado y los renglones de texto al lado.
+_PLACEHOLDERS_FICHA = ("nombre y apellido del docente", "titulacion relevante")
+
+
+def _es_hueco_de_ficha(p) -> bool:
+    """¿Este <p> es un renglón de la ficha esperando que lo completen?
+
+    Lo es si no tiene texto propio —solo puntos o puntos suspensivos— o si
+    tiene el texto de relleno del aula base de posgrado. NO lo es el <p>
+    que únicamente sostiene el iconito de 26px del renglón, ni el <p>
+    vacío que hace de espaciador.
+    """
+    bruto = "".join(p.strings).replace("\xa0", " ")
+    if not bruto.strip():
+        return False          # el icono solo, o un espaciador
+    if not bruto.strip(" .·…\t\r\n"):
+        return True           # "." / "..." : el renglón vaciado
+    return any(k in normalizar(bruto) for k in _PLACEHOLDERS_FICHA)
+
+
+def _foto_de_ficha(seccion):
+    """La foto de la sección: la única imagen que no es el icono de 26px."""
+    for img in seccion.find_all("img"):
+        if img.get("width") != "26":
+            return img
+    return None
+
+
+def _seccion_de_ficha(soup, titulo: str):
+    """(contenedor, foto, [huecos]) de "Profesor autor" o "Tutores".
+
+    El rótulo se compara por su arranque porque para entonces ya puede
+    estar en femenino ("Profesora autora"): el ajuste de género corre
+    antes que esto.
+    """
+    clave = normalizar(titulo).split()[0]
+    enc = next((h for h in soup.find_all(["h3", "h4"])
+                if normalizar(h.get_text(" ", strip=True)).startswith(clave)),
+               None)
+    if enc is None:
+        return None, None, []
+    seccion = enc.find_next_sibling("div")
+    if seccion is None:
+        return None, None, []
+    huecos = [p for p in seccion.find_all("p") if _es_hueco_de_ficha(p)]
+    return seccion, _foto_de_ficha(seccion), huecos
+
+
+def _escribir_en_hueco(p, texto: str) -> None:
+    """Deja `texto` en el renglón, conservando el iconito que lo acompaña."""
+    iconos = [img.extract() for img in p.find_all("img")]
+    p.clear()
+    for icono in iconos:
+        p.append(icono)
+    marca = BeautifulSoup(f"<strong>{xml_escape(texto)}</strong>", "html.parser")
+    if iconos:
+        p.append(NavigableString(" "))
+    p.append(marca)
+
+
+# La planilla a veces nombra la asignatura con la carrera pegada entre
+# paréntesis ("Metodología de la investigación II (Lic. en Gestión de la
+# Educación Especial)"). Eso es dato de catálogo, no el nombre que va en el
+# banner de portada ni en el enlace al programa: en el aula la asignatura se
+# llama por su nombre a secas. En posgrado no pasaba porque esas planillas
+# ya lo traían limpio.
+_PAT_CARRERA_PEGADA = re.compile(
+    r"\s*\(\s*(?:lic\.?|licenciatura|mgter\.?|mag[ií]ster|maestr[ií]a|"
+    r"esp\.?|especializaci[óo]n|doctorado|dr\.?|tec\.?|tecnicatura|prof\.?|"
+    r"profesorado|ciclo|carrera)\b[^)]*\)\s*$", re.I)
+
+
+def nombre_de_asignatura(nombre: str) -> str:
+    """El nombre de la asignatura como va al aula, sin la carrera pegada."""
+    return _PAT_CARRERA_PEGADA.sub("", (nombre or "").strip()).strip()
 
 
 def _elegir_foto_docente(candidatas: list, nombre: str):
@@ -165,6 +285,35 @@ def _escribir(path: Path, texto: str):
 def _extraer_identifier(html: str) -> str:
     m = re.search(r'<meta name="identifier" content="([^"]+)"', html)
     return m.group(1) if m else _gen_id()
+
+
+_PAT_ACT_OBLIGATORIA = re.compile(r"actividad-obligatoria-m(\d+)", re.I)
+_PAT_ACT_SUGERIDA = re.compile(r"actividad-sugerida-m(\d+)", re.I)
+
+
+def _banner_de_actividad(nombre_archivo: str, tema: str = "") -> tuple:
+    """(clave, texto) del banner de una actividad, por su nombre de archivo.
+
+    El texto es el nombre con que la actividad queda en Canvas, no una
+    descripción: "Actividad obligatoria M1", no "Actividad obligatoria del
+    módulo 1". El banner y el ítem tienen que decir lo mismo.
+
+    El de la NO obligatoria cambia por tema, igual que el de los foros:
+    "Actividad sugerida M1" en educación y "Actividad M1" en posgrado.
+    """
+    m = _PAT_ACT_OBLIGATORIA.search(nombre_archivo)
+    if m:
+        return (f"actividad-obligatoria-m{m.group(1)}",
+                f"Actividad obligatoria M{m.group(1)}")
+    m = _PAT_ACT_SUGERIDA.search(nombre_archivo)
+    if m:
+        n = m.group(1)
+        return (f"actividad-sugerida-m{n}",
+                f"Actividad sugerida M{n}" if normalizar(tema) == "educacion"
+                else f"Actividad M{n}")
+    if "final-integradora" in nombre_archivo.lower():
+        return ("actividad-final-integradora", "Actividad final integradora")
+    return ("", "")
 
 
 def _extraer_banner(html: str) -> str:
@@ -274,7 +423,14 @@ class GeneradorAula:
             getattr(spec, "imagenes_diseno", []))
         self._conciliar_figuras_mal_rotuladas()
         self.figuras_usadas = set()        # paths de DISEÑO aprovechados
+        self.adjuntos_usados = set()       # archivos del curso enlazados
+        self.rid_sugerida = {}             # {módulo: rid del buzón sugerido}
         self.videos_puestos = set()        # claves de --video ya incrustadas
+        self.banners = {}                  # clave de pagina -> (nombre, bytes)
+        self.banners_usados = set()
+        self.paginas_sin_banner = []       # [(clave, titulo)]
+        self.banners_generados = {}        # nombre.png -> bytes
+        self._aviso_sin_plantilla = False
 
     def _conciliar_figuras_mal_rotuladas(self):
         """Rescata las figuras de DISEÑO nombradas con el módulo equivocado."""
@@ -303,8 +459,19 @@ class GeneradorAula:
         if not base or not base.is_dir():
             raise ValueError(f"No existe el aula base para el tema '{spec.tema}'")
 
-        nombre_corto = (spec.codigo or re.sub(r"[^A-Za-z0-9]+", "_",
-                                              spec.nombre)[:40]).strip("_")
+        # El nombre del archivo conserva los acentos y los espacios: con los
+        # acentos convertidos en guiones bajos ("Medios_tecnolog_as_…") el
+        # paquete no se distinguía del ZIP del material que manda el asesor,
+        # y se subió el equivocado a Canvas (19-10-2026, "Unsupported content
+        # package"). Solo se sacan los caracteres que Windows no acepta en un
+        # nombre de archivo.
+        # Y abre con "Aula - ": sin eso queda igual al ZIP del material
+        # salvo por la extensión, que en el explorador de Windows ni se ve.
+        nombre_corto = (spec.codigo
+                        or "Aula - " + re.sub(
+                            r'[<>:"/\\|?*]+', " ",
+                            nombre_de_asignatura(spec.nombre))[:60]
+                        ).strip(" ._") or "Aula"
         self.working = self.output_dir / f"working_{nombre_corto}"
         if self.working.exists():
             _rmtree_longpath(self.working)
@@ -322,6 +489,7 @@ class GeneradorAula:
             refs = getattr(modulo, 'extras', {}).get('referencias', '')
             for titulo, url in indice_de_obras(refs).items():
                 self.obras_citadas.setdefault(titulo, url)
+        self.banners = self._cargar_banners()
         self._titulo_curso()
         self._asegurar_modulos()
         for modulo in spec.modulos:
@@ -329,12 +497,17 @@ class GeneradorAula:
         self._eliminar_modulos_sobrantes()
         self._limpiar_recursos_no_usados()
         self._inyectar_afi()
+        # Después de la AFI: el foro de consultas se engancha ahí, y
+        # borrando antes se lo llevaba puesto.
+        self._eliminar_foros_sueltos()
         self._resolver_enlaces_de_actividad()
         self._avisar_recursos_vacios()
         self._avisar_figuras_de_diseno_sin_usar()
+        self._avisar_protocolo_de_transparencia()
         self._personalizar_inicio()
         self._construir_syllabus()
         self._empaquetar_media()
+        self._empaquetar_banners()
         self._publicar_material_suelto()
         self._unificar_tema_wrapper()
         self._registrar_recursos()
@@ -344,6 +517,7 @@ class GeneradorAula:
         # referencias colgadas que el aula base ya traía): se elimina.
         self._purgar_referencias_rotas()
         self._incrustar_videos_de_studio()
+        self._completar_podcasts()
 
         _escribir(self.working / "imsmanifest.xml", self.manifest)
         _escribir(self.working / "course_settings" / "module_meta.xml", self.meta)
@@ -403,6 +577,18 @@ class GeneradorAula:
             if media_id:
                 return bloque_video_studio(
                     referencia=url, embed=embed_de_studio(media_id, item.titulo))
+            # Enlace de YouTube/Vimeo: el video vive afuera. Va como CTA
+            # "Auriculares on" con el enlace, que es la convencion del
+            # catalogo (los externos no se incrustan en Canvas). Antes caia
+            # en la rama de "todavia no tiene enlace", que era falso: el
+            # enlace estaba en la planilla desde el principio.
+            if _PAT_URL_VIDEO.search(url):
+                return cta_titulo(
+                    "Auriculares on",
+                    f'<p>{xml_escape(item.titulo)}</p>'
+                    f'<p><a class="inline_disabled dp-ext-ignore" '
+                    f'href="{url}" target="_blank" rel="noopener">{url}</a></p>',
+                    ICONOS["video"])
             if token_de_studio(url)[0]:
                 self.spec.issues.append(Issue(Severidad.AVISO,
                     f"El video de este módulo ya está en Canvas Studio ({url}), "
@@ -454,7 +640,11 @@ class GeneradorAula:
                 titulo=f"Introducción M{n}",
                 intro_html=self._rutear_media(intro_html),
                 objetivos_html=self._rutear_media(objetivos_html),
-                banner_src=_extraer_banner(viejo),
+                # El plugin nombra el banner del módulo "M1.png": si vino,
+                # va ese; si no, el del aula base.
+                banner_src=self._banner_de(
+                    f"M{n}", modulo.titulo or f"Módulo {n}",
+                    rotulo=f"Módulo {n}") or _extraer_banner(viejo),
                 identifier=_extraer_identifier(viejo),
                 tema=self.spec.tema,
                 video_html=self._video_de_planilla(modulo.items, ctx))
@@ -533,6 +723,15 @@ class GeneradorAula:
         if conclusion and paginas:
             ultima = paginas[-1]
             if "conclusi" not in normalizar(ultima.titulo):
+                # Las figuras de DISEÑO se reemplazan recorriendo los ítems
+                # de la planilla, y la conclusión no es un ítem: se anexa
+                # después. Sin pasarla por acá, la figura que el docente
+                # puso en el cierre se quedaba con la versión embebida —o
+                # sin ninguna imagen, como la Figura 3 del módulo 3 de
+                # Metodología II, que llegó con el epígrafe solo.
+                if self.indice_diseno:
+                    conclusion = reemplazar_figuras_diseno(
+                        conclusion, n, self.indice_diseno, self.figuras_usadas)
                 ultima.fuente.html += "<h3>Conclusión</h3>" + conclusion
                 logger.info(f"  [M{n}] Conclusión anexada a '{ultima.titulo[:40]}'")
 
@@ -559,7 +758,9 @@ class GeneradorAula:
             nuevo = pagina_bibliografia(
                 titulo=f"Bibliografía M{n}",
                 body_html=self._rutear_media(referencias),
-                banner_src=_extraer_banner(viejo),
+                banner_src=self._banner_de(f"bibliografia-m{n}",
+                                           f"Bibliografía M{n}")
+                           or _extraer_banner(viejo),
                 identifier=_extraer_identifier(viejo),
                 tema=self.spec.tema)
             _escribir(archivo_bib, nuevo)
@@ -576,10 +777,17 @@ class GeneradorAula:
             page_id = _gen_id()
             slug = slugify(item.titulo)
             href = f"wiki_content/{slug}.html"
+            # Cada página lleva SU banner, el que el plugin armó con el
+            # título de esa página. Sin banners se cae al del placeholder
+            # del aula base, que es el que se venía entregando.
+            clave = self._clave_de_titulo(item.titulo)
+            propio = self._banner_de(clave, item.titulo) if clave else ""
+            if self.banners and not propio:
+                self.paginas_sin_banner.append((clave, item.titulo[:40]))
             html = pagina_contenido(
                 titulo=item.titulo,
                 body_html=self._rutear_media(item.fuente.html),
-                banner_src=banner, identifier=page_id,
+                banner_src=propio or banner, identifier=page_id,
                 tema=self.spec.tema)
             html = enlazar_lecturas_con_bibliografia(html, self.obras_citadas)
             _escribir(self.working / href, html)
@@ -637,6 +845,62 @@ class GeneradorAula:
         self.meta = pat_meta.sub(lambda _: meta_items, self.meta, count=1)
 
     # ------------------------------------------------------------------ #
+    def _completar_ficha_docente(self, html: str, nombre: str, bio: str,
+                                 url_foto: str) -> tuple:
+        """Completa el popup "Equipo docente" por la estructura de la ficha.
+
+        Sirve para los dos temas: posgrado deja el texto de relleno escrito
+        ("Nombre y Apellido del docente contenidista") y educación lo vació
+        dejando un punto, así que buscar por ese texto solo funcionaba en
+        uno. Acá se ubican las secciones por su <h3>, la foto por ser la
+        única imagen que no es el iconito, y los renglones por estar
+        vacíos. Lo que ya quedó lleno no se toca.
+
+        El tutor de la Sección 1 sale, por defecto, con los datos del
+        docente autor: es la convención del equipo cuando la carpeta no
+        trae tutores (acá el Biodata solo trae al profesor autor).
+        """
+        if not (nombre or bio or url_foto):
+            return html, []
+        soup = BeautifulSoup(html, "html.parser")
+        cambios = []
+        for titulo, estilo_foto, alt_foto in (
+                ("Profesor autor",
+                 "border-radius: 50%; object-fit: cover; "
+                 "width: 150px; height: 150px;",
+                 "Fotografía del docente"),
+                ("Tutores",
+                 "height: auto; width: 100px;",
+                 "Fotografía del tutor")):
+            _seccion, img, huecos = _seccion_de_ficha(soup, titulo)
+            if img is not None and url_foto \
+                    and not img.get("alt", "").startswith("Fotograf"):
+                img["src"] = url_foto
+                img["style"] = estilo_foto
+                img["alt"] = f"{alt_foto} {nombre}".strip() if nombre else alt_foto
+                img.attrs.pop("role", None)
+                if titulo == "Tutores":
+                    # La del tutor va con el borde institucional, no en
+                    # círculo (así la maqueta el equipo a mano).
+                    img["class"] = ["dp-image-rounded-10", "dp-image-bordered"]
+                cambios.append(f"foto ({titulo.lower()})")
+            # Primer renglón el nombre, segundo la titulación/biografía.
+            # El tutor lleva SOLO el nombre, como en el aula base de
+            # posgrado —que para el tutor trae un único renglón—: su
+            # biografía no la tenemos, y repetir ahí la del docente autor
+            # son seiscientos caracteres de investigación duplicados.
+            valores = (nombre,) if titulo == "Tutores" else (nombre, bio)
+            for hueco, texto in zip(huecos, valores):
+                if texto:
+                    _escribir_en_hueco(hueco, texto)
+            # Los renglones que sobran son relleno del aula base ("...") y
+            # no se publican: el equipo los completa al asignar el tutor.
+            for sobrante in huecos[len(valores):]:
+                sobrante.decompose()
+            if huecos and (nombre or bio):
+                cambios.append(f"datos ({titulo.lower()})")
+        return (str(soup), cambios) if cambios else (html, [])
+
     def _personalizar_inicio(self):
         """Página de inicio: foto del docente, nombre y titulación/biografía
         en el popup 'Equipo docente'. El video de bienvenida queda manual
@@ -675,13 +939,20 @@ class GeneradorAula:
         # El aula base trae el placeholder "Nombre de la asignatura - EP.png"
         # y, como alt, el propio nombre del archivo. El alt tiene que describir
         # la imagen: va el nombre de la asignatura.
-        if self.spec.nombre:
-            html, nb = re.subn(r'alt="Nombre de la asignatura[^"]*"',
-                               f'alt="{xml_escape(self.spec.nombre)}"', html)
-            if nb:
-                cambios.append("alt del banner")
+        asignatura = nombre_de_asignatura(self.spec.nombre)
+        if asignatura:
+            propio = self._banner_de("portada", asignatura)
+            if propio:
+                html = self._poner_banner(html, propio, asignatura)
+                cambios.append("banner de portada")
+            else:
+                html, nb = re.subn(r'alt="Nombre de la asignatura[^"]*"',
+                                   f'alt="{xml_escape(asignatura)}"', html)
+                if nb:
+                    cambios.append("alt del banner")
 
         # --- foto del docente ---
+        url_foto = ""      # la guarda el bloque de abajo, para la ficha
         foto_item = next((i for k, i in items.items() if "fotografia" in k), None)
         foto = (foto_item.fuente.archivo if foto_item and foto_item.fuente.archivo
                 else _elegir_foto_docente(
@@ -701,8 +972,9 @@ class GeneradorAula:
                 from maquetador.build.imagenes import recortar_rostro_circular
                 recorte = (self.working / "web_resources" / "Multimedia cargada"
                           / f"{foto.stem}_circular.png")
-                recortar_rostro_circular(foto, recorte)
+                lado_nativo = recortar_rostro_circular(foto, recorte)
                 nombre_final = recorte.name
+                self._avisar_si_la_foto_es_chica(lado_nativo, foto)
             except Exception as e:
                 logger.warning(f"  No pude recortar la foto del docente "
                                f"centrada en el rostro ({e}): uso la original.")
@@ -710,7 +982,8 @@ class GeneradorAula:
                             / "Multimedia cargada" / foto.name)
             destino_rel = f"web_resources/Multimedia cargada/{nombre_final}"
             self.recursos_nuevos.append((_gen_id(), destino_rel))
-            url = "$IMS-CC-FILEBASE$/Multimedia%20cargada/" + quote(nombre_final)
+            url = url_foto = "$IMS-CC-FILEBASE$/Multimedia%20cargada/" \
+                + quote(nombre_final)
             html, n = re.subn(
                 r'(<img[^>]*alt="Avatar docente"[^>]*src=")[^"]*(")',
                 lambda m: m.group(1) + url + m.group(2), html)
@@ -798,14 +1071,32 @@ class GeneradorAula:
                               html, count=1)
             if n:
                 cambios.append("titulación/biografía")
-            # Género para "Profesor/a autor/a" (el aula base trae el
-            # femenino por defecto): se ajusta a masculino si la bio lo
-            # indica claramente.
-            if _genero_texto(bio + " " + nombre) == "m":
+            # Género del rótulo "Profesor/a autor/a". Los DOS temas traen el
+            # masculino en el aula base —el comentario de antes decía lo
+            # contrario y por eso el ajuste no corría nunca—, así que lo que
+            # hace falta es el camino inverso: pasarlo a femenino cuando la
+            # biografía lo dice. Adriana Di Francesco ("Dra. en Educación…
+            # Licenciada… Profesora… Directora") salía como "Profesor autor".
+            genero = _genero_texto(bio + " " + nombre)
+            if genero == "f":
+                html, ng = re.subn(r">\s*Profesor autor\s*<",
+                                   ">Profesora autora<", html, count=1)
+            elif genero == "m":
                 html, ng = re.subn(r">\s*Profesora autora\s*<",
                                    ">Profesor autor<", html, count=1)
-                if ng:
-                    cambios.append("género docente")
+            else:
+                ng = 0
+            if ng:
+                cambios.append(f"género docente ({genero})")
+
+        # --- la ficha, por estructura ---
+        # Lo de arriba completa la ficha buscando el texto de relleno del
+        # aula base de posgrado. El aula base de educación no lo trae —dejó
+        # los renglones con un punto— y la ficha salía con la foto genérica,
+        # sin nombre y sin biografía. Esta pasada la completa por su forma,
+        # que las dos comparten, y no toca lo que ya haya quedado lleno.
+        html, nuevos = self._completar_ficha_docente(html, nombre, bio, url_foto)
+        cambios.extend(nuevos)
 
         # --- video de bienvenida (Canvas Studio) ---
         # El bloque "Te damos la bienvenida" del aula base queda con su
@@ -883,7 +1174,8 @@ class GeneradorAula:
             self.recursos_nuevos.append((_gen_id(), destino_rel))
             url = ("$IMS-CC-FILEBASE$/Multimedia%20cargada/" + quote(prog.name)
                    + "?canvas_=1&amp;canvas_qs_wrap=1")
-            etiqueta = f"Programa {self.spec.nombre}" if self.spec.nombre else "Programa"
+            asignatura = nombre_de_asignatura(self.spec.nombre)
+            etiqueta = f"Programa {asignatura}" if asignatura else "Programa"
             bloque1 = (
                 '<div class="dp-content-block kl_custom_block_1">\n'
                 '<h2 class="dp-has-icon"><i class="fas fa-list-ul" aria-hidden="true">'
@@ -1025,11 +1317,14 @@ class GeneradorAula:
             '<h2 class="dp-has-icon"><i class="fas fa-network-wired" '
             'aria-hidden="true"><span class="dp-icon-content" '
             'style="display: none;">&nbsp;</span></i>Visión General</h2>\n'
-            # El esquema de la asignatura es un mapa conceptual lleno de texto
-            # chico: a 600px y sin lupa no se lee. Va al ancho máximo y
-            # expandible, como lo dejó el equipo a mano.
+            # El esquema de la asignatura es un mapa conceptual lleno de
+            # texto chico, asi que va al ancho maximo. Pero NO expandible:
+            # ya ocupa todo el ancho, y la lupa lo abre en un visor mas
+            # chico que la propia pagina — se ve PEOR al hacer clic. Lo
+            # marco la revision de Metodologia II ("cuando se abre se hace
+            # mas chica… le cambie el estilo para que no se expanda").
             '<p style="text-align: center;">'
-            f'<img class="{_FIG_CLASES_EXPANDIBLE}" '
+            f'<img class="{_FIG_CLASES_ESTATICA}" '
             f'style="width: {_FIG_ANCHO_MAX}px; height: auto;" '
             f'src="{url}" width="{_FIG_ANCHO_MAX}" '
             'alt="Esquema de la asignatura" loading="lazy"></p>\n</div>')
@@ -1215,6 +1510,100 @@ class GeneradorAula:
                 "borralo en Canvas.", "Actividades"))
         return salida
 
+    def _avisar_si_la_foto_es_chica(self, lado: int, original: Path) -> None:
+        """La foto del docente llegó con pocos píxeles.
+
+        Se mide el recorte NATIVO, antes de llevarlo al tamaño de
+        publicación: lo que importa no es el tamaño del archivo original
+        sino cuánto queda de la cara. Una foto de cuerpo entero de 4000 px
+        puede dejar un recorte de 200.
+
+        El maquetador la agranda y la enfoca igual, así que no queda como
+        la estiraría el navegador, pero detalle que la foto no tiene no se
+        inventa: por eso se avisa para pedir una mejor.
+        """
+        if not lado or lado >= LADO_FICHA:
+            return
+        self.spec.issues.append(Issue(Severidad.AVISO,
+            f"La foto del docente deja un recorte de {lado}x{lado} px y se "
+            f"publica a {LADO_FICHA}x{LADO_FICHA}: la agrandé y la enfoqué, "
+            f"pero va a verse menos nítida que una foto en la que el rostro "
+            f"ocupe {LADO_FICHA} px o más. La original es "
+            f"'{original.name}'.", "Página de inicio"))
+
+    def _avisar_protocolo_de_transparencia(self) -> None:
+        """¿Las actividades salieron sin el recuadro del uso de IA?
+
+        El equipo lo pone en TODAS las entregas, con el protocolo de
+        transparencia enlazado. Cuando el asesor lo escribió solo en el
+        programa —como en Medios— las actividades salen sin él, y
+        agregarlo por nuestra cuenta seria inventar contenido. Se avisa
+        para que se decida.
+        """
+        carpetas = [self.working / rid for rid in self.assignments_escritos]
+        archivos = [a for carpeta in carpetas if carpeta.is_dir()
+                    for a in carpeta.glob("*.html")]
+        if not archivos:
+            return
+        if any("aporte de la ia" in normalizar(_leer(a)) for a in archivos):
+            return
+        self.spec.issues.append(Issue(Severidad.AVISO,
+            "Ninguna actividad trae el recuadro del uso de IA con el "
+            "protocolo de transparencia: el asesor no lo escribió en los "
+            "DOCX de actividad. Si corresponde, agregarlo a mano en Canvas.",
+            "Actividades"))
+
+    def _rubrica_de(self, clave: str):
+        """La imagen de la rúbrica que le corresponde a esta actividad.
+
+        Llegan en la carpeta de Diseño nombradas por la actividad
+        ("Actividad obligatoria 1 rubrica_evaluacion.jpg", "AFI
+        rubrica_evaluacion.jpg"). No son figuras del módulo —no tienen
+        epígrafe "Figura N"— así que el reemplazo de figuras no las ubicaba
+        y quedaban avisadas como sobrantes, sin llegar nunca al estudiante.
+        """
+        if not clave:
+            return None
+        m_num = re.search(r"m(\d+)$", clave)
+        es_afi = "integradora" in clave
+        for path in getattr(self.spec, "imagenes_diseno", []):
+            if path in self.figuras_usadas:
+                continue
+            nombre = normalizar(path.stem)
+            if "rubrica" not in nombre and "rúbrica" not in path.stem.lower():
+                continue
+            if es_afi and ("afi" in nombre.split() or "integradora" in nombre):
+                return path
+            if m_num and "obligatoria" in clave and "obligatoria" in nombre \
+                    and re.search(rf"\b{m_num.group(1)}\b", nombre):
+                return path
+            if m_num and "sugerida" in clave and "sugerida" in nombre \
+                    and re.search(rf"\b{m_num.group(1)}\b", nombre):
+                return path
+        return None
+
+    def _agregar_rubrica(self, html: str, clave: str, rotulo: str) -> str:
+        """Pega la rúbrica al pie de la actividad, dentro de su bloque."""
+        rubrica = self._rubrica_de(clave)
+        if rubrica is None:
+            return html
+        soup = BeautifulSoup(html, "html.parser")
+        bloque = soup.find("div", attrs={"data-title": "Actividad"}) \
+            or soup.find("div", class_="content-block")
+        if bloque is None:
+            return html
+        nombre = nombre_publicado_de_figura(rubrica)
+        self.figuras_usadas.add(rubrica)
+        alt = f"Rúbrica de evaluación — {rotulo}" if rotulo else "Rúbrica de evaluación"
+        bloque.append(BeautifulSoup(
+            '<h3>Rúbrica de evaluación</h3>'
+            '<p style="text-align: center;">'
+            f'<img class="{_FIG_CLASES_EXPANDIBLE}" '
+            f'style="width: {_FIG_ANCHO_MAX}px; height: auto;" '
+            f'src="__DISENO__/{nombre}" alt="{xml_escape(alt)}" '
+            'loading="lazy"></p>', "html.parser"))
+        return self._rutear_media(str(soup))
+
     def _rid_en_meta(self, content_type: str, patron_titulo: str) -> str:
         pat = re.compile(
             rf"<content_type>{content_type}</content_type>\s*"
@@ -1332,6 +1721,26 @@ class GeneradorAula:
                    + "\n" + m.group(3))
         html = pat.sub(_reemplazo, html, count=1)
         html = self._titulo_dentro_del_encabezado(html)
+        # El banner de la actividad lo nombra el propio archivo del aula
+        # base ("actividad-obligatoria-m2.html"): de ahí salen el texto y la
+        # clave, así cada actividad tiene el suyo.
+        # El clon de la actividad sugerida conserva el nombre de archivo de
+        # la que se clonó ("actividad-obligatoria-m1.html"), así que por el
+        # archivo le tocaría el banner de la obligatoria. Lo que manda es
+        # qué ranura es: "el banner que pusiste es Actividad Sugerida M1"
+        # (revisión de Metodología II, donde salieron cruzados).
+        n_sugerida = next((n for n, r in self.rid_sugerida.items() if r == rid),
+                          None)
+        if n_sugerida is not None:
+            clave = f"actividad-sugerida-m{n_sugerida}"
+            rotulo_banner = self._nombre_de_actividad_sugerida(n_sugerida)
+        else:
+            clave, rotulo_banner = _banner_de_actividad(archivos[0].stem,
+                                                        self.spec.tema)
+        if clave:
+            html = self._poner_banner(
+                html, self._banner_de(clave, rotulo_banner), rotulo_banner)
+        html = self._agregar_rubrica(html, clave, rotulo_banner)
         _escribir(archivos[0], html)
         self.assignments_escritos.add(rid)
         return True
@@ -1454,6 +1863,44 @@ class GeneradorAula:
                 item.titulo))
             logger.info(f"  [M{n}] Actividad sugerida (nueva) ← {herramienta}")
 
+    def _inyectar_consigna_sugerida(self, modulo, extra: dict, ctx: str):
+        """La consigna que el asesor marcó como "de la actividad sugerida".
+
+        Vive dentro de la lectura (el recuadro "¿Cómo vengo hasta acá?" de
+        Metodología II) y el asesor pide además un buzón de entrega. Se
+        vuelca en la ranura 'Actividad sugerida M{n}' que el aula base ya
+        trae —sin calificar, no cuenta para la nota— y en la lectura queda
+        el llamado a la acción, que _resolver_enlaces_de_actividad enlaza a
+        este mismo buzón.
+        """
+        n = modulo.numero
+        rid = self._rid_de_actividad("sugerida", n) \
+            or self._clonar_actividad_sugerida(n)
+        if not rid:
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                f"El asesor marcó una consigna como actividad sugerida del "
+                f"módulo {n}, pero no encontré ni pude crear ese buzón: "
+                "crearlo a mano en Canvas (Completo/Incompleto, no cuenta "
+                "para la nota final).", ctx))
+            return
+        if rid in self.assignments_escritos:
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                f"El buzón de la actividad sugerida del módulo {n} ya tenía "
+                "contenido: esta consigna quedó sin volcar. Revisar.", ctx))
+            return
+        cuerpo = procesar_contenido(self._rutear_media(extra["html"]),
+                                    self.spec.tema)
+        self.rid_sugerida[n] = rid
+        if self._escribir_assignment(rid, cuerpo, ctx):
+            self.spec.issues.append(Issue(Severidad.INFO,
+                f"Consigna sugerida del módulo {n} cargada en 'Actividad "
+                f"sugerida M{n}' (con buzón de entrega, sin calificar). En la "
+                "lectura quedó el llamado a la acción enlazado al buzón.",
+                ctx))
+            logger.info(f"  [M{n}] Actividad sugerida ← consigna de la lectura")
+            self._reorders_pendientes.append(
+                (rid, extra.get("pagina_titulo", "")))
+
     def _inyectar_consigna_actividad(self, n: int, titulo: str, body: str,
                                      ctx: str):
         """Consigna de actividad embebida en el multimedial → assignment."""
@@ -1514,11 +1961,8 @@ class GeneradorAula:
                 # obligatorio MN". Lo que decide es la FILA de la planilla,
                 # no el cuerpo de la consigna: un foro de consultas habla de
                 # la actividad obligatoria sin ser él mismo calificable.
-                if destino != "Foro de apertura" \
-                        and "obligatori" not in normalizar(
-                            item.detalle.get("item_planilla", "") + " "
-                            + item.titulo):
-                    self._renombrar_recurso(rid, None, self._nombre_de_foro(n))
+                if destino != "Foro de apertura":
+                    self._ajustar_nombre_de_foro(rid, n, item)
                 item.issues.append(Issue(Severidad.INFO,
                     f"Consigna del foro (escrita en la planilla) cargada en "
                     f"{destino}.", item.titulo))
@@ -1534,12 +1978,16 @@ class GeneradorAula:
             html = extra.get("html", "")
             if not html:
                 continue
+            if extra.get("destino") == "sugerida":
+                self._inyectar_consigna_sugerida(modulo, extra, ctx)
+                continue
             rid = self._rid_en_meta("DiscussionTopic",
                                     rf"[^<]*[Ff]oro[^<]*M{n}[^<]*")
             if not rid or rid in self.topics_escritos:
                 continue
             cuerpo = procesar_contenido(self._rutear_media(html), self.spec.tema)
             if self._escribir_topic(rid, cuerpo, ctx):
+                self._ajustar_nombre_de_foro(rid, n)
                 logger.info(f"  [M{n}] Foro del módulo {n} ← contenido "
                            "embebido en la lectura")
                 # El <item> de la página todavía no existe en organizations
@@ -1620,6 +2068,8 @@ class GeneradorAula:
                     continue
                 html = self._docx_a_html(archivo, f"foro_m{n}")
                 if self._escribir_topic(rid, html, ctx):
+                    if destino != "Foro de apertura":
+                        self._ajustar_nombre_de_foro(rid, n, item)
                     item.issues.append(Issue(Severidad.INFO,
                         f"Contenido de '{archivo.name}' cargado en {destino}.",
                         item.titulo))
@@ -1676,8 +2126,13 @@ class GeneradorAula:
     # equipo los enlace desde donde corresponda.
     # El .pptx queda afuera a propósito: cuando aparece es el archivo fuente
     # de algo que ya se publica hecho (el esquema, las placas del video).
+    # Los audios entran: el material viejo trae los podcasts del módulo como
+    # MP3 sueltos ("M1 Dispositivos IoT.mp3") y el asesor los marca en el
+    # texto con "Incluir audio M1 Dispositivos IoT". Sin publicarlos, el
+    # recuadro "Podcast" quedaba anunciando un audio que no viajaba.
     _EXT_PUBLICABLES = {".pdf", ".xlsx", ".xls", ".docx",
-                        ".jpg", ".jpeg", ".png", ".gif", ".webp"}
+                        ".jpg", ".jpeg", ".png", ".gif", ".webp",
+                        ".mp3", ".m4a", ".wav"}
     # Las etapas de producción (guiones, grabación) son material interno: sus
     # PPT y PDF no son para el estudiante.
     _ETAPAS_INTERNAS = ("guion", "grabaci", "maquetaci", "etapa 3", "etapa 4")
@@ -2029,6 +2484,17 @@ class GeneradorAula:
             f"La consigna '{titulo[:60]}' se quitó de la página de contenido "
             f"y se cargó en el foro del módulo {n}.", ctx))
 
+    def _nombre_de_actividad_sugerida(self, n: int) -> str:
+        """Cómo se llama la actividad NO obligatoria del módulo en cada aula.
+
+        Igual que con los foros, cambia por tema: en educación es
+        "Actividad sugerida MN" y en posgrado "Actividad MN". La
+        obligatoria se llama igual en los dos ("Actividad obligatoria MN").
+        """
+        return (f"Actividad sugerida M{n}"
+                if normalizar(self.spec.tema) == "educacion"
+                else f"Actividad M{n}")
+
     def _nombre_de_foro(self, n: int) -> str:
         """Cómo se llama el foro de participación del módulo en cada aula.
 
@@ -2037,6 +2503,64 @@ class GeneradorAula:
         "Foro MN" y en educación "Foro sugerido MN"."""
         return (f"Foro sugerido M{n}" if normalizar(self.spec.tema) == "educacion"
                 else f"Foro M{n}")
+
+    def _ajustar_nombre_de_foro(self, rid: str, n: int, item=None) -> None:
+        """El foro del módulo se llama "sugerido" salvo que sea obligatorio.
+
+        El aula base los trae todos como "Foro obligatorio MN" porque es el
+        único que incluye, pero ese nombre es el del calificable. De la
+        revisión de Metodología II: "el foro lo pusiste en un foro
+        obligatorio, no corresponde, a menos que diga explícitamente que sea
+        obligatorio; si no sería, en educación, foro sugerido M1".
+
+        Lo decide la FILA de la planilla, no el cuerpo de la consigna: un
+        foro de consultas habla de la actividad obligatoria sin ser él mismo
+        calificable.
+        """
+        if not rid:
+            return
+        rotulo = ""
+        if item is not None:
+            rotulo = normalizar(item.detalle.get("item_planilla", "") + " "
+                                + item.titulo + " "
+                                + (item.estado_planilla or ""))
+        nombre = (f"Foro obligatorio M{n}" if "obligatori" in rotulo
+                  else self._nombre_de_foro(n))
+        if "obligatori" not in rotulo:
+            self._renombrar_recurso(rid, None, nombre)
+        self._poner_banner_de_foro(rid, nombre)
+
+    def _poner_banner_de_foro(self, rid: str, nombre: str) -> None:
+        """El foro también lleva su banner dibujado.
+
+        El aula base trae uno genérico para todos, así que los tres foros
+        de un curso salían con el mismo. Lleva el nombre con que queda el
+        foro en Canvas ("Foro sugerido M2"), que es lo que se lee arriba
+        de la página.
+        """
+        clave = normalizar(nombre).replace(" ", "-")
+        url = self._banner_de(clave, nombre)
+        if not url:
+            return
+        mr = re.search(rf'<resource[^>]*identifier="{rid}"[^>]*>.*?'
+                       r'<file href="([^"]+\.xml)"', self.manifest, re.DOTALL)
+        if not mr:
+            return
+        ruta = self.working / mr.group(1)
+        if not ruta.exists():
+            return
+        xml = _leer(ruta)
+        mt = re.search(r'<text texttype="text/html">(.*?)</text>', xml, re.DOTALL)
+        if not mt:
+            return
+        cuerpo = xml_unescape(mt.group(1))
+        nuevo = self._poner_banner(cuerpo, url, nombre)
+        if nuevo == cuerpo:
+            return
+        _escribir(ruta, re.sub(
+            r'(<text texttype="text/html">).*?(</text>)',
+            lambda m: m.group(1) + xml_escape(nuevo) + m.group(2),
+            xml, count=1, flags=re.DOTALL))
 
     def _renombrar_recurso(self, rref: str, ruta_xml, nuevo: str):
         """Cambia el título de un recurso en sus cuatro lugares: el <item> de
@@ -2200,7 +2724,7 @@ class GeneradorAula:
             xml = _leer(settings)
             xml = xml.replace(f'identifier="{rid_base}"', f'identifier="{nuevo_rid}"', 1)
             xml = re.sub(r"<title>[^<]*</title>",
-                        f"<title>Actividad M{n}</title>", xml, count=1)
+                        f"<title>{self._nombre_de_actividad_sugerida(n)}</title>", xml, count=1)
             xml = re.sub(r"<grading_type>[^<]*</grading_type>",
                         "<grading_type>pass_fail</grading_type>", xml)
             xml = re.sub(r"<points_possible>[^<]*</points_possible>",
@@ -2219,7 +2743,7 @@ class GeneradorAula:
             f"<identifierref>{rid_base}</identifierref>",
             f"<identifierref>{nuevo_rid}</identifierref>")
         nuevo_meta_item = re.sub(r"<title>[^<]*</title>",
-                                 f"<title>Actividad M{n}</title>",
+                                 f"<title>{self._nombre_de_actividad_sugerida(n)}</title>",
                                  nuevo_meta_item, count=1)
         # La entrega no calificable prepara la obligatoria: va ARRIBA de ella,
         # como la ubica el equipo en Canvas.
@@ -2230,10 +2754,14 @@ class GeneradorAula:
             f'identifier="{item_id_base}" identifierref="{rid_base}"',
             f'identifier="{nuevo_item_id}" identifierref="{nuevo_rid}"', 1)
         nuevo_org_item = re.sub(r"<title>[^<]*</title>",
-                                f"<title>Actividad M{n}</title>",
+                                f"<title>{self._nombre_de_actividad_sugerida(n)}</title>",
                                 nuevo_org_item, count=1)
         self.manifest = self.manifest.replace(
             m_org_item.group(0), nuevo_org_item + "\n            " + m_org_item.group(0), 1)
+        # Queda anotado como el buzón sugerido del módulo: el clon conserva
+        # el nombre de archivo de la obligatoria, así que sin esto le tocaba
+        # el banner de ella (ver _escribir_assignment).
+        self.rid_sugerida[n] = nuevo_rid
         return nuevo_rid
 
     def _clonar_modulo(self, template: int, nuevo: int):
@@ -2437,8 +2965,21 @@ class GeneradorAula:
 
     def _rid_de_actividad(self, clase: str, n: int) -> str:
         """rid del assignment 'Actividad <clase> M<n>' del paquete ya armado."""
-        return self._rid_en_meta(
+        # El buzón sugerido no siempre se llama "Actividad sugerida M{n}":
+        # cuando hay que clonarlo queda como "Actividad M{n}", y buscarlo
+        # por título fallaba —el llamado a la acción de la lectura salía sin
+        # enlazar—. El que se usó de verdad queda anotado.
+        if clase == "sugerida" and self.rid_sugerida.get(n):
+            return self.rid_sugerida[n]
+        rid = self._rid_en_meta(
             "Assignment", rf"[^<]*[Aa]ctividad {clase}[^<]*M{n}\b[^<]*")
+        if rid or clase != "sugerida":
+            return rid
+        # En posgrado la no obligatoria se llama "Actividad MN", sin la
+        # palabra "sugerida": el patrón de arriba no la encuentra.
+        return self._rid_en_meta(
+            "Assignment",
+            rf"[^<]*{re.escape(self._nombre_de_actividad_sugerida(n))}[^<]*")
 
     def _purgar_referencias_rotas(self):
         """Elimina <resource> cuyos archivos href ya no existen (p.ej. la
@@ -2481,7 +3022,17 @@ class GeneradorAula:
         mh = re.search(r'<resource[^>]*\bhref="([^"]+)"', bloque)
         if mh:
             hrefs.add(mh.group(1))
+        dependencias = set(re.findall(r'<dependency identifierref="([^"]+)"',
+                                      bloque))
         self.manifest = pat.sub("", self.manifest, count=1)
+        # Las dependencias del recurso (el "topicMeta" de un foro, por
+        # ejemplo) se van con él, si no las usa nadie más. Sin esto
+        # quedaban en el manifiesto apuntando a un recurso que ya no
+        # existe: cinco por curso, que Canvas importaba igual.
+        for dep in dependencias:
+            if f'identifierref="{dep}"' in self.manifest:
+                continue        # otro recurso todavía la usa
+            self._eliminar_recurso(dep)
         for href in hrefs:
             f = self.working / href
             if f.exists():
@@ -2492,6 +3043,52 @@ class GeneradorAula:
             shutil.rmtree(carpeta)
 
     # ------------------------------------------------------------------ #
+    # Recursos que Canvas lista como ítems del curso y que, si no están en
+    # ningún módulo, son sobras del aula base. Los LTI y los webcontent NO
+    # entran: las herramientas externas y los archivos (imágenes, banners)
+    # viven fuera de los módulos a propósito.
+    _TIPOS_BORRABLES_SUELTOS = ("imsdt_xmlv1p1",          # foros
+                                "imsqti_xmlv1p2/imscc_xmlv1p1/assessment")
+
+    def _eliminar_foros_sueltos(self):
+        """Foros y cuestionarios que no están en ningún módulo.
+
+        Las dos aulas base traen los foros DUPLICADOS —"Foro sugerido M1"
+        aparece dos veces, "Foro obligatorio M2" otras dos— y solo una
+        copia de cada uno está puesta en un módulo. Las demás viajan en el
+        manifiesto igual, así que Canvas las importa y quedan sueltas en
+        "Foros de discusión": quince por curso, que el equipo despues borra
+        a mano. Es lo que anotó la revisión como "actualizar aula base con
+        respecto a los foros que traen".
+
+        Lo mismo con los cuestionarios: el aula base arrastra un "Test -
+        Canva - Encuesta" que quedó del armado y viaja en cada curso. La
+        encuesta de valoración final, que sí está puesta en un módulo, no
+        se toca.
+
+        Se va solo lo que NO está en ningún módulo y no escribimos nosotros.
+        """
+        sueltos = []
+        for m in re.finditer(r'<resource identifier="([^"]+)"[^>]*'
+                             r'type="([^"]+)"[^>]*>(.*?)</resource>',
+                             self.manifest, re.DOTALL):
+            rid, tipo, bloque = m.group(1), m.group(2), m.group(3)
+            # Los assignments comparten tipo con el "topicMeta" de los
+            # foros: se los reconoce por su assignment_settings.xml.
+            es_assignment = "assignment_settings.xml" in bloque
+            if tipo not in self._TIPOS_BORRABLES_SUELTOS and not es_assignment:
+                continue
+            if rid in self.meta or rid in self.topics_escritos                     or rid in self.assignments_escritos:
+                continue
+            sueltos.append(rid)
+        for rid in sueltos:
+            # Las dependencias (el "topicMeta" de un foro) se van con él:
+            # lo resuelve _eliminar_recurso.
+            self._eliminar_recurso(rid)
+        if sueltos:
+            logger.info(f"  {len(sueltos)} recursos sueltos del aula base "
+                        "eliminados (no estaban en ningún módulo)")
+
     def _limpiar_recursos_no_usados(self):
         """El aula base trae en cada módulo TODOS los recursos posibles (Foro de
         apertura, Foro obligatorio, Autoevaluación, Actividad obligatoria). Se
@@ -2618,6 +3215,161 @@ class GeneradorAula:
                 self.spec.issues.append(Issue(Severidad.AVISO,
                     f"Me pasaste el video '{clave}' pero no encontre el hueco "
                     "de video en esa pagina: revisa el numero.", "videos"))
+
+    # ------------------------------------------------------------------ #
+    #  "Embebido - Podcast": los audios propios de la UCC
+    # ------------------------------------------------------------------ #
+    _PAT_HUECO_AUDIO = re.compile(
+        r"<!--\s*Pegar aqu[ií] el audio de Canvas Studio([^>]*?)-->")
+    _EXT_AUDIO = (".mp3", ".m4a", ".wav")
+    # Palabras que no distinguen un audio de otro al emparejar el archivo
+    # con el recuadro que lo anuncia.
+    _VACIAS_AUDIO = {"de", "del", "la", "el", "los", "las", "y", "en", "un",
+                     "una", "sobre", "para", "audio", "podcast"}
+    # El asesor enlaza el audio al Drive donde lo dejó grabado. Con el MP3
+    # ya publicado en el aula, ese enlace manda al estudiante afuera —a una
+    # carpeta que ni siquiera tiene por qué poder abrir—: se deja el texto.
+    _PAT_ENLACE_DE_ARCHIVO_EXTERNO = re.compile(
+        r"drive\.google\.com|dropbox\.com|onedrive|1drv\.ms", re.I)
+
+    def _audios_del_paquete(self):
+        """[(nombre sin extensión, href)] de los audios que viajan al aula."""
+        from urllib.parse import quote
+        raiz = self.working / "web_resources"
+        if not raiz.is_dir():
+            return []
+        return [(p.stem, "$IMS-CC-FILEBASE$/" + quote(
+                    p.relative_to(raiz).as_posix()))
+                for p in sorted(raiz.rglob("*"))
+                if p.suffix.lower() in self._EXT_AUDIO]
+
+    def _senas_del_audio(self, nombre: str):
+        """(módulo, palabras) con las que se reconoce un audio por su nombre.
+
+        Los audios llegan nombrados por módulo y tema ("M1 Dispositivos
+        IoT.mp3"): el módulo evita cruzar el audio de M1 con el recuadro de
+        M2, y las palabras lo enganchan con el texto que lo anuncia ("te
+        invito a escuchar el siguiente audio sobre Dispositivos IoT")."""
+        modulo, palabras = "", []
+        for t in re.split(r"[^0-9a-z]+", normalizar(nombre)):
+            if not t:
+                continue
+            m = re.fullmatch(r"m(\d+)", t)
+            if m and not modulo and not palabras:
+                modulo = m.group(1)
+            elif t not in self._VACIAS_AUDIO:
+                palabras.append(t)
+        return modulo, palabras
+
+    def _completar_podcasts(self):
+        """Pone en cada "Embebido - Podcast" el audio que le corresponde.
+
+        El id de Canvas Studio no existe cuando se arma el aula, igual que
+        con los videos: cuando llega se pasa con --audio y el embed entra
+        en el hueco. Hasta entonces el recuadro no queda vacío —el MP3 ya
+        viaja en el paquete y se publica como reproductor de Canvas, que se
+        escucha igual—, y el nombre del audio sale en el renglón del medio,
+        que es donde el catálogo lo pone."""
+        from bs4 import Comment
+        audios = self._audios_del_paquete()
+        pedidos = {normalizar(k): v
+                   for k, v in (getattr(self.spec, "audios_studio", None) or {}).items()}
+        usados_id, colocados = set(), set()
+        for archivo in sorted((self.working / "wiki_content").glob("*.html")):
+            html = _leer(archivo)
+            if not self._PAT_HUECO_AUDIO.search(html):
+                continue
+            soup = BeautifulSoup(html, "html.parser")
+            m = re.search(r"<title>(.*?)</title>", html, re.S)
+            titulo = re.sub(r"<[^>]+>", "", m.group(1)).strip() if m else ""
+            clave = self._clave_de_pagina(titulo)
+            modulo_pagina = clave.split(".")[0] if clave[:1].isdigit() else ""
+            for comentario in list(soup.find_all(
+                    string=lambda t: isinstance(t, Comment))):
+                if not self._PAT_HUECO_AUDIO.search(f"<!--{comentario}-->"):
+                    continue
+                hueco = comentario.parent
+                if hueco is None:
+                    continue
+                texto = normalizar(
+                    (hueco.parent or hueco).get_text(" ", strip=True))
+                mejor, puntaje = None, 0
+                for nombre, href in audios:
+                    if nombre in colocados:
+                        continue
+                    modulo, palabras = self._senas_del_audio(nombre)
+                    if modulo and modulo_pagina and modulo != modulo_pagina:
+                        continue
+                    p = sum(1 for w in palabras if w in texto)
+                    if p > puntaje:
+                        mejor, puntaje = (nombre, href), p
+                if not mejor:
+                    continue
+                nombre, href = mejor
+                colocados.add(nombre)
+                self._nombrar_audio(soup, hueco, nombre)
+                for a in (hueco.parent or hueco).find_all("a", href=True):
+                    if self._PAT_ENLACE_DE_ARCHIVO_EXTERNO.search(a["href"]):
+                        a.replace_with(a.get_text())
+                media_id = self._id_de_audio(pedidos, nombre, clave)
+                hueco.clear()
+                if media_id:
+                    hueco.append(BeautifulSoup(
+                        embed_de_studio(media_id, nombre), "html.parser"))
+                    usados_id.add(media_id)
+                    logger.info(f"Audio de Studio incrustado en '{titulo}' "
+                                f"({nombre})")
+                else:
+                    hueco.append(comentario)
+                    enlace = soup.new_tag(
+                        "a", href=href,
+                        **{"class": "instructure_file_link "
+                                    "instructure_audio_link",
+                           "title": nombre})
+                    enlace.string = nombre
+                    hueco.append(enlace)
+                    logger.info(f"Audio '{nombre}' publicado en '{titulo}' "
+                                "(falta el id de Studio)")
+            _escribir(archivo, str(soup))
+        sin_colocar = [n for n, _ in audios if n not in colocados]
+        if sin_colocar:
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                "Estos audios viajan en el paquete pero no encontré el "
+                "recuadro que los anuncia: quedaron en los archivos del "
+                "aula para enlazarlos a mano — "
+                + ", ".join(sin_colocar) + ".", "Podcast"))
+        for clave, media_id in pedidos.items():
+            if media_id not in usados_id:
+                self.spec.issues.append(Issue(Severidad.AVISO,
+                    f"Me pasaste el audio '{clave}' pero no encontré el "
+                    "recuadro de podcast que le toca: revisá el nombre.",
+                    "Podcast"))
+
+    def _id_de_audio(self, pedidos: dict, nombre: str, clave: str) -> str:
+        """El id de Studio que se pasó para este audio, por nombre o página."""
+        n = normalizar(nombre)
+        for k, media_id in pedidos.items():
+            if k == n or k in n or n in k or k == clave:
+                return media_id
+        return ""
+
+    def _nombrar_audio(self, soup, hueco, nombre: str) -> None:
+        """El renglón del medio del snippet lleva el nombre del audio."""
+        anterior = hueco.find_previous_sibling("p")
+        if anterior is not None and "lead" in (anterior.get("class") or []):
+            anterior.clear()
+            fuerte = soup.new_tag("strong")
+            fuerte.string = nombre
+            anterior.append(fuerte)
+            return
+        parrafo = soup.new_tag("p", **{
+            "class": "dp-text-bold lead",
+            "style": ("color: #444444; margin-bottom: 20px; "
+                      "text-align: center;")})
+        fuerte = soup.new_tag("strong")
+        fuerte.string = nombre
+        parrafo.append(fuerte)
+        hueco.insert_before(parrafo)
 
     def _validar_xml_generado(self):
         """Cualquier XML mal formado en el paquete (p.ej. un '&' sin escapar
@@ -2759,7 +3511,61 @@ class GeneradorAula:
         self._eliminar_recurso(rref)
 
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _nombre_publicado_de_adjunto(path) -> str:
+        """El nombre con que se publica el adjunto.
+
+        Sin el "Copia de " que le deja Drive: es ruido del proceso y el
+        estudiante lo ve en el enlace ("Copia de Protocolo de
+        transparencia.xlsx").
+        """
+        return re.sub(r"^\s*copia\s+de\s+", "", path.name, flags=re.I)
+
+    def _adjuntar_archivos_del_curso(self, html: str) -> str:
+        """Los enlaces a Drive cuyo archivo está en la carpeta del curso
+        pasan a apuntar al archivo del paquete.
+
+        El protocolo de transparencia de Metodología II llegó así: las tres
+        actividades lo enlazaban a la unidad compartida y el asesor aclaró
+        "el archivo debe ser descargable". Enlazando el de Drive la descarga
+        depende de los permisos de la unidad y de que nadie mueva la
+        carpeta; adentro del paquete, no.
+
+        Solo se reemplaza cuando el archivo está de verdad: un documento
+        colaborativo de Google —la grilla del módulo 3, que los estudiantes
+        editan— no tiene archivo local y sigue siendo un link a Drive.
+        """
+        from urllib.parse import quote
+        adjuntos = getattr(self.spec, "adjuntos", [])
+        if not adjuntos or not html or "http" not in html:
+            return html
+        soup = BeautifulSoup(html, "html.parser")
+        cambio = False
+        for a in soup.find_all("a", href=True):
+            if not a["href"].lower().startswith("http"):
+                continue
+            texto = normalizar(a.get_text(" ", strip=True))
+            # Un texto corto ("acá", "aquí", "link") no alcanza para decidir
+            # a qué archivo se refiere.
+            if len(texto) < 8:
+                continue
+            destino = next((p for p in adjuntos
+                            if texto in normalizar(p.stem)), None)
+            if destino is None:
+                continue
+            publicado = self._nombre_publicado_de_adjunto(destino)
+            a["href"] = ("$IMS-CC-FILEBASE$/Multimedia%20cargada/"
+                         + quote(publicado)
+                         + "?canvas_=1&canvas_qs_wrap=1")
+            a["class"] = "instructure_file_link instructure_scribd_file"
+            a["title"] = publicado
+            a["target"] = "_blank"
+            self.adjuntos_usados.add(destino)
+            cambio = True
+        return str(soup) if cambio else html
+
     def _rutear_media(self, html: str) -> str:
+        html = self._adjuntar_archivos_del_curso(html)
         html = (html or "").replace("__MEDIA__/", f"{MEDIA_URL}/")
         # Figuras de DISEÑO: van directo a Multimedia cargada/ (como a mano)
         for path in self.figuras_usadas:
@@ -2769,6 +3575,130 @@ class GeneradorAula:
                                 "$IMS-CC-FILEBASE$/Multimedia%20cargada/"
                                 + quote(nombre))
         return html
+
+    def _cargar_banners(self) -> dict:
+        """{clave de página: (nombre a publicar, bytes)} desde el ZIP del
+        plugin de Figma, o desde una carpeta con los PNG sueltos."""
+        origen = getattr(self.spec, "banners", "")
+        if not origen:
+            return {}
+        origen = Path(origen)
+        if not origen.exists():
+            self.spec.issues.append(Issue(Severidad.BLOQUEANTE,
+                f"No existe el archivo de banners: {origen}", "Banners"))
+            return {}
+        crudos = []           # [(nombre, bytes)]
+        if origen.is_dir():
+            for f in sorted(origen.iterdir()):
+                if f.suffix.lower() in _EXT_BANNER:
+                    crudos.append((f.name, f.read_bytes()))
+        else:
+            with zipfile.ZipFile(origen) as z:
+                for info in z.infolist():
+                    nombre = Path(info.filename).name
+                    if info.is_dir() or not nombre \
+                            or Path(nombre).suffix.lower() not in _EXT_BANNER:
+                        continue
+                    crudos.append((nombre, z.read(info)))
+        banners, repetidos = {}, []
+        for nombre, datos in crudos:
+            clave = clave_de_banner(nombre)
+            if not clave:
+                continue
+            if clave in banners:
+                repetidos.append(nombre)
+                continue
+            # Se republica con el nombre normalizado: los que subía el equipo
+            # a mano venían con "(2)" y con el título pegado, y después nadie
+            # sabía cuál correspondía a cuál.
+            banners[clave] = (clave + Path(nombre).suffix.lower(), datos)
+        if repetidos:
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                f"{len(repetidos)} banner(s) con la misma numeración que otro: "
+                + ", ".join(repetidos[:5]) + ". Usé el primero de cada uno.",
+                "Banners"))
+        logger.info(f"  {len(banners)} banners leídos de {origen.name}")
+        return banners
+
+    _PAT_BANNER_IMG = re.compile(
+        r'(<div[^>]*class="dp-banner-image"[^>]*>\s*<img\b)([^>]*?)(/?>)',
+        re.I | re.S)
+
+    def _poner_banner(self, html: str, url: str, alt: str) -> str:
+        """Cambia el banner del placeholder del aula base por el nuestro."""
+        if not url:
+            return html
+        def _cambiar(m):
+            atrib = m.group(2)
+            atrib = re.sub(r'\ssrc="[^"]*"', "", atrib)
+            atrib = re.sub(r'\salt="[^"]*"', "", atrib)
+            return (f'{m.group(1)} src="{url}" alt="{xml_escape(alt)}"'
+                    f'{atrib}{m.group(3)}')
+        return self._PAT_BANNER_IMG.sub(_cambiar, html, count=1)
+
+    def _banner_de(self, clave: str, titulo: str = "", rotulo: str = "") -> str:
+        """URL del banner de esa página, generándolo si hace falta.
+
+        Primero manda lo que venga por --banners (el ZIP del plugin de
+        Figma o una carpeta): así se puede pisar cualquiera a mano. Si no
+        vino, se dibuja con la plantilla del tema, que es el render del
+        diseño oficial sin su capa de texto."""
+        from urllib.parse import quote
+        entrada = self.banners.get(clave)
+        if entrada:
+            self.banners_usados.add(clave)
+            return f"{BANNER_URL}/{quote(entrada[0])}"
+        if not titulo:
+            return ""
+        nombre = f"{clave}.png"
+        if nombre not in self.banners_generados:
+            try:
+                img = banner_render(titulo, rotulo=rotulo, tema=self.spec.tema)
+            except FileNotFoundError as e:
+                if not self._aviso_sin_plantilla:
+                    self.spec.issues.append(Issue(Severidad.AVISO, str(e),
+                                                  "Banners"))
+                    self._aviso_sin_plantilla = True
+                return ""
+            buf = io.BytesIO()
+            img.save(buf, "PNG", optimize=True)
+            self.banners_generados[nombre] = buf.getvalue()
+        return f"{BANNER_URL}/{quote(nombre)}"
+
+    @staticmethod
+    def _clave_de_titulo(titulo: str) -> str:
+        """"1.3.1. La arquitectura de una neurona" → "1.3.1"."""
+        m = re.match(r"\s*(\d+(?:\.\d+)*)", titulo or "")
+        return m.group(1).rstrip(".") if m else ""
+
+    def _empaquetar_banners(self):
+        if not self.banners and not self.banners_generados:
+            return
+        carpeta = self.working / BANNER_SUBDIR
+        carpeta.mkdir(parents=True, exist_ok=True)
+        puestos = 0
+        for clave, (nombre, datos) in sorted(self.banners.items()):
+            if clave not in self.banners_usados:
+                continue
+            (carpeta / nombre).write_bytes(datos)
+            self.recursos_nuevos.append((_gen_id(), f"{BANNER_SUBDIR}/{nombre}"))
+            puestos += 1
+        for nombre, datos in sorted(self.banners_generados.items()):
+            (carpeta / nombre).write_bytes(datos)
+            self.recursos_nuevos.append((_gen_id(), f"{BANNER_SUBDIR}/{nombre}"))
+            puestos += 1
+        logger.info(f"  {puestos} banners empaquetados en {BANNER_SUBDIR}")
+        sobrantes = sorted(set(self.banners) - self.banners_usados)
+        if sobrantes:
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                f"{len(sobrantes)} banner(s) sin página a la que ir: "
+                + ", ".join(sobrantes[:8]) + ". Revisá que la numeración "
+                "coincida con la de la planilla.", "Banners"))
+        faltan = [t for c, t in self.paginas_sin_banner]
+        if faltan:
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                f"{len(faltan)} página(s) quedaron sin banner: "
+                + ", ".join(faltan[:6]) + ".", "Banners"))
 
     def _empaquetar_media(self):
         destino = self.working / MEDIA_SUBDIR
@@ -2792,6 +3722,18 @@ class GeneradorAula:
                 self.recursos_nuevos.append(
                     (_gen_id(), f"web_resources/Multimedia cargada/{nombre}"))
             logger.info(f"  {len(self.figuras_usadas)} figuras de DISEÑO empaquetadas")
+        # Archivos del curso que alguna actividad enlaza (el protocolo de
+        # transparencia): se adjuntan para que la descarga no dependa de los
+        # permisos de la unidad compartida de Drive.
+        if self.adjuntos_usados:
+            carpeta = self.working / "web_resources" / "Multimedia cargada"
+            carpeta.mkdir(parents=True, exist_ok=True)
+            for path in sorted(self.adjuntos_usados):
+                publicado = self._nombre_publicado_de_adjunto(path)
+                shutil.copy2(path, carpeta / publicado)
+                self.recursos_nuevos.append(
+                    (_gen_id(), f"web_resources/Multimedia cargada/{publicado}"))
+            logger.info(f"  {len(self.adjuntos_usados)} archivos del curso adjuntados")
         # Repositorio de casos: las fichas se suben como archivos del curso
         # (la planilla las pide como repositorio, no como página propia), y
         # el equipo las enlaza desde donde corresponda.

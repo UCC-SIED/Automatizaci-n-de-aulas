@@ -24,17 +24,15 @@ class TestSinRostroDetectado:
         src = tmp_path / "foto.png"
         Image.new("RGB", (400, 300), (100, 150, 200)).save(src)
         dst = tmp_path / "recorte.png"
-        recortar_rostro_circular(src, dst)
-        with Image.open(dst) as out:
-            assert out.size == (300, 300)
+        # El valor devuelto es el lado NATIVO del recorte: el archivo se
+        # guarda siempre al tamaño de publicacion (ver TestTamanoDeSalida).
+        assert recortar_rostro_circular(src, dst) == 300
 
-    def test_una_imagen_ya_cuadrada_no_cambia_de_tamano(self, tmp_path):
+    def test_una_imagen_ya_cuadrada_se_recorta_entera(self, tmp_path):
         src = tmp_path / "foto.png"
         Image.new("RGB", (250, 250), (10, 20, 30)).save(src)
         dst = tmp_path / "recorte.png"
-        recortar_rostro_circular(src, dst)
-        with Image.open(dst) as out:
-            assert out.size == (250, 250)
+        assert recortar_rostro_circular(src, dst) == 250
 
     def test_guarda_como_png(self, tmp_path):
         src = tmp_path / "foto.jpg"
@@ -59,13 +57,11 @@ class TestConRostroDetectado:
         monkeypatch.setattr(imagenes_mod, "_detectar_rostro",
                              lambda ruta: (800, 100, 100, 100))
         dst = tmp_path / "recorte.png"
-        recortar_rostro_circular(src, dst)
-        with Image.open(dst) as out:
-            # Rostro: x=800..900, centro=850. Lado = 100*2 = 200 (clamp a
-            # los 400px de alto). Recorte esperado: centrado en x=850, no en
-            # x=500 (centro de la imagen completa) — y clampeado a no
-            # salirse del borde derecho (1000 - 200 = 800).
-            assert out.size == (200, 200)
+        # Rostro: x=800..900, centro=850. Lado = 100*2 = 200 (clamp a los
+        # 400px de alto). Recorte esperado: centrado en x=850, no en x=500
+        # (centro de la imagen completa) — y clampeado a no salirse del
+        # borde derecho (1000 - 200 = 800).
+        assert recortar_rostro_circular(src, dst) == 200
 
     def test_el_recorte_no_se_sale_del_borde_de_la_imagen(
             self, tmp_path, monkeypatch):
@@ -79,6 +75,48 @@ class TestConRostroDetectado:
         monkeypatch.setattr(imagenes_mod, "_detectar_rostro",
                              lambda ruta: (0, 0, 150, 150))
         dst = tmp_path / "recorte.png"
+        # clampeado al tamaño de la imagen
+        assert recortar_rostro_circular(src, dst) == 300
+
+
+class TestTamanoDeSalida:
+    """La ficha muestra la foto a 150x150 CSS y se guarda al triple, para
+    que se vea nítida en pantallas de alta densidad."""
+
+    def _recorte(self, tmp_path, lado):
+        src = tmp_path / "foto.png"
+        Image.new("RGB", (lado, lado), (120, 130, 140)).save(src)
+        dst = tmp_path / "recorte.png"
         recortar_rostro_circular(src, dst)
-        with Image.open(dst) as out:
-            assert out.size == (300, 300)  # clampeado al tamaño de la imagen
+        return dst
+
+    def test_una_foto_grande_se_reduce(self, tmp_path):
+        """2428x2428 ocupaban 4,2 MB del paquete para mostrarse en un
+        círculo de 150 px."""
+        with Image.open(self._recorte(tmp_path, 2428)) as out:
+            assert out.size == (450, 450)
+
+    def test_una_foto_chica_se_agranda(self, tmp_path):
+        """No recupera detalle que la foto no tiene, pero queda mejor que
+        dejar que el navegador la estire."""
+        with Image.open(self._recorte(tmp_path, 160)) as out:
+            assert out.size == (450, 450)
+
+    def test_la_del_tamano_justo_no_se_toca(self, tmp_path):
+        with Image.open(self._recorte(tmp_path, 450)) as out:
+            assert out.size == (450, 450)
+
+    def test_el_archivo_grande_pesa_mucho_menos(self, tmp_path):
+        import io as _io
+        src = tmp_path / "grande.png"
+        # Ruido, para que el PNG no se comprima a nada y la comparacion
+        # tenga sentido.
+        import random
+        random.seed(0)
+        im = Image.new("RGB", (2000, 2000))
+        im.putdata([(random.randrange(256), random.randrange(256),
+                     random.randrange(256)) for _ in range(2000 * 2000)])
+        im.save(src)
+        dst = tmp_path / "recorte.png"
+        recortar_rostro_circular(src, dst)
+        assert dst.stat().st_size < src.stat().st_size / 5
