@@ -51,6 +51,8 @@ from maquetador.build.snippets import (separar_consignas, procesar_contenido,
                                        maquetar_actividad,
                                        nombre_publicado_de_figura,
                                        bloque_video_studio,
+                                       cta_titulo, ICONOS,
+                                       _PAT_URL_VIDEO,
                                        embed_de_studio,
                                        media_id_de_studio,
                                        recuadro_actividad_grupal,
@@ -574,6 +576,18 @@ class GeneradorAula:
             if media_id:
                 return bloque_video_studio(
                     referencia=url, embed=embed_de_studio(media_id, item.titulo))
+            # Enlace de YouTube/Vimeo: el video vive afuera. Va como CTA
+            # "Auriculares on" con el enlace, que es la convencion del
+            # catalogo (los externos no se incrustan en Canvas). Antes caia
+            # en la rama de "todavia no tiene enlace", que era falso: el
+            # enlace estaba en la planilla desde el principio.
+            if _PAT_URL_VIDEO.search(url):
+                return cta_titulo(
+                    "Auriculares on",
+                    f'<p>{xml_escape(item.titulo)}</p>'
+                    f'<p><a class="inline_disabled dp-ext-ignore" '
+                    f'href="{url}" target="_blank" rel="noopener">{url}</a></p>',
+                    ICONOS["video"])
             if token_de_studio(url)[0]:
                 self.spec.issues.append(Issue(Severidad.AVISO,
                     f"El video de este módulo ya está en Canvas Studio ({url}), "

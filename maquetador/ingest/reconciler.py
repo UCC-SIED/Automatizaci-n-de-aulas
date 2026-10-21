@@ -233,6 +233,13 @@ def reconciliar(spec: CourseSpec, inv: InventarioCurso) -> CourseSpec:
                 archivo=(inv.hoja_de_ruta or [None])[0],
                 confianza=0.9 if inv.hoja_de_ruta else 0.0)
         elif "esquema" in n:
+            # El esquema se publica como IMAGEN: si la carpeta trae también
+            # el DOCX con el que lo armaron ("Esquema conceptual-
+            # Virgolini.docx"), la imagen va primero. Si no, el generador
+            # avisaba que no la encontraba aunque estuviera al lado.
+            inv.esquema.sort(
+                key=lambda p: p.suffix.lower() not in (".jpg", ".jpeg", ".png",
+                                                       ".webp", ".gif"))
             item.fuente = FuenteContenido(
                 archivo=(inv.esquema or [None])[0],
                 confianza=0.85 if inv.esquema else 0.0)
@@ -459,6 +466,20 @@ def reconciliar(spec: CourseSpec, inv: InventarioCurso) -> CourseSpec:
                 if archivo is not None and len(titulo_item) >= 12 \
                         and titulo_item in normalizar(archivo.stem):
                     score = max(score, 0.9)
+                # Lo mismo cuando el orden de las palabras no coincide:
+                # "Actividad M1- obligatoria (individual)" contra "…
+                # Actividad Obligatoria M1 VIRGOLINI.docx". Si los dos dicen
+                # de qué clase es y de qué módulo, es ese archivo — en IA
+                # Aplicada I matcheaba al 57% y el buzón del módulo 1 salía
+                # con el placeholder del aula base.
+                elif archivo is not None:
+                    nombre_arch = normalizar(archivo.stem)
+                    clase = next((c for c in ("obligatoria", "sugerida",
+                                              "integradora")
+                                  if c in titulo_item and c in nombre_arch), "")
+                    if clase and re.search(rf"\bm?{modulo.numero}\b", nombre_arch) \
+                            and re.search(rf"\bm?{modulo.numero}\b", titulo_item):
+                        score = max(score, 0.9)
                 en_modulo = _por_modulo(inv.actividades, modulo.numero)
                 if archivo and score >= 0.3:
                     item.fuente = FuenteContenido(archivo=archivo,

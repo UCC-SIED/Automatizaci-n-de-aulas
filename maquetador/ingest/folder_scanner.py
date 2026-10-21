@@ -436,6 +436,17 @@ def escanear(carpeta: Path) -> InventarioCurso:
                     inv.fotos_docente.append(path)
                 else:
                     inv.otros.append(path)
+            elif carpeta_padre in (".", "") and _PARECE_RETRATO(nombre):
+                # Suelta en la RAÍZ del curso. El modelo viejo de asesoría
+                # dejaba ahí la foto del docente, junto a la biodata y la
+                # planilla, y con el nombre que le puso la cámara
+                # ("DSC06278.jpg"): no la delata ni el nombre ni la carpeta.
+                # Se avisa, porque es la rama menos segura de todas.
+                inv.fotos_docente.append(path)
+                inv.issues.append(Issue(Severidad.INFO,
+                    f"Tomo '{path.name}' como la foto del docente: es una "
+                    "imagen suelta en la raíz de la carpeta y no es una "
+                    "figura ni el esquema. Verificar que sea la correcta."))
             else:
                 inv.otros.append(path)
             continue

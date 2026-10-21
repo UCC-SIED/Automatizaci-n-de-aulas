@@ -70,3 +70,72 @@ class TestElNumeroNoVaEnElTituloDeLaActividad:
         """La convención de título UCC no cambia para las páginas."""
         assert _normalizar_numeracion_titulo("1.2 Conceptos de Big Data") \
             == "1.2. Conceptos de Big Data"
+
+
+class TestLaFotoSueltaEnLaRaiz:
+    """El modelo viejo dejaba la foto del docente en la raíz de la carpeta,
+    junto a la biodata y la planilla, con el nombre que le puso la cámara
+    ("DSC06278.jpg"): no la delata ni el nombre ni la carpeta."""
+
+    def _curso(self, tmp_path, *archivos):
+        raiz = tmp_path / "Curso"
+        (raiz / "Etapa 4 - Maquetación").mkdir(parents=True)
+        (raiz / "Etapa 4 - Maquetación"
+         / "Estructura general - Para maquetación.xlsx").write_bytes(b"x")
+        (raiz / "Etapa 1 - Programa").mkdir()
+        for nombre in archivos:
+            destino = raiz / nombre
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            destino.write_bytes(b"x")
+        return tmp_path
+
+    def test_la_toma_como_foto_del_docente(self, tmp_path):
+        from maquetador.ingest.folder_scanner import escanear
+        inv = escanear(self._curso(tmp_path, "DSC06278.jpg"))
+        assert [p.name for p in inv.fotos_docente] == ["DSC06278.jpg"]
+
+    def test_avisa_para_que_se_verifique(self, tmp_path):
+        """Es la rama menos segura de todas."""
+        from maquetador.ingest.folder_scanner import escanear
+        inv = escanear(self._curso(tmp_path, "DSC06278.jpg"))
+        assert any("DSC06278.jpg" in i.mensaje for i in inv.issues)
+
+    def test_un_logo_en_la_raiz_no_es_la_foto(self, tmp_path):
+        from maquetador.ingest.folder_scanner import escanear
+        inv = escanear(self._curso(tmp_path, "logo-ucc.png"))
+        assert inv.fotos_docente == []
+
+    def test_una_figura_en_la_raiz_tampoco(self, tmp_path):
+        from maquetador.ingest.folder_scanner import escanear
+        inv = escanear(self._curso(tmp_path, "Figura 2_M1_Pilares.jpg"))
+        assert inv.fotos_docente == []
+
+    def test_una_imagen_en_una_subcarpeta_no_entra_por_esta_rama(self, tmp_path):
+        from maquetador.ingest.folder_scanner import escanear
+        inv = escanear(self._curso(tmp_path, "Diseño/DSC06278.jpg"))
+        assert inv.fotos_docente == []
+
+
+class TestElEsquemaVaComoImagen:
+    """Si la carpeta trae también el DOCX con el que armaron el esquema, la
+    imagen tiene que ir primero: el generador avisaba que no la encontraba
+    aunque estuviera al lado."""
+
+    def test_la_imagen_gana_al_docx(self, tmp_path):
+        from maquetador.ingest.folder_scanner import escanear
+        from maquetador.ingest.reconciler import reconciliar
+        from maquetador.models import CourseSpec, ItemCurso, TipoItem
+        raiz = tmp_path / "Curso"
+        (raiz / "Etapa 4 - Maquetación").mkdir(parents=True)
+        (raiz / "Etapa 4 - Maquetación"
+         / "Estructura general - Para maquetación.xlsx").write_bytes(b"x")
+        (raiz / "Etapa 1 - Programa").mkdir()
+        (raiz / "Esquema conceptual- Virgolini.docx").write_bytes(b"x")
+        (raiz / "Esquema Inteligencia Artificial.jpg").write_bytes(b"x")
+        inv = escanear(tmp_path)
+        spec = CourseSpec(nombre="Materia")
+        spec.items_inicio = [ItemCurso(
+            titulo="Esquema introductorio a la asignatura",
+            tipo=TipoItem.IMAGEN, orden=1)]
+        reconciliar(spec, inv)
+        assert spec.items_inicio[0].fuente.archivo.suffix == ".jpg"
