@@ -2125,8 +2125,13 @@ class GeneradorAula:
     # equipo los enlace desde donde corresponda.
     # El .pptx queda afuera a propósito: cuando aparece es el archivo fuente
     # de algo que ya se publica hecho (el esquema, las placas del video).
+    # Los audios entran: el material viejo trae los podcasts del módulo como
+    # MP3 sueltos ("M1 Dispositivos IoT.mp3") y el asesor los marca en el
+    # texto con "Incluir audio M1 Dispositivos IoT". Sin publicarlos, el
+    # recuadro "Podcast" quedaba anunciando un audio que no viajaba.
     _EXT_PUBLICABLES = {".pdf", ".xlsx", ".xls", ".docx",
-                        ".jpg", ".jpeg", ".png", ".gif", ".webp"}
+                        ".jpg", ".jpeg", ".png", ".gif", ".webp",
+                        ".mp3", ".m4a", ".wav"}
     # Las etapas de producción (guiones, grabación) son material interno: sus
     # PPT y PDF no son para el estudiante.
     _ETAPAS_INTERNAS = ("guion", "grabaci", "maquetaci", "etapa 3", "etapa 4")

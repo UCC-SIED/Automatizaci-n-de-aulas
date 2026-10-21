@@ -65,6 +65,14 @@ def main():
                         help="ZIP (o carpeta) con los banners del plugin "
                              "de Figma. Los archivos van nombrados por la "
                              "numeracion de la pagina: 1.3.1.png, M2.png.")
+    parser.add_argument("--inferir-componentes", action="store_true",
+                        help="Deducir componentes del texto (un parrafo que "
+                             "arranca con \"es importante señalar\" sale como "
+                             "recuadro de atencion, uno con \"te invito a "
+                             "leer\" como CTA de lectura). Apagado por "
+                             "defecto: los componentes salen solo cuando el "
+                             "asesor los pide. Se usa con el material viejo, "
+                             "que no trae esas marcas.")
     parser.add_argument("--generar", action="store_true",
                         help="Generar el paquete .imscc (implica --extraer). "
                              "Requiere --tema y que no haya issues bloqueantes.")
@@ -90,6 +98,10 @@ def main():
         spec.videos_studio[clave.strip().strip(".")] = media_id
     spec.afi_url = args.afi_url.strip()
     spec.banners = args.banners.strip()
+    if args.inferir_componentes:
+        # Interruptor global del modulo: vale para toda esta corrida.
+        from maquetador.build import snippets
+        snippets.INFERIR_COMPONENTES_POR_TEXTO = True
     print(generar_reporte_texto(spec))
 
     media = {}
