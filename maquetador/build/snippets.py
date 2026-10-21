@@ -231,6 +231,65 @@ def bloque_video_studio(body_html: str = "", referencia: str = "",
 </div>"""
 
 
+# El podcast de una plataforma externa (Spotify, iVoox, Apple) se enlaza:
+# no es un audio nuestro y no se sube a Studio. Ese sigue siendo el "CTA -
+# Podcast" del catálogo; el "Embebido - Podcast" es para los audios propios.
+_PAT_PODCAST_EXTERNO = re.compile(
+    r"spotify\.com|ivoox|anchor\.fm|podcasts?\.apple|youtu\.?be", re.I)
+
+# El texto tiene que anunciar el audio para que valga la pena incrustar
+# el reproductor: "escuchá", "el siguiente audio", "este podcast".
+_PAT_ANUNCIA_AUDIO = re.compile(
+    r"\bescuch|\baudio|\bpodcast|\bauriculares", re.I)
+
+
+def bloque_podcast_studio(cuerpo_html: str = "", nombre: str = "",
+                          embed: str = "", referencia: str = "") -> str:
+    """"Embebido - Podcast" del catálogo UCC.
+
+    Los audios propios de la UCC no son un CTA que manda afuera: se suben a
+    Canvas Studio y se incrustan, igual que los videos. Como el id del medio
+    recién existe cuando alguien los sube —después de armar el aula— el
+    bloque sale con el hueco listo, y `--audio` lo completa cuando llegan.
+
+    Es el mismo markup en Educación y en Posgrado: el catálogo trae este
+    componente con el degradé institucional en las dos secciones.
+    """
+    cuerpo = cuerpo_html or (
+        '<p style="color: #444; margin-bottom: 20px;">&nbsp;</p>')
+    titulo_audio = (
+        '<p class="dp-text-bold lead" style="color: #444444; '
+        'margin-bottom: 20px; text-align: center;">'
+        f'<strong>{nombre}</strong></p>') if nombre else ""
+    cual = f": {referencia}" if referencia else ""
+    adentro = embed or f"<!-- Pegar aquí el audio de Canvas Studio{cual} -->"
+    return f"""<div class="dp-shadow-b3 cp-bg-dp-primary" style="background-image: linear-gradient(135deg, #003087 0%, #007bff 100%); background-position: initial; background-repeat: initial; background-attachment: initial; padding: 0px; border-radius: 15px; margin-bottom: 25px;">
+<div style="background-color: #f9f9f9; border-radius: 12px; padding: 30px;">
+<h4 class="dp-heading-ignore" style="margin-top: 0; color: #003087; display: flex; align-items: center; gap: 10px;"><i class="dp-icon fas fa-headphones cp-txt-dp-primary dp-border-dir-none dp-shadow-b4" style="border-width: 1px;"><span class="dp-icon-content" style="display: none;">&nbsp;</span></i><em>Auriculares <strong>on</strong></em></h4>
+{cuerpo}
+{titulo_audio}<div class="dp-embed-wrapper mx-auto d-block dp-embed-scale-proportionally text-center dp-border-dir-all dp-shadow-b3" style="border-width: 10px; max-width: 500px; margin: 0px auto; border-radius: 10px;">{adentro}</div>
+</div>
+</div>"""
+
+
+def componente_de_podcast(body_html: str, titulo: str = "Auriculares on") -> str:
+    """El recuadro que le toca a un audio: embebido si es nuestro, CTA si no.
+
+    El catálogo tiene los dos. El audio producido por la UCC se escucha en
+    la página (Studio); el de Spotify o iVoox se abre afuera, y para eso el
+    CTA con el enlace sigue siendo lo correcto.
+    """
+    if _PAT_PODCAST_EXTERNO.search(body_html or ""):
+        return cta_titulo(titulo, body_html, ICONOS["podcast"])
+    if not _PAT_ANUNCIA_AUDIO.search(_norm(body_html or "")):
+        # La caja lleva el ícono de podcast pero el texto no anuncia ningún
+        # audio (pasa cuando el asesor encadena dos recuadros y el segundo
+        # hereda la etiqueta): armar el embebido dejaría un reproductor
+        # vacío en la página. Queda como estaba.
+        return cta_titulo(titulo, body_html, ICONOS["podcast"])
+    return bloque_podcast_studio(body_html)
+
+
 def resaltado_profundizacion(titulo: str, body_html: str) -> str:
     """Reflexiona / Para pensar / Para saber más — amarillo con lámpara.
 
@@ -942,7 +1001,11 @@ def _tabla_a_recuadro(tabla) -> str:
         # link. Con el genérico quedaban dos versiones del mismo recuadro,
         # con distinto ícono, según cómo lo hubiera escrito el asesor.
         return cta_descubri_leyendo(body)
-    if tipo in ("video", "podcast", "imagen", "mural"):
+    if tipo == "podcast":
+        # El audio propio no es un CTA que manda afuera: va el
+        # "Embebido - Podcast" del catálogo y se escucha acá.
+        return componente_de_podcast(body, titulo)
+    if tipo in ("video", "imagen", "mural"):
         return cta_titulo(titulo, body, ICONOS.get(tipo, ""))
     if tipo == "atencion":
         return resaltado_atencion(body, titulo)

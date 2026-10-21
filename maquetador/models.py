@@ -105,6 +105,11 @@ class CourseSpec:
     # id no esta cuando se genera el paquete por primera vez. Clave:
     # "inicio" o el numero de la pagina ("1.4.1"); valor: el media id.
     videos_studio: dict = field(default_factory=dict)
+    # Lo mismo para los audios del "Embebido - Podcast". Clave: el nombre
+    # del audio ("M1 Dispositivos IoT") o el numero de la pagina; valor:
+    # el media id. Hasta que lleguen, el recuadro sale con el MP3 del
+    # paquete como reproductor de Canvas.
+    audios_studio: dict = field(default_factory=dict)
     # Link del archivo de la herramienta de la AFI, ya subido al aula.
     # Solo hace falta si $IMS-CC-FILEBASE$ no resuelve en el iframe.
     afi_url: str = ""

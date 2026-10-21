@@ -31,6 +31,7 @@ from maquetador.build.snippets import (resaltado_simple, cta_titulo, ICONOS,
                                        bloque_recurso_incrustado,
                                        _PAT_GENIALLY_URL, _PAT_SOLO_ARCHIVO,
                                        bloque_video_studio,
+                                       componente_de_podcast,
                                        _PAT_AQUI_VA_VIDEO)
 from maquetador.build.componentes_asesor import (
     extraer_pares, construir_panels, construir_flipcards,
@@ -1314,8 +1315,11 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
                     cta_titulo("Video", f"<p>{inner}</p>", ICONOS["video"]),
                     "html.parser"))
         elif accion == "podcast":
+            # Audio propio de la UCC: el "Embebido - Podcast" del
+            # catálogo, que se escucha en la página. Solo el podcast
+            # de una plataforma externa sigue saliendo como CTA.
             el.replace_with(BeautifulSoup(
-                cta_titulo("Podcast", f"<p>{inner}</p>", ICONOS["podcast"]),
+                componente_de_podcast(f"<p>{inner}</p>"),
                 "html.parser"))
         elif accion == "sin_recuadro":
             # El asesor pide NO encuadrar: se marca para que procesar_contenido

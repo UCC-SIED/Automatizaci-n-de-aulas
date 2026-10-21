@@ -517,6 +517,7 @@ class GeneradorAula:
         # referencias colgadas que el aula base ya traía): se elimina.
         self._purgar_referencias_rotas()
         self._incrustar_videos_de_studio()
+        self._completar_podcasts()
 
         _escribir(self.working / "imsmanifest.xml", self.manifest)
         _escribir(self.working / "course_settings" / "module_meta.xml", self.meta)
@@ -3214,6 +3215,161 @@ class GeneradorAula:
                 self.spec.issues.append(Issue(Severidad.AVISO,
                     f"Me pasaste el video '{clave}' pero no encontre el hueco "
                     "de video en esa pagina: revisa el numero.", "videos"))
+
+    # ------------------------------------------------------------------ #
+    #  "Embebido - Podcast": los audios propios de la UCC
+    # ------------------------------------------------------------------ #
+    _PAT_HUECO_AUDIO = re.compile(
+        r"<!--\s*Pegar aqu[ií] el audio de Canvas Studio([^>]*?)-->")
+    _EXT_AUDIO = (".mp3", ".m4a", ".wav")
+    # Palabras que no distinguen un audio de otro al emparejar el archivo
+    # con el recuadro que lo anuncia.
+    _VACIAS_AUDIO = {"de", "del", "la", "el", "los", "las", "y", "en", "un",
+                     "una", "sobre", "para", "audio", "podcast"}
+    # El asesor enlaza el audio al Drive donde lo dejó grabado. Con el MP3
+    # ya publicado en el aula, ese enlace manda al estudiante afuera —a una
+    # carpeta que ni siquiera tiene por qué poder abrir—: se deja el texto.
+    _PAT_ENLACE_DE_ARCHIVO_EXTERNO = re.compile(
+        r"drive\.google\.com|dropbox\.com|onedrive|1drv\.ms", re.I)
+
+    def _audios_del_paquete(self):
+        """[(nombre sin extensión, href)] de los audios que viajan al aula."""
+        from urllib.parse import quote
+        raiz = self.working / "web_resources"
+        if not raiz.is_dir():
+            return []
+        return [(p.stem, "$IMS-CC-FILEBASE$/" + quote(
+                    p.relative_to(raiz).as_posix()))
+                for p in sorted(raiz.rglob("*"))
+                if p.suffix.lower() in self._EXT_AUDIO]
+
+    def _senas_del_audio(self, nombre: str):
+        """(módulo, palabras) con las que se reconoce un audio por su nombre.
+
+        Los audios llegan nombrados por módulo y tema ("M1 Dispositivos
+        IoT.mp3"): el módulo evita cruzar el audio de M1 con el recuadro de
+        M2, y las palabras lo enganchan con el texto que lo anuncia ("te
+        invito a escuchar el siguiente audio sobre Dispositivos IoT")."""
+        modulo, palabras = "", []
+        for t in re.split(r"[^0-9a-z]+", normalizar(nombre)):
+            if not t:
+                continue
+            m = re.fullmatch(r"m(\d+)", t)
+            if m and not modulo and not palabras:
+                modulo = m.group(1)
+            elif t not in self._VACIAS_AUDIO:
+                palabras.append(t)
+        return modulo, palabras
+
+    def _completar_podcasts(self):
+        """Pone en cada "Embebido - Podcast" el audio que le corresponde.
+
+        El id de Canvas Studio no existe cuando se arma el aula, igual que
+        con los videos: cuando llega se pasa con --audio y el embed entra
+        en el hueco. Hasta entonces el recuadro no queda vacío —el MP3 ya
+        viaja en el paquete y se publica como reproductor de Canvas, que se
+        escucha igual—, y el nombre del audio sale en el renglón del medio,
+        que es donde el catálogo lo pone."""
+        from bs4 import Comment
+        audios = self._audios_del_paquete()
+        pedidos = {normalizar(k): v
+                   for k, v in (getattr(self.spec, "audios_studio", None) or {}).items()}
+        usados_id, colocados = set(), set()
+        for archivo in sorted((self.working / "wiki_content").glob("*.html")):
+            html = _leer(archivo)
+            if not self._PAT_HUECO_AUDIO.search(html):
+                continue
+            soup = BeautifulSoup(html, "html.parser")
+            m = re.search(r"<title>(.*?)</title>", html, re.S)
+            titulo = re.sub(r"<[^>]+>", "", m.group(1)).strip() if m else ""
+            clave = self._clave_de_pagina(titulo)
+            modulo_pagina = clave.split(".")[0] if clave[:1].isdigit() else ""
+            for comentario in list(soup.find_all(
+                    string=lambda t: isinstance(t, Comment))):
+                if not self._PAT_HUECO_AUDIO.search(f"<!--{comentario}-->"):
+                    continue
+                hueco = comentario.parent
+                if hueco is None:
+                    continue
+                texto = normalizar(
+                    (hueco.parent or hueco).get_text(" ", strip=True))
+                mejor, puntaje = None, 0
+                for nombre, href in audios:
+                    if nombre in colocados:
+                        continue
+                    modulo, palabras = self._senas_del_audio(nombre)
+                    if modulo and modulo_pagina and modulo != modulo_pagina:
+                        continue
+                    p = sum(1 for w in palabras if w in texto)
+                    if p > puntaje:
+                        mejor, puntaje = (nombre, href), p
+                if not mejor:
+                    continue
+                nombre, href = mejor
+                colocados.add(nombre)
+                self._nombrar_audio(soup, hueco, nombre)
+                for a in (hueco.parent or hueco).find_all("a", href=True):
+                    if self._PAT_ENLACE_DE_ARCHIVO_EXTERNO.search(a["href"]):
+                        a.replace_with(a.get_text())
+                media_id = self._id_de_audio(pedidos, nombre, clave)
+                hueco.clear()
+                if media_id:
+                    hueco.append(BeautifulSoup(
+                        embed_de_studio(media_id, nombre), "html.parser"))
+                    usados_id.add(media_id)
+                    logger.info(f"Audio de Studio incrustado en '{titulo}' "
+                                f"({nombre})")
+                else:
+                    hueco.append(comentario)
+                    enlace = soup.new_tag(
+                        "a", href=href,
+                        **{"class": "instructure_file_link "
+                                    "instructure_audio_link",
+                           "title": nombre})
+                    enlace.string = nombre
+                    hueco.append(enlace)
+                    logger.info(f"Audio '{nombre}' publicado en '{titulo}' "
+                                "(falta el id de Studio)")
+            _escribir(archivo, str(soup))
+        sin_colocar = [n for n, _ in audios if n not in colocados]
+        if sin_colocar:
+            self.spec.issues.append(Issue(Severidad.AVISO,
+                "Estos audios viajan en el paquete pero no encontré el "
+                "recuadro que los anuncia: quedaron en los archivos del "
+                "aula para enlazarlos a mano — "
+                + ", ".join(sin_colocar) + ".", "Podcast"))
+        for clave, media_id in pedidos.items():
+            if media_id not in usados_id:
+                self.spec.issues.append(Issue(Severidad.AVISO,
+                    f"Me pasaste el audio '{clave}' pero no encontré el "
+                    "recuadro de podcast que le toca: revisá el nombre.",
+                    "Podcast"))
+
+    def _id_de_audio(self, pedidos: dict, nombre: str, clave: str) -> str:
+        """El id de Studio que se pasó para este audio, por nombre o página."""
+        n = normalizar(nombre)
+        for k, media_id in pedidos.items():
+            if k == n or k in n or n in k or k == clave:
+                return media_id
+        return ""
+
+    def _nombrar_audio(self, soup, hueco, nombre: str) -> None:
+        """El renglón del medio del snippet lleva el nombre del audio."""
+        anterior = hueco.find_previous_sibling("p")
+        if anterior is not None and "lead" in (anterior.get("class") or []):
+            anterior.clear()
+            fuerte = soup.new_tag("strong")
+            fuerte.string = nombre
+            anterior.append(fuerte)
+            return
+        parrafo = soup.new_tag("p", **{
+            "class": "dp-text-bold lead",
+            "style": ("color: #444444; margin-bottom: 20px; "
+                      "text-align: center;")})
+        fuerte = soup.new_tag("strong")
+        fuerte.string = nombre
+        parrafo.append(fuerte)
+        hueco.insert_before(parrafo)
 
     def _validar_xml_generado(self):
         """Cualquier XML mal formado en el paquete (p.ej. un '&' sin escapar

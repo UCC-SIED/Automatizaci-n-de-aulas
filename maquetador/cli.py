@@ -57,6 +57,13 @@ def main():
                              "de armar el aula: --video 1.4.1=<id> o "
                              "--video inicio=<id>. Acepta el id pelado "
                              "(<uuid>-<numero>) o el iframe entero.")
+    parser.add_argument("--audio", action="append", default=[],
+                        metavar="AUDIO=MEDIA_ID",
+                        help="Audio de Canvas Studio para el recuadro "
+                             "\"Embebido - Podcast\": --audio \"M1 "
+                             "Dispositivos IoT=<id>\" (tambien vale el "
+                             "numero de la pagina). Sin esto el recuadro "
+                             "sale con el MP3 del paquete.")
     parser.add_argument("--afi-url", default="", metavar="URL",
                         help="Link del archivo de la herramienta de la "
                              "AFI ya subido al aula, para el iframe. Solo "
@@ -96,6 +103,16 @@ def main():
                   "copias desde Canvas.")
             sys.exit(1)
         spec.videos_studio[clave.strip().strip(".")] = media_id
+    for par in args.audio:
+        from maquetador.build.snippets import media_id_de_studio
+        clave, _, valor = par.partition("=")
+        media_id = media_id_de_studio(valor)
+        if not media_id:
+            print(f"⛔ --audio {par}: no reconozco un id de Canvas Studio "
+                  "ahi. Va el id del medio (<uuid>-<numero>) o el iframe que "
+                  "copias desde Canvas.")
+            sys.exit(1)
+        spec.audios_studio[clave.strip().strip(".")] = media_id
     spec.afi_url = args.afi_url.strip()
     spec.banners = args.banners.strip()
     if args.inferir_componentes:
