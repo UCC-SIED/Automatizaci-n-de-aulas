@@ -571,25 +571,36 @@ def construir_tooltip(palabra: str, contenido: str, n: int) -> str:
             f'data-bs-toggle="tooltip">{palabra}</a> '
             f'<span id="dpPopup{n}tooltip" '
             'class="dp-tooltip-content dp-popup-content" '
-            # La misma superficie que el popover del aula base (#f7f7f7 con
-            # borde #a9a9a9). Antes era un gris oscuro (#545454) que no está
-            # en ningún snippet del catálogo ni en el aula base: el globo se
-            # veía de otro color que el resto del aula. El color del texto
-            # se hereda, para no fijar uno que tampoco esté en la paleta.
-            'style="background-color: #f7f7f7; '
-            'border: 1px solid #a9a9a9; '
-            'padding: 6px 10px; border-radius: 3px;" role="tooltip">'
+            # El globo gris oscuro con texto blanco es el del componente
+            # oficial (ver "Snippets - ventanas emergentes.html", el HTML de
+            # referencia de DesignPLUS). Estuvo un día con la superficie
+            # clara del popover porque #545454 no figura en el catálogo de
+            # snippets: figura en este, que es de donde sale el componente.
+            'style="background-color: #545454; color: #ffffff; '
+            'padding: 2px 5px; border-radius: 3px;" role="tooltip">'
             f'{contenido}</span></span>')
 
 
-def construir_popover(palabra: str, contenido: str, n: int) -> tuple:
-    """Popover CidiLabs: trigger (la palabra) + content (lo que emerge)."""
-    trigger = (f'<a class="dp-popover-trigger" href="#dpPopup{n}Content" '
-               f'id="dpPopup{n}" aria-describedby="dpPopup{n}Content">{palabra}</a>')
-    content = (f'<div class="dp-popover-content dp-popup-content" id="dpPopup{n}Content" '
-               'style="border: 1px solid #A9A9A9; background: #f7f7f7; padding: 10px; '
-               'width: 600px; max-width: 100%; margin: auto; border-radius: 3px;">'
-               f'<p>{contenido}</p></div>')
+def construir_popover(palabra: str, contenido: str, n: int,
+                      envolver: bool = True) -> tuple:
+    """Popover CidiLabs: trigger (la palabra) + content (lo que emerge).
+
+    La ficha grande que se abre al hacer clic, no el globo chico del
+    tooltip. Markup de "Snippets - ventanas emergentes.html".
+
+    `envolver=False` cuando el contenido ya viene como bloques (los
+    párrafos que el asesor marcó con "ventana emergente N").
+    """
+    cuerpo = f"<p>{contenido}</p>" if envolver else contenido
+    trigger = (f'<a id="dpPopup{n}" class="dp-popover-trigger" '
+               f'href="#dpPopup{n}Content" '
+               f'aria-describedby="dpPopup{n}Content">{palabra}</a>')
+    content = (f'<div id="dpPopup{n}Content" '
+               'class="dp-popover-content dp-popup-content" '
+               'style="border: 1px solid #A9A9A9; background: #f7f7f7; '
+               'color: #26323d; padding: 10px; width: 600px; '
+               'max-width: 100%; margin: auto; border-radius: 3px;">'
+               f'{cuerpo}</div>')
     return trigger, content
 
 

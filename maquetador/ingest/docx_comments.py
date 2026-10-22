@@ -35,7 +35,8 @@ from maquetador.build.snippets import (resaltado_simple, cta_titulo, ICONOS,
                                        _PAT_AQUI_VA_VIDEO)
 from maquetador.build.componentes_asesor import (
     extraer_pares, construir_panels, construir_flipcards,
-    construir_tooltip, disparador_tooltip, aplicar_cita, pares_de_texto,
+    construir_tooltip, construir_popover, disparador_tooltip, aplicar_cita,
+    pares_de_texto, _TAGS_FLUJO,
 )
 
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -255,6 +256,14 @@ def _clasificar(instruccion: str, anclado: str = "") -> str:
     if any(k in n for k in ("flip card", "flipcard", "flip-card", "tarjeta",
                             "se dan vuelta", "se da vuelta")):
         return "flip_card"
+    # "Ventana emergente 1" / "enlazar a ventana emergente 1": el asesor
+    # numera el par. Uno marca el párrafo que tiene que emerger y el otro,
+    # en otra parte del texto, la palabra que lo abre; se juntan por el
+    # número. Va antes de la regla del tooltip porque "emerger" también
+    # cae ahí, y esto no es el globo chico sino la ficha grande.
+    if "ventana emergente" in n:
+        return ("enlazar_ventana_emergente" if "enlazar" in n
+                else "ventana_emergente")
     if ("tooltip" in n or "popover" in n or "globo" in n
             or (("clic" in n or "click" in n)
                 and ("emerj" in n or "emerge" in n or "aparezca" in n))):
@@ -1023,6 +1032,202 @@ def _pares_de_comentarios_hermanos(soup, comentarios: list, grupo) -> tuple:
     return (pares, consumidos) if len(pares) >= 2 else ([], [])
 
 
+def _numero_de_ventana(texto: str) -> str:
+    """El número con el que el asesor emparejó la ventana emergente."""
+    m = re.search(r"ventana\s+emergente\s*(?:n[°ºo]?\s*)?(\d+)",
+                  normalizar(texto or ""))
+    return m.group(1) if m else ""
+
+
+def _elemento_exacto(soup, texto: str):
+    """El elemento cuyo texto ES el anclado, no el que lo contiene."""
+    objetivo = _squash(texto)
+    if not objetivo:
+        return None
+    for el in soup.find_all(_TAGS_BUSCABLES):
+        if _squash(el.get_text(" ", strip=True)) == objetivo:
+            return el
+    return None
+
+
+def _etiqueta_de_cierre(anclas: list) -> str:
+    """La palabra con la que terminan los bloques de la serie ("Madurez:").
+
+    Cada ventana emergente es un bloque de párrafos que arranca en el
+    término y termina —en todas las series vistas— con un párrafo rotulado:
+    "Madurez: alta…", "Ejemplo: en el robot…". El final de los bloques del
+    medio lo marca el término siguiente, pero el ÚLTIMO de la serie no tiene
+    quién lo corte y se llevaba puesta la prosa que sigue. Entonces el
+    rótulo se aprende de los bloques anteriores: si todos cierran con la
+    misma palabra, esa palabra cierra también el último.
+    """
+    etiquetas = []
+    for el, siguiente in zip(anclas, anclas[1:]):
+        ultimo = None
+        h = el.find_next_sibling()
+        while h is not None and h is not siguiente:
+            if h.name in _TAGS_FLUJO:
+                ultimo = h
+            h = h.find_next_sibling()
+        if ultimo is None:
+            continue
+        m = re.match(r"\s*([^\W\d_]{3,15})\s*:",
+                     ultimo.get_text(" ", strip=True))
+        etiquetas.append(normalizar(m.group(1)) if m else "")
+    etiquetas = [e for e in etiquetas if e]
+    if etiquetas and len(set(etiquetas)) == 1:
+        return etiquetas[0]
+    return ""
+
+
+def _bloque_de_ventana(el, frontera: set, cierre: str, anclas=()) -> tuple:
+    """Los párrafos que emergen y lo que hay que sacar de la página.
+
+    Devuelve (contenido, a_extraer). Suelen ser los mismos elementos, salvo
+    cuando el asesor escribió el bloque dentro de una caja de Word: ahí lo
+    que emerge son los párrafos de la caja, pero lo que se saca es la tabla
+    entera —si no, queda el recuadro vacío en la página.
+    """
+    caja = el.find_parent("table")
+    if caja is not None and not any(a is not el and caja in a.parents
+                                    for a in anclas):
+        internos = [x for x in caja.find_all(["p", "ul", "ol", "h3", "h4"])
+                    if x.get_text(strip=True)]
+        if internos:
+            return internos, [caja]
+
+    bloque = [el]
+    hermano = el.find_next_sibling()
+    while hermano is not None:
+        if hermano.name not in _TAGS_FLUJO or id(hermano) in frontera \
+                or hermano.name in ("h1", "h2", "h3", "h4"):
+            break
+        texto = hermano.get_text(" ", strip=True)
+        bloque.append(hermano)
+        if cierre and normalizar(texto).startswith(cierre + ":"):
+            break
+        # Sin rótulo que cierre, no se adivina: el término y un párrafo.
+        if not cierre and len(bloque) >= 2:
+            break
+        hermano = hermano.find_next_sibling()
+    return bloque, bloque
+
+
+def _armar_ventanas_emergentes(soup, comentarios: list, desde: int) -> int:
+    """Junta los pares "ventana emergente N" / "enlazar a ventana emergente N".
+
+    El asesor numera el par: un globo marca el bloque de párrafos que tiene
+    que emerger y otro, más arriba en el texto, la palabra que lo abre. Los
+    párrafos del bloque se sacan del flujo —si no, el contenido queda dos
+    veces en la página— y se guardan dentro del popover, que se inserta
+    detrás del párrafo del disparador.
+
+    Devuelve el próximo número de popover libre.
+    """
+    contenidos, enlaces = {}, {}
+    for c in comentarios:
+        if c.get("_aplicado"):
+            continue
+        n = _numero_de_ventana(c["instruccion"])
+        if not n:
+            continue
+        if c["accion"] == "ventana_emergente":
+            contenidos.setdefault(n, c)
+        elif c["accion"] == "enlazar_ventana_emergente":
+            enlaces.setdefault(n, c)
+    if not contenidos or not enlaces:
+        return desde
+
+    # En orden del documento: así se aprende dónde termina cada bloque.
+    anclas = {}
+    for n, c in contenidos.items():
+        # El globo del CONTENIDO cuelga del término solo, que en el documento
+        # es su propio párrafo (el título del bloque). El mismo término
+        # aparece además dentro del párrafo que lo menciona —ahí va el
+        # disparador—, así que acá hace falta la coincidencia exacta: con la
+        # aproximada se llevaba el párrafo de la mención y desaparecía el
+        # texto que abre la ventana.
+        el = _elemento_exacto(soup, c["anclado"])
+        if el is not None:
+            anclas[n] = el
+    if not anclas:
+        return desde
+    posicion = {id(el): i for i, el in
+                enumerate(soup.find_all(list(_TAGS_FLUJO)))}
+    ordenados = sorted(anclas.items(),
+                       key=lambda par: posicion.get(id(par[1]), 0))
+    cierre = _etiqueta_de_cierre([el for _, el in ordenados])
+    frontera = {id(el) for el in anclas.values()}
+
+    # El disparador se busca ANTES de sacar los bloques, y siempre por
+    # delante del bloque que abre: el término se menciona en el texto y se
+    # define más abajo. Sin ese límite, "percepción" se enganchaba en el pie
+    # de la Figura 10 —que nombra las tres capacidades— y la ventana quedaba
+    # colgada de un texto que después se rearma como figura.
+    disparadores = {}
+    for n, c in enlaces.items():
+        if n not in anclas:
+            continue
+        palabra = (c["anclado"] or "").strip()
+        tope = posicion.get(id(anclas[n]), 0)
+        candidatos = [el for el in soup.find_all(list(_TAGS_FLUJO))
+                      if posicion.get(id(el), 0) < tope
+                      and palabra in el.get_text()
+                      # La caja de Word que contiene un bloque también
+                      # "menciona" el término: no es la mención, es el
+                      # bloque mismo.
+                      and not any(a is not el and el in a.parents
+                                  for a in anclas.values())]
+        if candidatos:
+            disparadores[n] = candidatos[-1]   # el más cercano al bloque
+        else:
+            disparadores[n] = _buscar_elemento(soup, palabra)
+
+    bloques = {}
+    for n, el in ordenados:
+        contenido, a_extraer = _bloque_de_ventana(
+            el, frontera, cierre, list(anclas.values()))
+        bloques[n] = "".join(str(x) for x in contenido)
+        for x in a_extraer:
+            x.extract()
+
+    numero = desde
+    ultimo_insertado = {}
+    for n, c in enlaces.items():
+        if n not in bloques:
+            continue
+        palabra = (c["anclado"] or "").strip()
+        el = disparadores.get(n)
+        # El candidato puede haber sido parte de un bloque que ya se sacó
+        # del flujo (pasa cuando el término no se menciona antes): entonces
+        # no hay dónde poner el disparador y el pedido queda avisado.
+        if el is None or el.parent is None:
+            continue
+        nodo = el.find(string=lambda s: bool(s) and palabra in s)
+        if nodo is None:
+            continue
+        trigger, content = construir_popover(palabra, bloques[n], numero,
+                                             envolver=False)
+        numero += 1
+        antes, _, despues = nodo.partition(palabra)
+        disparador = BeautifulSoup(trigger, "html.parser").find("a")
+        nodo.replace_with(disparador)
+        if antes:
+            disparador.insert_before(antes)
+        if despues:
+            disparador.insert_after(despues)
+        contenedor = disparador.find_parent(list(_TAGS_FLUJO)) or disparador
+        # Varias ventanas pueden colgar del mismo párrafo: cada ficha va
+        # detrás de la anterior, para que queden en el orden del texto.
+        destino = ultimo_insertado.get(id(contenedor), contenedor)
+        nuevo = BeautifulSoup(content, "html.parser").find("div")
+        destino.insert_after(nuevo)
+        ultimo_insertado[id(contenedor)] = nuevo
+        c["_aplicado"] = True
+        contenidos[n]["_aplicado"] = True
+    return numero
+
+
 def aplicar_comentarios(soup, comentarios: list) -> None:
     """Aplica al soup las acciones automáticas cuyo texto anclado aparezca en
     él, y arma los componentes de pedido del asesor (acordeon/tabs/expander/
@@ -1030,7 +1235,9 @@ def aplicar_comentarios(soup, comentarios: list) -> None:
     c['_aplicado']=True solo en los que efectivamente se aplican. Se llama una
     vez por cada sección ya cortada (así un comentario se aplica en la sección
     que lo contiene y nunca rompe los límites de sección)."""
-    contador_popover = 0
+    # Las ventanas emergentes numeradas se arman primero: el bloque que
+    # emerge se saca del flujo antes de que el resto de los globos lo mire.
+    contador_popover = _armar_ventanas_emergentes(soup, comentarios, 0)
     # Un mismo pedido de componente suele venir anclado en varios lugares: el
     # asesor marca con el mismo globo cada tramo que va adentro ("TABS vertical
     # ISO 14001 ISO 45001" aparece 3 veces, "flipcards" una por tarjeta). Es UN
