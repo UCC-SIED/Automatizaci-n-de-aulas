@@ -161,6 +161,26 @@ def _referencia_nombra_archivo(ref: str) -> bool:
     return not _PAT_REF_EN_LA_LECTURA.search(ref)
 
 
+def _archivo_nombrado_en_planilla(inv, ref: str):
+    """El archivo de la carpeta que la planilla nombra en la columna LINK.
+
+    Vale para cualquier archivo escaneado, no solo para los que quedaron en
+    el cajón que le toca: la clasificación del escaneo es heurística y la
+    planilla es un dato del asesor.
+    """
+    if not _referencia_nombra_archivo(ref):
+        return None
+    buscado = normalizar(Path(ref.strip()).name)
+    if "." not in buscado:
+        return None
+    for campo in ("fotos_docente", "biografia", "programa", "hoja_de_ruta",
+                  "imagenes_diseno", "esquema", "otros"):
+        for path in getattr(inv, campo, None) or []:
+            if normalizar(path.name) == buscado:
+                return path
+    return None
+
+
 def _fila_plantilla_vacia(item) -> bool:
     """En el formato nuevo la planilla trae filas de plantilla (Tarea/Foro/
     Evaluación) que el asesor dejó sin completar. Si no hay título de
@@ -244,9 +264,17 @@ def reconciliar(spec: CourseSpec, inv: InventarioCurso) -> CourseSpec:
                 archivo=(inv.esquema or [None])[0],
                 confianza=0.85 if inv.esquema else 0.0)
         elif "fotografia" in n:
+            # Si la planilla nombra el archivo ("Pablo Virgolini.jpg"), ese
+            # es: la foto se reconoce por heurística (el nombre la delata, o
+            # la carpeta donde está), y cuando llega con el nombre del
+            # docente en una carpeta cualquiera no la agarra ninguna. El
+            # dato del asesor manda sobre la heurística.
+            nombrado = _archivo_nombrado_en_planilla(
+                inv, item.detalle.get("referencia", ""))
             item.fuente = FuenteContenido(
-                archivo=(inv.fotos_docente or [None])[0],
-                confianza=0.7 if inv.fotos_docente else 0.0)
+                archivo=nombrado or (inv.fotos_docente or [None])[0],
+                confianza=0.9 if nombrado
+                else (0.7 if inv.fotos_docente else 0.0))
         elif "titulacion" in n or "biografia" in n:
             item.fuente = FuenteContenido(
                 archivo=(inv.biografia or [None])[0],

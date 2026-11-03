@@ -94,3 +94,47 @@ class TestLaFotoQueSePublica:
     def test_siempre_sale_al_tamano_de_publicacion(self, tmp_path, lado):
         _nativo, tamano = self._publicar(tmp_path, lado)
         assert tamano == (LADO_FICHA, LADO_FICHA)
+
+
+class TestLaPlanillaNombraLaFoto:
+    """IA Aplicada I - Salud (22-10-2026): la foto llegó como "Pablo
+    Virgolini.jpg" dentro de "1. Programa y hoja de ruta".
+
+    No la agarraba ninguna heurística —el nombre no dice "foto del
+    docente" y la carpeta no es ni la de grabación ni la de maquetación—,
+    así que se publicaba como material suelto y la ficha quedaba con el
+    avatar genérico. La planilla la nombra en la columna LINK: ese dato es
+    del asesor y manda sobre la heurística.
+    """
+
+    def _inventario(self, tmp_path, nombre="Pablo Virgolini.jpg"):
+        from maquetador.ingest.folder_scanner import InventarioCurso
+        foto = tmp_path / nombre
+        foto.write_bytes(b"imagen")
+        inv = InventarioCurso(raiz=tmp_path)
+        inv.otros.append(foto)       # el cajón donde caía
+        return inv, foto
+
+    def _buscar(self, inv, ref):
+        from maquetador.ingest.reconciler import _archivo_nombrado_en_planilla
+        return _archivo_nombrado_en_planilla(inv, ref)
+
+    def test_la_encuentra_por_el_nombre_de_la_planilla(self, tmp_path):
+        inv, foto = self._inventario(tmp_path)
+        assert self._buscar(inv, "Pablo Virgolini.jpg") == foto
+
+    def test_no_le_importan_mayusculas_ni_acentos(self, tmp_path):
+        inv, foto = self._inventario(tmp_path, "Adriana Di Francesco.JPG")
+        assert self._buscar(inv, "adriana di francesco.jpg") == foto
+
+    @pytest.mark.parametrize("ref", [
+        "En la lectura", "En Canvas Studio", "",
+        "https://drive.google.com/file/d/1PB/view",
+    ])
+    def test_lo_que_no_nombra_un_archivo_no_cuenta(self, tmp_path, ref):
+        inv, _ = self._inventario(tmp_path)
+        assert self._buscar(inv, ref) is None
+
+    def test_si_el_archivo_no_esta_no_inventa(self, tmp_path):
+        inv, _ = self._inventario(tmp_path)
+        assert self._buscar(inv, "Otra persona.jpg") is None

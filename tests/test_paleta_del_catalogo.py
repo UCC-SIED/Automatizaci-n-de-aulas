@@ -27,6 +27,10 @@ from maquetador.build.snippets import (procesar_contenido, resaltado_simple,
 
 _CATALOGO = Path(__file__).resolve().parent.parent / "Snipped utilizados.html"
 _AULA_BASE = Path(__file__).resolve().parent.parent / "Aula base-Educacion.imscc"
+# Las ventanas emergentes (tooltip / popover / modal) no están en el catálogo
+# de snippets: son un HTML de referencia aparte, y de ahí sale el gris
+# oscuro del globo (#545454) y el color de texto del popover (#26323d).
+_VENTANAS = Path(__file__).resolve().parent.parent / "Snippets - ventanas emergentes.html"
 
 pytestmark = pytest.mark.skipif(
     not _CATALOGO.exists(), reason="falta el catálogo de snippets")
@@ -43,6 +47,9 @@ def _permitidos() -> set:
     "Sección 1"): no los elegimos nosotros y no tiene sentido prohibirlos.
     """
     permitidos = _colores(_CATALOGO.read_text(encoding="utf-8", errors="replace"))
+    if _VENTANAS.exists():
+        permitidos |= _colores(_VENTANAS.read_text(encoding="utf-8",
+                                                   errors="replace"))
     if _AULA_BASE.exists():
         import zipfile
         with zipfile.ZipFile(_AULA_BASE) as z:
